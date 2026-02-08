@@ -18,110 +18,109 @@ DEFAULT_CONFIG = {
     "admin_password": "admin123",  # CHANGE THIS!
     
     "weights": {
-        # Email Authentication
-        "no_spf": 25,
-        "spf_pass_all": 35,
-        "spf_neutral_all": 15,
-        "spf_softfail_all": 5,
-        "spf_too_many_lookups": 10,
-        "spf_syntax_error": 10,
-        "no_dmarc": 30,
-        "dmarc_p_none": 18,
-        "dmarc_no_rua": 5,
-        "dmarc_syntax_error": 10,
-        "no_dkim": 20,
-        "no_mx": 25,
-        "null_mx": 20,
-        "mx_free_provider": 15,
+        # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
+        "domain_blacklisted": 45,
+        "ip_blacklisted": 40,
+        "typosquat_detected": 40,
+        "brand_impersonation": 35,
+        "malware_links": 50,
+        "disposable_email": 40,
+        "spf_pass_all": 40,           # +all allows anyone to spoof - security risk
+        "domain_lt_7d": 35,           # Brand new domain - high risk
+        "credential_form": 12,        # Only concerning if combined with other signals
+        "sensitive_fields": 10,
         
-        # Reverse DNS
-        "no_ptr": 12,
-        "ptr_mismatch": 15,
+        # === DELIVERABILITY CONCERNS (Low weights - warn but don't deny alone) ===
+        "no_spf": 8,                  # Missing SPF - their problem, not fraud
+        "spf_neutral_all": 5,         # ?all - weak but not dangerous
+        "spf_softfail_all": 2,        # ~all - totally acceptable, very minor
+        "spf_too_many_lookups": 4,
+        "spf_syntax_error": 6,
+        "no_dmarc": 10,               # Missing DMARC - deliverability issue only
+        "dmarc_p_none": 5,            # p=none - not protecting but not fraud
+        "dmarc_no_rua": 2,            # No reporting - trivial
+        "dmarc_syntax_error": 4,
+        "no_dkim": 6,                 # Missing DKIM - deliverability issue only
+        "no_mx": 8,                   # No MX - can't receive bounces
+        "null_mx": 12,
+        "mx_free_provider": 6,
         
-        # Bonuses (negative = reduces score)
-        "has_bimi": -5,
-        "has_mta_sts": -5,
+        # === INFRASTRUCTURE CONCERNS (Low weights) ===
+        "no_ptr": 4,                  # Missing PTR - minor
+        "ptr_mismatch": 5,
+        "no_https": 8,                # No HTTPS - minor concern
+        "http_accessible": 2,
+        "cert_self_signed": 6,
+        "cert_expired": 8,
+        "cert_wrong_host": 8,
         
-        # Blacklists
-        "domain_blacklisted": 35,
-        "ip_blacklisted": 30,
-        
-        # Domain Age
-        "domain_lt_7d": 30,
-        "domain_lt_30d": 20,
-        "domain_lt_90d": 8,
-        
-        # Domain Type
-        "suspicious_tld": 12,
-        "free_email_domain": 20,
-        "free_hosting": 12,
+        # === DOMAIN AGE (Moderate for very new, low otherwise) ===
+        "domain_lt_30d": 10,          # 7-30 days old - moderate concern
+        "domain_lt_90d": 4,           # 30-90 days old - minor concern
+        "suspicious_tld": 6,          # High-abuse TLD
+        "free_email_domain": 12,      # Sending from gmail.com etc
+        "free_hosting": 6,
         "url_shortener": 8,
-        "disposable_email": 30,
-        "typosquat_detected": 25,
         
-        # Web/TLS
-        "no_https": 25,
-        "http_accessible": 5,
-        "cert_self_signed": 12,
-        "cert_expired": 15,
-        "cert_wrong_host": 15,
-        "redirect_chain_2plus": 12,
-        "redirect_chain_3plus": 8,
-        "redirect_cross_domain": 12,
-        "redirect_temp_302_307": 10,
+        # === REDIRECT/CLOAKING CONCERNS ===
+        "redirect_chain_2plus": 6,
+        "redirect_chain_3plus": 4,
+        "redirect_cross_domain": 8,
+        "redirect_temp_302_307": 6,
         
-        # Status Codes
-        "status_403_cloaking": 20,
-        "status_429_throttling": 15,
-        "status_503_disposable": 15,
-        "status_5xx_errors": 8,
+        # === SUSPICIOUS BEHAVIOR (Higher weights - actual red flags) ===
+        "status_403_cloaking": 15,
+        "status_429_throttling": 8,
+        "status_503_disposable": 8,
+        "status_5xx_errors": 4,
+        "minimal_shell": 10,
+        "js_redirect": 8,
+        "meta_refresh": 5,
+        "external_js_loader": 6,
+        "obfuscated_js": 10,
+        "phishing_paths": 15,
+        "form_posts_external": 10,
+        "suspicious_iframe": 8,
+        "parking_page": 6,
         
-        # Content
-        "minimal_shell": 15,
-        "js_redirect": 12,
-        "meta_refresh": 8,
-        "external_js_loader": 10,
-        "obfuscated_js": 12,
-        
-        # Phishing/Malware
-        "phishing_paths": 20,
-        "credential_form": 20,
-        "sensitive_fields": 18,
-        "brand_impersonation": 22,
-        "form_posts_external": 18,
-        "malware_links": 25,
-        "suspicious_iframe": 12,
-        "parking_page": 10,
+        # === BONUSES (Reduce score) ===
+        "has_bimi": -10,
+        "has_mta_sts": -6,
     },
     
     "combos": {
-        "no_spf+no_dmarc": 15,
-        "spf_pass_all+no_dmarc": 20,
-        "no_dkim+no_dmarc": 15,
-        "no_spf+no_dkim": 12,
-        "no_spf+domain_lt_30d": 12,
-        "no_dmarc+domain_lt_30d": 12,
-        "no_dkim+domain_lt_30d": 10,
-        "no_spf+domain_lt_7d": 18,
-        "no_dmarc+domain_lt_7d": 18,
-        "no_mx+domain_lt_30d": 15,
-        "domain_blacklisted+domain_lt_30d": 20,
-        "no_https+redirect_temp_302_307": 15,
-        "domain_lt_30d+redirect_chain_2plus": 12,
-        "domain_lt_7d+redirect_chain_2plus": 15,
-        "status_403_cloaking+domain_lt_30d": 15,
-        "minimal_shell+js_redirect": 15,
+        # Fraud combos (high additional penalty - these are real red flags)
+        "typosquat_detected+credential_form": 30,
+        "typosquat_detected+domain_lt_30d": 25,
+        "brand_impersonation+credential_form": 30,
         "brand_impersonation+domain_lt_30d": 20,
-        "brand_impersonation+credential_form": 18,
-        "credential_form+no_https": 15,
-        "phishing_paths+credential_form": 15,
-        "free_email_domain+credential_form": 15,
-        "typosquat_detected+credential_form": 25,
-        "typosquat_detected+domain_lt_30d": 20,
-        "disposable_email+no_spf": 15,
-        "disposable_email+domain_lt_30d": 18,
-        "no_ptr+domain_lt_30d": 10,
-        "ptr_mismatch+domain_blacklisted": 15,
+        "domain_blacklisted+domain_lt_30d": 25,
+        
+        # Deliverability combos (LOW penalties - these shouldn't cause deny)
+        "no_spf+no_dmarc": 4,
+        "spf_pass_all+no_dmarc": 15,
+        "no_dkim+no_dmarc": 3,
+        "no_spf+no_dkim": 3,
+        "no_spf+domain_lt_30d": 5,
+        "no_dmarc+domain_lt_30d": 5,
+        "no_dkim+domain_lt_30d": 4,
+        "no_spf+domain_lt_7d": 10,
+        "no_dmarc+domain_lt_7d": 10,
+        "no_mx+domain_lt_30d": 6,
+        
+        # Suspicious behavior combos
+        "no_https+redirect_temp_302_307": 8,
+        "domain_lt_30d+redirect_chain_2plus": 6,
+        "domain_lt_7d+redirect_chain_2plus": 10,
+        "status_403_cloaking+domain_lt_30d": 10,
+        "minimal_shell+js_redirect": 10,
+        "credential_form+no_https": 8,
+        "phishing_paths+credential_form": 12,
+        "free_email_domain+credential_form": 10,
+        "disposable_email+no_spf": 8,
+        "disposable_email+domain_lt_30d": 15,
+        "no_ptr+domain_lt_30d": 4,
+        "ptr_mismatch+domain_blacklisted": 10,
     },
     
     "suspicious_tlds": [
@@ -211,4 +210,4 @@ def get_weight(config: dict, signal: str) -> int:
 def get_combo_weight(config: dict, signal1: str, signal2: str) -> int:
     """Get combo weight for two signals from config."""
     key = f"{signal1}+{signal2}"
-    return config.get('combos', {}).get(key, DEFAULT_CONFIG['combos'].get(key, 0))
+    return config.get('combos', {}).get(key, DEFAULT_CONFIG['combos'].get(key, 0
