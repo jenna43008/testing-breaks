@@ -89,14 +89,51 @@ DEFAULT_CONFIG = {
     },
     
     "combos": {
-        # Fraud combos (high additional penalty - these are real red flags)
-        "typosquat_detected+credential_form": 30,
-        "typosquat_detected+domain_lt_30d": 25,
-        "brand_impersonation+credential_form": 30,
-        "brand_impersonation+domain_lt_30d": 20,
-        "domain_blacklisted+domain_lt_30d": 25,
+        # === CRITICAL PHISHING INFRASTRUCTURE COMBOS (from research) ===
+        # These detect infrastructure intent, not just content
         
-        # Deliverability combos (LOW penalties - these shouldn't cause deny)
+        # New domain + redirect chain = HIGH (attackers register, redirect, abandon)
+        "domain_lt_7d+redirect_chain_2plus": 20,
+        "domain_lt_7d+redirect_temp_302_307": 18,
+        "domain_lt_30d+redirect_chain_2plus": 12,
+        "domain_lt_30d+redirect_temp_302_307": 10,
+        
+        # 403 cloaking + new domain = VERY HIGH (scanner blocking on fresh domain)
+        "status_403_cloaking+domain_lt_7d": 25,
+        "status_403_cloaking+domain_lt_30d": 15,
+        "status_403_cloaking+credential_form": 20,
+        
+        # No HTTPS + redirect = CRITICAL (cheap disposable infrastructure)
+        "no_https+redirect_chain_2plus": 18,
+        "no_https+redirect_temp_302_307": 15,
+        "no_https+redirect_cross_domain": 15,
+        
+        # 503 + new domain = HIGH (disposable/bulletproof hosting)
+        "status_503_disposable+domain_lt_7d": 18,
+        "status_503_disposable+domain_lt_30d": 12,
+        
+        # 429 throttling + new domain = MEDIUM-HIGH (selective exposure)
+        "status_429_throttling+domain_lt_30d": 10,
+        
+        # Minimal shell + JS redirect = VERY HIGH (classic phishing cloaking)
+        "minimal_shell+js_redirect": 18,
+        "minimal_shell+domain_lt_30d": 12,
+        "minimal_shell+credential_form": 15,
+        
+        # Cross-domain redirect + new domain = HIGH
+        "redirect_cross_domain+domain_lt_7d": 18,
+        "redirect_cross_domain+domain_lt_30d": 12,
+        
+        # === FRAUD/BRAND ABUSE COMBOS ===
+        "typosquat_detected+credential_form": 35,
+        "typosquat_detected+domain_lt_30d": 28,
+        "typosquat_detected+redirect_chain_2plus": 25,
+        "brand_impersonation+credential_form": 35,
+        "brand_impersonation+domain_lt_30d": 22,
+        "brand_impersonation+no_https": 20,
+        "domain_blacklisted+domain_lt_30d": 30,
+        
+        # === DELIVERABILITY COMBOS (lower penalties) ===
         "no_spf+no_dmarc": 4,
         "spf_pass_all+no_dmarc": 15,
         "no_dkim+no_dmarc": 3,
@@ -108,19 +145,17 @@ DEFAULT_CONFIG = {
         "no_dmarc+domain_lt_7d": 10,
         "no_mx+domain_lt_30d": 6,
         
-        # Suspicious behavior combos
-        "no_https+redirect_temp_302_307": 8,
-        "domain_lt_30d+redirect_chain_2plus": 6,
-        "domain_lt_7d+redirect_chain_2plus": 10,
-        "status_403_cloaking+domain_lt_30d": 10,
-        "minimal_shell+js_redirect": 10,
-        "credential_form+no_https": 8,
-        "phishing_paths+credential_form": 12,
+        # === OTHER SUSPICIOUS COMBOS ===
+        "credential_form+no_https": 12,
+        "phishing_paths+credential_form": 15,
+        "phishing_paths+domain_lt_30d": 12,
         "free_email_domain+credential_form": 10,
         "disposable_email+no_spf": 8,
-        "disposable_email+domain_lt_30d": 15,
+        "disposable_email+domain_lt_30d": 18,
         "no_ptr+domain_lt_30d": 4,
         "ptr_mismatch+domain_blacklisted": 10,
+        "suspicious_tld+domain_lt_30d": 10,
+        "suspicious_tld+redirect_chain_2plus": 10,
     },
     
     "suspicious_tlds": [
