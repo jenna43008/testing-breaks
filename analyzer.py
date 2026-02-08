@@ -1,4 +1,4 @@
-"""
+        """
 Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
@@ -763,17 +763,24 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         elif res.spf_mechanism == "?all":
             score += weights.get('spf_neutral_all', 15)
             signals.add("spf_neutral_all")
+        elif res.spf_mechanism == "~all":
+            score += weights.get('spf_softfail_all', 5)
+            signals.add("spf_softfail_all")
     
     if not res.dkim_exists:
-        score += weights.get('no_dkim', 22)
+        score += weights.get('no_dkim', 20)
         signals.add("no_dkim")
     
     if not res.dmarc_exists:
-        score += weights.get('no_dmarc', 28)
+        score += weights.get('no_dmarc', 30)
         signals.add("no_dmarc")
-    elif res.dmarc_policy == "none":
-        score += weights.get('dmarc_p_none', 12)
-        signals.add("dmarc_p_none")
+    else:
+        if res.dmarc_policy == "none":
+            score += weights.get('dmarc_p_none', 18)
+            signals.add("dmarc_p_none")
+        if not res.dmarc_rua:
+            score += weights.get('dmarc_no_rua', 5)
+            signals.add("dmarc_no_rua")
     
     if not res.mx_exists:
         score += weights.get('no_mx', 25)
