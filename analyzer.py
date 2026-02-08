@@ -200,8 +200,11 @@ PHISHING_PATHS = [
 BRAND_KEYWORDS = [
     b'paypal', b'amazon', b'microsoft', b'apple', b'google', b'facebook',
     b'instagram', b'netflix', b'bank of america', b'chase', b'wells fargo',
-    b'usps', b'fedex', b'ups', b'dhl', b'irs', b'dropbox', b'docusign',
+    b'usps', b'fedex', b'dropbox', b'docusign',
 ]
+
+# Short keywords that need word boundary matching (to avoid false positives like "first" matching "irs")
+BRAND_KEYWORDS_SHORT = [b'irs', b'ups', b'dhl']
 
 CREDENTIAL_PATTERNS = [b'type="password"', b"type='password'", b'name="password"']
 SENSITIVE_PATTERNS = [b'name="ssn"', b'name="card_number"', b'name="cvv"']
@@ -603,11 +606,24 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
             break
     
     final_domain = urlparse(final_url).netloc.lower()
+    
+    # Check for brand keywords in page content
     for brand in BRAND_KEYWORDS:
         brand_str = brand.decode('utf-8', errors='ignore').replace(' ', '')
         if brand in content_lower and brand_str not in final_domain and brand_str not in domain:
             result["brands"].append(brand.decode('utf-8', errors='ignore'))
-    result["brands"] = result["brands"][:5]
+    
+    # Check short brand keywords with word boundary matching (to avoid "first" matching "irs")
+    content_str = content_lower.decode('utf-8', errors='ignore')
+    for brand in BRAND_KEYWORDS_SHORT:
+        brand_str = brand.decode('utf-8', errors='ignore')
+        if brand_str not in final_domain and brand_str not in domain:
+            # Use word boundary regex to avoid false positives
+            pattern = r'\b' + re.escape(brand_str) + r'\b'
+            if re.search(pattern, content_str, re.IGNORECASE):
+                result["brands"].append(brand_str)
+    
+    result["brands"] = list(set(result["brands"]))[:5]  # Dedupe and limit
     
     forms = re.findall(rb'<form[^>]+action=["\']([^"\']+)["\']', content_lower)
     for action in forms:
