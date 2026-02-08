@@ -788,6 +788,34 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.has_js_redirect:
         all_issues.append("JAVASCRIPT REDIRECT → Suspicious redirect technique")
     
+    if res.has_meta_refresh:
+        all_issues.append("META REFRESH REDIRECT → Often used for cloaking")
+    
+    if res.has_external_js:
+        all_issues.append("EXTERNAL JS LOADER → Content loaded from external source")
+    
+    if res.has_suspicious_iframe:
+        all_issues.append("HIDDEN IFRAME → Often used to load malicious content")
+    
+    if res.is_parking_page:
+        all_issues.append("PARKING PAGE → Domain not actively used")
+    
+    if res.form_posts_external:
+        all_issues.append("FORM POSTS EXTERNALLY → Credentials sent to different domain")
+    
+    if res.has_sensitive_fields:
+        all_issues.append("SENSITIVE FORM FIELDS → Requests SSN/card numbers")
+    
+    # === STATUS CODE SIGNALS (infrastructure intent) ===
+    if res.has_403:
+        all_issues.append("403 FORBIDDEN → May be blocking scanners (cloaking)")
+    
+    if res.has_429:
+        all_issues.append("429 RATE LIMITED → Throttling automated checks")
+    
+    if res.has_503:
+        all_issues.append("503 UNAVAILABLE → Disposable/intermittent infrastructure")
+    
     if res.has_credential_form and not res.brands_detected:
         all_issues.append("CREDENTIAL FORM DETECTED → Login form on landing page")
     
@@ -965,6 +993,22 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         score += weights.get('redirect_temp_302_307', 10)
         signals.add("redirect_temp_302_307")
     
+    # === STATUS CODE SIGNALS (per research: high-value early indicators) ===
+    # 403 = cloaking/scanner blocking - VERY strong signal
+    if res.has_403:
+        score += weights.get('status_403_cloaking', 15)
+        signals.add("status_403_cloaking")
+    
+    # 429 = throttling scanners - medium signal
+    if res.has_429:
+        score += weights.get('status_429_throttling', 8)
+        signals.add("status_429_throttling")
+    
+    # 503 = disposable infrastructure - medium signal  
+    if res.has_503:
+        score += weights.get('status_503_disposable', 8)
+        signals.add("status_503_disposable")
+    
     # Content
     if res.is_minimal_shell:
         score += weights.get('minimal_shell', 15)
@@ -972,9 +1016,27 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_js_redirect:
         score += weights.get('js_redirect', 12)
         signals.add("js_redirect")
+    if res.has_meta_refresh:
+        score += weights.get('meta_refresh', 5)
+        signals.add("meta_refresh")
+    if res.has_external_js:
+        score += weights.get('external_js_loader', 6)
+        signals.add("external_js_loader")
+    if res.has_suspicious_iframe:
+        score += weights.get('suspicious_iframe', 8)
+        signals.add("suspicious_iframe")
+    if res.is_parking_page:
+        score += weights.get('parking_page', 6)
+        signals.add("parking_page")
     if res.has_credential_form:
         score += weights.get('credential_form', 20)
         signals.add("credential_form")
+    if res.has_sensitive_fields:
+        score += weights.get('sensitive_fields', 10)
+        signals.add("sensitive_fields")
+    if res.form_posts_external:
+        score += weights.get('form_posts_external', 10)
+        signals.add("form_posts_external")
     if res.brands_detected:
         score += weights.get('brand_impersonation', 22)
         signals.add("brand_impersonation")
