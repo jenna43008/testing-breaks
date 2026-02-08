@@ -210,4 +210,4 @@ def get_weight(config: dict, signal: str) -> int:
 def get_combo_weight(config: dict, signal1: str, signal2: str) -> int:
     """Get combo weight for two signals from config."""
     key = f"{signal1}+{signal2}"
-    return config.get('combos', {}).get(key, DEFAULT_CONFIG['combos'].get(key, 0
+    return config.get('combos', {}).get(key, DEFAULT_CONFIG['combos'].get(key, 0))
