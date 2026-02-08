@@ -1,4 +1,4 @@
-        """
+"""
 Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
@@ -677,41 +677,85 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     reasons_deny = []
     reasons_concern = []
     reasons_ok = []
+    email_impacts = []
     
+    # Critical issues that warrant DENY
     if res.domain_blacklist_count > 0:
         reasons_deny.append(f"domain on {res.domain_blacklist_count} blacklist(s)")
+        email_impacts.append("BLOCKED: Emails rejected by Gmail/Outlook/Yahoo")
+    
     if res.ip_blacklist_count > 0:
         reasons_deny.append(f"IP on {res.ip_blacklist_count} blacklist(s)")
+        email_impacts.append("BLOCKED: Sending IP flagged; emails rejected")
+    
     if res.spf_mechanism == "+all":
         reasons_deny.append("SPF +all allows spoofing")
-    if res.brands_detected:
-        reasons_deny.append(f"brand impersonation: {res.brands_detected}")
-    if res.malware_links_found:
-        reasons_deny.append(f"malware links found")
-    if res.has_credential_form and res.brands_detected:
-        reasons_deny.append("credential form with brand impersonation")
-    if rdap_enabled and 0 <= res.domain_age_days < 7:
-        reasons_deny.append(f"domain only {res.domain_age_days} days old")
+        email_impacts.append("SPOOFABLE: Anyone can forge as this domain")
+    
+    if rdap_enabled and res.domain_age_days >= 0 and res.domain_age_days < 7:
+        reasons_deny.append(f"domain only {res.domain_age_days}d old")
+        email_impacts.append("SPAM FOLDER: New domains hit spam 90%+")
+    
     if not res.spf_exists and not res.dmarc_exists and not res.dkim_exists:
-        reasons_deny.append("no email auth (SPF/DKIM/DMARC)")
+        reasons_deny.append("NO email auth (SPF/DKIM/DMARC)")
+        email_impacts.append("REJECTED: Gmail/Yahoo require auth; will fail")
+    
     if res.is_disposable_email:
         reasons_deny.append("disposable email domain")
+        email_impacts.append("UNTRUSTED: Cannot build reputation")
+    
     if res.typosquat_target:
-        reasons_deny.append(f"typosquat of '{res.typosquat_target}'")
+        reasons_deny.append(f"typosquats '{res.typosquat_target}'")
+        email_impacts.append("PHISHING: Typosquat triggers fraud filters")
+    
+    if res.brands_detected:
+        reasons_deny.append(f"brand impersonation: {res.brands_detected}")
+        email_impacts.append("PHISHING: Brand impersonation triggers fraud filters")
+    
+    if res.malware_links_found:
+        reasons_deny.append("malware links found")
+        email_impacts.append("MALWARE: Domain will be blacklisted")
+    
+    if res.has_credential_form and res.brands_detected:
+        reasons_deny.append("credential form with brand impersonation")
+        email_impacts.append("PHISHING: Credential harvesting detected")
+    
+    # Concerns (not automatic deny, but add to score)
     if not res.dmarc_exists:
-        reasons_deny.append("missing DMARC")
+        reasons_concern.append("NO DMARC")
+        email_impacts.append("DMARC MISSING: Gmail/Yahoo require it; 10-30% lower inbox rate")
+    elif res.dmarc_policy == "none":
+        reasons_concern.append("DMARC p=none (no protection)")
+        email_impacts.append("DMARC p=none: Zero spoofing protection; upgrade to quarantine/reject")
+    
     if not res.dkim_exists:
-        reasons_deny.append("no DKIM found")
+        reasons_concern.append("NO DKIM")
+        email_impacts.append("DKIM MISSING: No cryptographic signature; 15-25% deliverability penalty")
     
     if not res.spf_exists:
-        reasons_concern.append("missing SPF")
+        reasons_concern.append("NO SPF")
+        email_impacts.append("SPF MISSING: Emails may be rejected/spam")
+    
     if not res.mx_exists:
-        reasons_concern.append("no MX records")
+        reasons_concern.append("NO MX records")
+        email_impacts.append("NO MX: Cannot receive bounces; some providers reject")
+    
+    if not res.ptr_exists:
+        reasons_concern.append("NO PTR record")
+        email_impacts.append("NO PTR: Corporate filters may reject")
+    
+    if res.is_suspicious_tld:
+        reasons_concern.append("high-abuse TLD")
+        email_impacts.append("TLD: Higher spam filtering scrutiny")
+    
     if not res.https_valid:
         reasons_concern.append("no HTTPS")
+    
     if rdap_enabled and 7 <= res.domain_age_days < 30:
         reasons_concern.append(f"domain {res.domain_age_days} days old")
+        email_impacts.append("YOUNG DOMAIN: May hit spam filters more often")
     
+    # Positive signals
     if res.spf_exists and res.spf_mechanism == "-all":
         reasons_ok.append("strict SPF")
     if res.dmarc_exists and res.dmarc_policy in ["reject", "quarantine"]:
@@ -719,29 +763,39 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.dkim_exists:
         reasons_ok.append("DKIM configured")
     if rdap_enabled and res.domain_age_days >= 365:
-        reasons_ok.append(f"{res.domain_age_days // 365}+ years old")
+        reasons_ok.append(f"established ({res.domain_age_days // 365}y+)")
     if res.https_valid:
         reasons_ok.append("valid HTTPS")
     if res.bimi_exists:
-        reasons_ok.append("has BIMI")
+        reasons_ok.append("BIMI verified")
     if res.mta_sts_exists:
-        reasons_ok.append("has MTA-STS")
+        reasons_ok.append("MTA-STS")
     
+    # Build summary
     parts = []
     if res.recommendation == "DENY":
         if reasons_deny:
-            parts.append(f"DENY: {'; '.join(reasons_deny[:4])}")
+            parts.append(f"DENY: {'; '.join(reasons_deny[:3])}")
         elif reasons_concern:
             parts.append(f"DENY: {'; '.join(reasons_concern[:3])}")
         else:
-            parts.append("DENY: High risk score")
+            parts.append("DENY: High cumulative risk")
     else:
         if reasons_ok:
-            parts.append(f"APPROVE: {'; '.join(reasons_ok[:3])}")
+            parts.append(f"APPROVE: {'; '.join(reasons_ok[:4])}")
         else:
-            parts.append("APPROVE: No major issues")
+            parts.append("APPROVE: No major risks")
         if reasons_concern:
             parts.append(f"Notes: {'; '.join(reasons_concern[:2])}")
+    
+    # Add EMAIL IMPACT section
+    if email_impacts:
+        unique_impacts = list(dict.fromkeys(email_impacts))[:3]
+        parts.append(f"EMAIL IMPACT: {'; '.join(unique_impacts)}")
+    
+    # Add redirect chain info if present
+    if res.redirect_count > 0 and res.redirect_domains:
+        parts.append(f"Redirects: {res.redirect_domains}")
     
     return " | ".join(parts)
 
@@ -1062,3 +1116,4 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     calculate_score(res, config)
     
     return asdict(res)
+
