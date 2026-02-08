@@ -674,128 +674,160 @@ def rdap_lookup(domain: str, timeout: float) -> Tuple[str, int]:
 # ============================================================================
 
 def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled: bool) -> str:
-    reasons_deny = []
-    reasons_concern = []
-    reasons_ok = []
-    email_impacts = []
+    """Generate comprehensive summary showing ALL triggered signals and their email impacts."""
     
-    # Critical issues that warrant DENY
+    all_issues = []  # Format: "ISSUE → IMPACT"
+    positives = []
+    
+    # === CRITICAL ISSUES ===
     if res.domain_blacklist_count > 0:
-        reasons_deny.append(f"domain on {res.domain_blacklist_count} blacklist(s)")
-        email_impacts.append("BLOCKED: Emails rejected by Gmail/Outlook/Yahoo")
+        all_issues.append(f"BLACKLISTED DOMAIN ({res.domain_blacklist_count} lists) → Emails BLOCKED by Gmail/Outlook/Yahoo")
     
     if res.ip_blacklist_count > 0:
-        reasons_deny.append(f"IP on {res.ip_blacklist_count} blacklist(s)")
-        email_impacts.append("BLOCKED: Sending IP flagged; emails rejected")
+        all_issues.append(f"BLACKLISTED IP ({res.ip_blacklist_count} lists) → Emails BLOCKED by major providers")
     
     if res.spf_mechanism == "+all":
-        reasons_deny.append("SPF +all allows spoofing")
-        email_impacts.append("SPOOFABLE: Anyone can forge as this domain")
+        all_issues.append("SPF +all → Domain SPOOFABLE; anyone can forge emails as this sender")
     
     if rdap_enabled and res.domain_age_days >= 0 and res.domain_age_days < 7:
-        reasons_deny.append(f"domain only {res.domain_age_days}d old")
-        email_impacts.append("SPAM FOLDER: New domains hit spam 90%+")
+        all_issues.append(f"DOMAIN ONLY {res.domain_age_days} DAYS OLD → New domains hit spam folder 90%+ of the time")
+    elif rdap_enabled and res.domain_age_days >= 7 and res.domain_age_days < 30:
+        all_issues.append(f"DOMAIN {res.domain_age_days} DAYS OLD → Young domains face increased spam filtering")
+    elif rdap_enabled and res.domain_age_days >= 30 and res.domain_age_days < 90:
+        all_issues.append(f"DOMAIN {res.domain_age_days} DAYS OLD → Relatively new; building reputation")
     
     if not res.spf_exists and not res.dmarc_exists and not res.dkim_exists:
-        reasons_deny.append("NO email auth (SPF/DKIM/DMARC)")
-        email_impacts.append("REJECTED: Gmail/Yahoo require auth; will fail")
+        all_issues.append("ZERO EMAIL AUTH → Gmail/Yahoo REQUIRE authentication; emails will fail")
     
     if res.is_disposable_email:
-        reasons_deny.append("disposable email domain")
-        email_impacts.append("UNTRUSTED: Cannot build reputation")
+        all_issues.append("DISPOSABLE EMAIL DOMAIN → Cannot build sender reputation; inherently untrusted")
     
     if res.typosquat_target:
-        reasons_deny.append(f"typosquats '{res.typosquat_target}'")
-        email_impacts.append("PHISHING: Typosquat triggers fraud filters")
+        all_issues.append(f"TYPOSQUAT of '{res.typosquat_target}' → Triggers phishing/fraud filters automatically")
     
     if res.brands_detected:
-        reasons_deny.append(f"brand impersonation: {res.brands_detected}")
-        email_impacts.append("PHISHING: Brand impersonation triggers fraud filters")
+        all_issues.append(f"BRAND IMPERSONATION ({res.brands_detected}) → Triggers phishing filters")
     
     if res.malware_links_found:
-        reasons_deny.append("malware links found")
-        email_impacts.append("MALWARE: Domain will be blacklisted")
+        all_issues.append("MALWARE LINKS DETECTED → Domain will be blacklisted across providers")
     
     if res.has_credential_form and res.brands_detected:
-        reasons_deny.append("credential form with brand impersonation")
-        email_impacts.append("PHISHING: Credential harvesting detected")
+        all_issues.append("CREDENTIAL FORM + BRAND IMPERSONATION → Classic phishing; will be blocked")
     
-    # Concerns (not automatic deny, but add to score)
+    # === EMAIL AUTHENTICATION ===
     if not res.dmarc_exists:
-        reasons_concern.append("NO DMARC")
-        email_impacts.append("DMARC MISSING: Gmail/Yahoo require it; 10-30% lower inbox rate")
+        all_issues.append("NO DMARC → Gmail/Yahoo now REQUIRE DMARC; expect 10-30% lower inbox placement")
     elif res.dmarc_policy == "none":
-        reasons_concern.append("DMARC p=none (no protection)")
-        email_impacts.append("DMARC p=none: Zero spoofing protection; upgrade to quarantine/reject")
+        all_issues.append("DMARC p=none → Zero spoofing protection; upgrade to p=quarantine or p=reject")
     
     if not res.dkim_exists:
-        reasons_concern.append("NO DKIM")
-        email_impacts.append("DKIM MISSING: No cryptographic signature; 15-25% deliverability penalty")
+        all_issues.append("NO DKIM → Missing cryptographic signature; 15-25% deliverability penalty")
     
     if not res.spf_exists:
-        reasons_concern.append("NO SPF")
-        email_impacts.append("SPF MISSING: Emails may be rejected/spam")
+        all_issues.append("NO SPF → Cannot verify authorized senders; emails may be rejected or spam-foldered")
+    elif res.spf_mechanism == "~all":
+        all_issues.append("SPF ~all (softfail) → Weak enforcement; upgrade to -all for strict rejection")
+    elif res.spf_mechanism == "?all":
+        all_issues.append("SPF ?all (neutral) → Provides zero protection; upgrade to -all")
     
+    if res.dmarc_exists and not res.dmarc_rua:
+        all_issues.append("DMARC NO REPORTING → Cannot monitor authentication failures; add rua= tag")
+    
+    # === INFRASTRUCTURE ===
     if not res.mx_exists:
-        reasons_concern.append("NO MX records")
-        email_impacts.append("NO MX: Cannot receive bounces; some providers reject")
+        all_issues.append("NO MX RECORDS → Cannot receive bounces; some providers reject senders without MX")
+    elif res.mx_is_null:
+        all_issues.append("NULL MX RECORD → Domain explicitly cannot receive email")
     
     if not res.ptr_exists:
-        reasons_concern.append("NO PTR record")
-        email_impacts.append("NO PTR: Corporate filters may reject")
-    
-    if res.is_suspicious_tld:
-        reasons_concern.append("high-abuse TLD")
-        email_impacts.append("TLD: Higher spam filtering scrutiny")
+        all_issues.append("NO PTR RECORD → Corporate/enterprise email filters may reject")
+    elif not res.ptr_matches_forward:
+        all_issues.append("PTR MISMATCH → Forward/reverse DNS inconsistent; triggers spam filters")
     
     if not res.https_valid:
-        reasons_concern.append("no HTTPS")
+        all_issues.append("NO VALID HTTPS → May indicate abandoned or suspicious domain")
     
-    if rdap_enabled and 7 <= res.domain_age_days < 30:
-        reasons_concern.append(f"domain {res.domain_age_days} days old")
-        email_impacts.append("YOUNG DOMAIN: May hit spam filters more often")
+    if res.is_suspicious_tld:
+        all_issues.append("HIGH-ABUSE TLD → This domain extension faces extra spam scrutiny")
+    
+    if res.is_free_hosting:
+        all_issues.append("FREE HOSTING PROVIDER → Associated with spam; limited reputation potential")
+    
+    if res.is_free_email_domain:
+        all_issues.append("FREE EMAIL PROVIDER DOMAIN → Cannot send bulk from consumer email domains")
+    
+    # === WEB/REDIRECT ISSUES ===
+    if res.redirect_count >= 2:
+        all_issues.append(f"REDIRECT CHAIN ({res.redirect_count} hops) → May trigger phishing detection")
+    
+    if res.redirect_cross_domain:
+        all_issues.append("CROSS-DOMAIN REDIRECT → Suspicious pattern common in phishing")
+    
+    if res.redirect_uses_temp:
+        all_issues.append("TEMP REDIRECTS (302/307) → Suggests URL cloaking; triggers filters")
+    
+    if res.is_minimal_shell:
+        all_issues.append("MINIMAL/SHELL WEBSITE → Common phishing indicator")
+    
+    if res.has_js_redirect:
+        all_issues.append("JAVASCRIPT REDIRECT → Suspicious redirect technique")
+    
+    if res.has_credential_form and not res.brands_detected:
+        all_issues.append("CREDENTIAL FORM DETECTED → Login form on landing page")
+    
+    # === POSITIVE SIGNALS ===
+    if res.spf_exists and res.spf_mechanism == "-all":
+        positives.append("Strict SPF (-all)")
+    
+    if res.dmarc_exists and res.dmarc_policy == "reject":
+        positives.append("DMARC p=reject")
+    elif res.dmarc_exists and res.dmarc_policy == "quarantine":
+        positives.append("DMARC p=quarantine")
+    
+    if res.dkim_exists:
+        positives.append("DKIM configured")
+    
+    if rdap_enabled and res.domain_age_days >= 365:
+        years = res.domain_age_days // 365
+        positives.append(f"Established ({years}+ years)")
+    
+    if res.https_valid:
+        positives.append("Valid HTTPS")
+    
+    if res.bimi_exists:
+        positives.append("BIMI verified")
+    
+    if res.mta_sts_exists:
+        positives.append("MTA-STS enabled")
+    
+    if res.mx_exists and not res.mx_is_null:
+        positives.append("MX configured")
+    
+    if res.ptr_exists and res.ptr_matches_forward:
+        positives.append("PTR matches")
+    
+    # === BUILD SUMMARY ===
+    parts = []
+    
+    # Recommendation with score
+    if res.recommendation == "DENY":
+        parts.append(f"⛔ DENY (Score: {res.risk_score}/100, Threshold: 50)")
+    else:
+        parts.append(f"✅ APPROVE (Score: {res.risk_score}/100)")
+    
+    # ALL issues with impacts
+    if all_issues:
+        parts.append("ISSUES FOUND: " + " • ".join(all_issues))
+    else:
+        parts.append("ISSUES FOUND: None")
     
     # Positive signals
-    if res.spf_exists and res.spf_mechanism == "-all":
-        reasons_ok.append("strict SPF")
-    if res.dmarc_exists and res.dmarc_policy in ["reject", "quarantine"]:
-        reasons_ok.append(f"DMARC p={res.dmarc_policy}")
-    if res.dkim_exists:
-        reasons_ok.append("DKIM configured")
-    if rdap_enabled and res.domain_age_days >= 365:
-        reasons_ok.append(f"established ({res.domain_age_days // 365}y+)")
-    if res.https_valid:
-        reasons_ok.append("valid HTTPS")
-    if res.bimi_exists:
-        reasons_ok.append("BIMI verified")
-    if res.mta_sts_exists:
-        reasons_ok.append("MTA-STS")
+    if positives:
+        parts.append("POSITIVE SIGNALS: " + ", ".join(positives))
     
-    # Build summary
-    parts = []
-    if res.recommendation == "DENY":
-        if reasons_deny:
-            parts.append(f"DENY: {'; '.join(reasons_deny[:3])}")
-        elif reasons_concern:
-            parts.append(f"DENY: {'; '.join(reasons_concern[:3])}")
-        else:
-            parts.append("DENY: High cumulative risk")
-    else:
-        if reasons_ok:
-            parts.append(f"APPROVE: {'; '.join(reasons_ok[:4])}")
-        else:
-            parts.append("APPROVE: No major risks")
-        if reasons_concern:
-            parts.append(f"Notes: {'; '.join(reasons_concern[:2])}")
-    
-    # Add EMAIL IMPACT section
-    if email_impacts:
-        unique_impacts = list(dict.fromkeys(email_impacts))[:3]
-        parts.append(f"EMAIL IMPACT: {'; '.join(unique_impacts)}")
-    
-    # Add redirect chain info if present
+    # Redirect path if applicable
     if res.redirect_count > 0 and res.redirect_domains:
-        parts.append(f"Redirects: {res.redirect_domains}")
+        parts.append(f"REDIRECT PATH: {res.redirect_domains}")
     
     return " | ".join(parts)
 
@@ -1116,4 +1148,3 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     calculate_score(res, config)
     
     return asdict(res)
-
