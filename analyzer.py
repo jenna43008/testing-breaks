@@ -838,75 +838,76 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     weights = config.get('weights', DEFAULT_CONFIG['weights'])
     threshold = config.get('approve_threshold', 50)
     
-    # Email Auth
+    # Email Auth - these are DELIVERABILITY concerns only, NOT fraud signals
+    # A domain missing these should get warnings, not denial
     if not res.spf_exists:
-        score += weights.get('no_spf', 25)
+        score += weights.get('no_spf', 8)
         signals.add("no_spf")
     else:
         if res.spf_mechanism == "+all":
-            score += weights.get('spf_pass_all', 35)
+            score += weights.get('spf_pass_all', 40)  # This IS a security issue - allows spoofing
             signals.add("spf_pass_all")
         elif res.spf_mechanism == "?all":
-            score += weights.get('spf_neutral_all', 15)
+            score += weights.get('spf_neutral_all', 5)
             signals.add("spf_neutral_all")
         elif res.spf_mechanism == "~all":
-            score += weights.get('spf_softfail_all', 5)
+            score += weights.get('spf_softfail_all', 2)  # Very minor - this is common and acceptable
             signals.add("spf_softfail_all")
     
     if not res.dkim_exists:
-        score += weights.get('no_dkim', 20)
+        score += weights.get('no_dkim', 6)
         signals.add("no_dkim")
     
     if not res.dmarc_exists:
-        score += weights.get('no_dmarc', 30)
+        score += weights.get('no_dmarc', 10)
         signals.add("no_dmarc")
     else:
         if res.dmarc_policy == "none":
-            score += weights.get('dmarc_p_none', 18)
+            score += weights.get('dmarc_p_none', 5)
             signals.add("dmarc_p_none")
         if not res.dmarc_rua:
-            score += weights.get('dmarc_no_rua', 5)
+            score += weights.get('dmarc_no_rua', 2)
             signals.add("dmarc_no_rua")
     
     if not res.mx_exists:
-        score += weights.get('no_mx', 25)
+        score += weights.get('no_mx', 8)
         signals.add("no_mx")
     elif res.mx_is_null:
-        score += weights.get('null_mx', 20)
+        score += weights.get('null_mx', 12)
         signals.add("null_mx")
     
     if not res.ptr_exists:
-        score += weights.get('no_ptr', 12)
+        score += weights.get('no_ptr', 4)
         signals.add("no_ptr")
     elif not res.ptr_matches_forward:
-        score += weights.get('ptr_mismatch', 15)
+        score += weights.get('ptr_mismatch', 5)
         signals.add("ptr_mismatch")
     
     if res.bimi_exists:
-        score += weights.get('has_bimi', -5)
+        score += weights.get('has_bimi', -8)
         signals.add("has_bimi")
     if res.mta_sts_exists:
         score += weights.get('has_mta_sts', -5)
         signals.add("has_mta_sts")
     
-    # Blacklists
+    # Blacklists - HIGH weight, these are real fraud signals
     if res.domain_blacklist_count > 0:
-        score += weights.get('domain_blacklisted', 35) * min(res.domain_blacklist_count, 3)
+        score += weights.get('domain_blacklisted', 40) * min(res.domain_blacklist_count, 3)
         signals.add("domain_blacklisted")
     if res.ip_blacklist_count > 0:
-        score += weights.get('ip_blacklisted', 30) * min(res.ip_blacklist_count, 3)
+        score += weights.get('ip_blacklisted', 35) * min(res.ip_blacklist_count, 3)
         signals.add("ip_blacklisted")
     
     # Domain age
     if res.domain_age_days >= 0:
         if res.domain_age_days < 7:
-            score += weights.get('domain_lt_7d', 30)
+            score += weights.get('domain_lt_7d', 35)
             signals.add("domain_lt_7d")
         if res.domain_age_days < 30:
-            score += weights.get('domain_lt_30d', 20)
+            score += weights.get('domain_lt_30d', 12)
             signals.add("domain_lt_30d")
         elif res.domain_age_days < 90:
-            score += weights.get('domain_lt_90d', 8)
+            score += weights.get('domain_lt_90d', 5)
             signals.add("domain_lt_90d")
     
     # Domain type
