@@ -112,6 +112,15 @@ class DomainApprovalResult:
     typosquat_target: str = ""
     typosquat_similarity: float = 0.0
     
+    # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
+    has_suspicious_prefix: bool = False
+    suspicious_prefix_found: str = ""
+    has_suspicious_suffix: bool = False
+    suspicious_suffix_found: str = ""
+    is_tech_support_tld: bool = False
+    domain_impersonates_brand: str = ""  # Brand found in domain name
+    domain_pattern_risk: str = ""  # Summary of suspicious patterns
+    
     # === WEB: TLS/CERT ===
     https_valid: bool = False
     tls_error: str = ""
@@ -197,6 +206,74 @@ PHISHING_PATHS = [
     '/account', '/banking', '/webscr', '/paypal', '/amazon',
 ]
 
+# ============================================================================
+# PHISHING DOMAIN NAME PATTERNS (Tech Support Scam / Brand Impersonation)
+# ============================================================================
+
+# Suspicious prefixes commonly used in tech support scams
+SUSPICIOUS_PREFIXES = [
+    'app-', 'my-', 'get-', 'www-', 'login-', 'secure-', 'support-', 'help-',
+    'account-', 'portal-', 'online-', 'web-', 'customer-', 'service-',
+    'official-', 'verify-', 'update-', 'billing-', 'payment-',
+    'easy', 'howto', 'free', 'fast', 'quick', 'best', 'top',
+    'i-download', 'download-', 'install-',
+]
+
+# Suspicious suffixes commonly used in tech support scams  
+SUSPICIOUS_SUFFIXES = [
+    'account', 'accounts', 'login', 'signin', 'support', 'help', 'helpdesk',
+    'setup', 'install', 'download', 'update', 'upgrade', 'cancellation',
+    'cancel', 'billing', 'payment', 'verify', 'verification', 'secure',
+    'activate', 'activation', 'renew', 'renewal', 'subscription',
+    'customer', 'service', 'official', 'online', 'portal', 'center',
+    'assistant', 'desk', 'tech', 'fix', 'repair', 'cleaner', 'optimizer',
+]
+
+# TLDs heavily abused for tech support scams
+TECH_SUPPORT_SCAM_TLDS = [
+    '.support', '.tech', '.help', '.services', '.solutions', '.center',
+    '.expert', '.guru', '.pro', '.care', '.repair', '.fix',
+]
+
+# Expanded brand list for domain-name impersonation detection
+# Includes: ISPs, security software, streaming, tech companies, utilities
+IMPERSONATED_BRANDS = [
+    # Major tech companies (already in content check)
+    'paypal', 'amazon', 'microsoft', 'apple', 'google', 'facebook', 'netflix',
+    
+    # ISPs / Email providers (common tech support scam targets)
+    'aol', 'att', 'bellsouth', 'centurylink', 'charter', 'comcast', 'cox',
+    'earthlink', 'frontier', 'hughesnet', 'juno', 'mediacom', 'optimum',
+    'roadrunner', 'spectrum', 'suddenlink', 'verizon', 'windstream', 'xfinity',
+    'yahoo', 'gmail', 'outlook', 'hotmail', 'protonmail', 'startmail',
+    'duckduckgo', 'prontoemail', 'prontomail',
+    
+    # Security software (huge tech support scam target)
+    'norton', 'mcafee', 'avast', 'avg', 'bitdefender', 'kaspersky', 'malwarebytes',
+    'webroot', 'trendmicro', 'sophos', 'eset', 'avira', 'pcmatic', 'totalav',
+    'scanguard', 'stopzilla', 'hitmanpro', 'spyhunter', 'fixmestick',
+    'cleanmymac', 'macpaw', 'ccleaner', 'iolo', 'systemcare',
+    
+    # Streaming services
+    'hulu', 'disney', 'hbomax', 'peacock', 'paramount', 'fubo', 'fubotv',
+    'sling', 'vudu', 'roku', 'appletv', 'primevideo', 'spotify', 'pandora',
+    
+    # Hardware / Printers (tech support scam targets)
+    'hp', 'canon', 'epson', 'brother', 'lexmark', 'dymo', 'xerox', 'dell',
+    'lenovo', 'asus', 'acer', 'toshiba', 'samsung', 'logitech',
+    
+    # Software
+    'quickbooks', 'turbotax', 'quicken', 'sage', 'adobe', 'autodesk',
+    'dropbox', 'carbonite', 'idrive', 'backblaze', 'crashplan',
+    
+    # Gaming / Entertainment
+    'pogo', 'steam', 'epic', 'origin', 'ubisoft', 'blizzard', 'roblox',
+    
+    # Other commonly impersonated
+    'geeksquad', 'bestbuy', 'costco', 'walmart', 'target',
+]
+
+# Content-based brand detection (for page content scanning)
 BRAND_KEYWORDS = [
     b'paypal', b'amazon', b'microsoft', b'apple', b'google', b'facebook',
     b'instagram', b'netflix', b'bank of america', b'chase', b'wells fargo',
@@ -467,6 +544,109 @@ def is_disposable_email(domain: str, disposable_list: List[str]) -> bool:
     return False
 
 
+def check_domain_name_patterns(domain: str) -> Dict:
+    """
+    Detect tech support scam / brand impersonation patterns in domain name.
+    
+    Patterns detected:
+    1. Suspicious prefixes: app-, my-, get-, support-, login-, etc.
+    2. Suspicious suffixes: account, setup, cancellation, support, etc.
+    3. Tech support scam TLDs: .support, .tech, .help, etc.
+    4. Brand names embedded in domain: spectrum, verizon, norton, etc.
+    
+    Returns dict with detection results.
+    """
+    result = {
+        "has_suspicious_prefix": False,
+        "suspicious_prefix": "",
+        "has_suspicious_suffix": False, 
+        "suspicious_suffix": "",
+        "is_tech_support_tld": False,
+        "domain_impersonates_brand": "",
+        "patterns_found": [],
+        "risk_score_addition": 0,
+    }
+    
+    domain_lower = domain.lower().strip()
+    
+    # Extract main part (without TLD)
+    parts = domain_lower.rsplit('.', 1)
+    if len(parts) == 2:
+        main_part = parts[0]
+        tld = '.' + parts[1]
+    else:
+        main_part = domain_lower
+        tld = ""
+    
+    # Check for multi-part TLDs like .co.uk
+    full_tld = ""
+    for tst in TECH_SUPPORT_SCAM_TLDS:
+        if domain_lower.endswith(tst):
+            full_tld = tst
+            main_part = domain_lower[:-len(tst)]
+            break
+    
+    # Normalize: remove hyphens for brand matching
+    normalized = main_part.replace('-', '').replace('_', '')
+    
+    # === CHECK 1: Suspicious prefixes ===
+    for prefix in SUSPICIOUS_PREFIXES:
+        if main_part.startswith(prefix) or (prefix.endswith('-') and main_part.startswith(prefix[:-1] + '-')):
+            result["has_suspicious_prefix"] = True
+            result["suspicious_prefix"] = prefix
+            result["patterns_found"].append(f"prefix:{prefix}")
+            result["risk_score_addition"] += 12
+            break
+    
+    # === CHECK 2: Suspicious suffixes ===
+    for suffix in SUSPICIOUS_SUFFIXES:
+        # Check if domain ends with suffix (e.g., "spectrumaccount" ends with "account")
+        if normalized.endswith(suffix) and len(normalized) > len(suffix):
+            result["has_suspicious_suffix"] = True
+            result["suspicious_suffix"] = suffix
+            result["patterns_found"].append(f"suffix:{suffix}")
+            result["risk_score_addition"] += 12
+            break
+    
+    # === CHECK 3: Tech support scam TLDs ===
+    if full_tld:
+        result["is_tech_support_tld"] = True
+        result["patterns_found"].append(f"tld:{full_tld}")
+        result["risk_score_addition"] += 15
+    else:
+        for scam_tld in TECH_SUPPORT_SCAM_TLDS:
+            if domain_lower.endswith(scam_tld):
+                result["is_tech_support_tld"] = True
+                result["patterns_found"].append(f"tld:{scam_tld}")
+                result["risk_score_addition"] += 15
+                break
+    
+    # === CHECK 4: Brand impersonation in domain name ===
+    # This catches domains like "app-spectrum.com", "nortonaccount.com"
+    for brand in IMPERSONATED_BRANDS:
+        brand_normalized = brand.replace(' ', '').lower()
+        
+        # Skip very short brands that cause false positives
+        if len(brand_normalized) < 3:
+            continue
+            
+        # Check if brand is in the domain (but domain is not the exact brand)
+        if brand_normalized in normalized:
+            # Make sure it's not the legitimate domain
+            legitimate = [f"{brand_normalized}.com", f"{brand_normalized}.net", 
+                         f"{brand_normalized}.org", f"{brand_normalized}.co"]
+            if domain_lower not in legitimate:
+                # Make sure the domain isn't just a longer legit name
+                # e.g., "spectrum.net" vs "spectrumaccount.com"
+                if normalized != brand_normalized:
+                    result["domain_impersonates_brand"] = brand
+                    result["patterns_found"].append(f"brand:{brand}")
+                    result["risk_score_addition"] += 20
+                    break
+    
+    return result
+
+
 # ============================================================================
 # WEB FUNCTIONS
 # ============================================================================
@@ -721,6 +901,19 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.typosquat_target:
         all_issues.append(f"TYPOSQUAT of '{res.typosquat_target}' → Triggers phishing/fraud filters automatically")
     
+    # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
+    if res.domain_impersonates_brand:
+        all_issues.append(f"DOMAIN IMPERSONATES '{res.domain_impersonates_brand.upper()}' → Brand name in domain; classic tech support scam pattern")
+    
+    if res.has_suspicious_prefix:
+        all_issues.append(f"SUSPICIOUS PREFIX '{res.suspicious_prefix_found}' → Common phishing/scam domain pattern")
+    
+    if res.has_suspicious_suffix:
+        all_issues.append(f"SUSPICIOUS SUFFIX '{res.suspicious_suffix_found}' → Tech support scam domain pattern (e.g., 'brandaccount.com')")
+    
+    if res.is_tech_support_tld:
+        all_issues.append("TECH SUPPORT SCAM TLD (.support/.tech/.help) → Heavily abused for scams")
+    
     if res.brands_detected:
         all_issues.append(f"BRAND IMPERSONATION ({res.brands_detected}) → Triggers phishing filters")
     
@@ -971,6 +1164,20 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         score += weights.get('free_hosting', 12)
         signals.add("free_hosting")
     
+    # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
+    if res.has_suspicious_prefix:
+        score += weights.get('suspicious_prefix', 15)
+        signals.add("suspicious_prefix")
+    if res.has_suspicious_suffix:
+        score += weights.get('suspicious_suffix', 15)
+        signals.add("suspicious_suffix")
+    if res.is_tech_support_tld:
+        score += weights.get('tech_support_tld', 18)
+        signals.add("tech_support_tld")
+    if res.domain_impersonates_brand:
+        score += weights.get('domain_brand_impersonation', 25)
+        signals.add("domain_brand_impersonation")
+    
     # Web/TLS
     if not res.https_valid:
         score += weights.get('no_https', 25)
@@ -1112,6 +1319,16 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.is_url_shortener = domain_lower in URL_SHORTENERS
     res.is_disposable_email = is_disposable_email(domain_lower, config['disposable_domains'])
     res.typosquat_target, res.typosquat_similarity = check_typosquatting(domain, config['protected_brands'])
+    
+    # Check domain name for tech support scam / brand impersonation patterns
+    domain_patterns = check_domain_name_patterns(domain)
+    res.has_suspicious_prefix = domain_patterns["has_suspicious_prefix"]
+    res.suspicious_prefix_found = domain_patterns["suspicious_prefix"]
+    res.has_suspicious_suffix = domain_patterns["has_suspicious_suffix"]
+    res.suspicious_suffix_found = domain_patterns["suspicious_suffix"]
+    res.is_tech_support_tld = domain_patterns["is_tech_support_tld"]
+    res.domain_impersonates_brand = domain_patterns["domain_impersonates_brand"]
+    res.domain_pattern_risk = ";".join(domain_patterns["patterns_found"])
     
     # SPF
     spf_record, spf_exists, spf_parsed = get_spf(domain)
