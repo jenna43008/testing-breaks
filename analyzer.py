@@ -168,6 +168,18 @@ class DomainApprovalResult:
     has_suspicious_iframe: bool = False
     is_parking_page: bool = False
     
+    # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
+    has_hijack_path_pattern: bool = False
+    hijack_path_found: str = ""
+    has_doc_sharing_lure: bool = False
+    doc_lure_found: str = ""
+    has_phishing_js_behavior: bool = False
+    phishing_js_patterns: str = ""
+    redirects_to_phishing_infra: bool = False
+    phishing_infra_domain: str = ""
+    has_email_in_url: bool = False
+    url_email_tracking: str = ""
+    
     # === SCORING DETAILS ===
     signals_triggered: str = ""
     combos_triggered: str = ""
@@ -287,6 +299,89 @@ CREDENTIAL_PATTERNS = [b'type="password"', b"type='password'", b'name="password"
 SENSITIVE_PATTERNS = [b'name="ssn"', b'name="card_number"', b'name="cvv"']
 JS_REDIRECT_PATTERNS = [b'location.href', b'location.replace', b'window.location']
 MALWARE_EXTENSIONS = ['.exe', '.scr', '.bat', '.cmd', '.msi', '.jar', '.vbs', '.apk']
+
+# ============================================================================
+# HIJACKED DOMAIN / STEPPING STONE DETECTION PATTERNS
+# Based on research: https://keepaware.com/blog/over-100-domains-hijacked
+# ============================================================================
+
+# Suspicious URL path segments (phishing pages hidden in subdirectories)
+HIJACK_PATH_KEYWORDS = [
+    'tunnel', 'bid', 'invite', 'secure', 'memo', 'document', 'fileshare',
+    'agreement', 'policy', 'scan', 'rfp', 'proposal', 'submission',
+    'sharedsuccess', 'teamwork', 'workers-team', 'team-work', 'team-admin',
+    'autodocs', 'onlstorage', 'tunelstorage', 'cstorefile', 'archiev',
+    'proceed', 'record', 'source', 'incoming-bid', 'drive', 'zoom',
+    'invitation', 'offers', 'master', 'project', 'realestate', 'legal',
+]
+
+# Suspicious filename patterns in URLs
+HIJACK_FILE_PATTERNS = [
+    'email-template.html', 'proposal.html', 'policy.html', 'home.html',
+    'index.html', 'scan.html', 'agreement.html', 'project.html',
+    'compliance.html', 'secure.html', 'form.html', 'preview-form.html',
+]
+
+# Known phishing infrastructure domains (redirects to these = bad)
+PHISHING_INFRASTRUCTURE = [
+    'workers.dev',           # Cloudflare workers - heavily abused
+    'pages.dev',             # Cloudflare pages
+    'netlify.app',           # Netlify - abused for phishing
+    'vercel.app',            # Vercel - abused
+    'herokuapp.com',         # Heroku
+    'glitch.me',             # Glitch
+    'replit.dev',            # Replit
+    'web.app',               # Firebase
+    'firebaseapp.com',       # Firebase
+    'azurewebsites.net',     # Azure (often abused)
+    'blob.core.windows.net', # Azure blob storage
+    'googleapis.com',        # Google APIs (sometimes abused)
+    'ipfs.io',               # IPFS - decentralized, hard to takedown
+    'dweb.link',             # IPFS gateway
+    'fleek.co',              # IPFS hosting
+    'arweave.net',           # Permanent storage - abused
+]
+
+# Document sharing lure patterns (in page content)
+DOC_SHARING_LURES = [
+    b'secure document sharing',
+    b'business document shared',
+    b'shared document',
+    b'view document',
+    b'access document',
+    b'download document',
+    b'open document',
+    b'document preview',
+    b'file shared with you',
+    b'has shared a file',
+    b'sent you a document',
+    b'review document',
+    b'sign document',
+    b'confidential document',
+    b'important document',
+    b'urgent document',
+    b'invoice attached',
+    b'payment document',
+    b'enter your email to view',
+    b'verify your email to access',
+    b'enter email to continue',
+]
+
+# JavaScript patterns indicating phishing kit behavior
+PHISHING_JS_PATTERNS = [
+    b'atob(',                          # Base64 decoding (URL obfuscation)
+    b'window.location.hash',           # Email extraction from URL hash
+    b'getEmailFromHash',               # Function name from known kits
+    b'decodeBase64',                   # Base64 decoding function
+    b'loadingOverlay',                 # Fake loading screen
+    b'loadingSpinner',                 # Fake loading spinner
+    b"btoa(",                          # Base64 encoding
+    b'.workers.dev',                   # Cloudflare workers redirect
+    b'captchaResponse',                # Fake captcha
+    b'validate-captcha.php',           # Fake captcha validation
+    b'redirectUrl',                    # Redirect configuration
+    b'emailFromHash',                  # Email from URL hash
+]
 
 
 # ============================================================================
@@ -845,6 +940,124 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     return result
 
 
+def check_hijacked_domain_indicators(content: bytes, final_url: str, redirect_chain: List[str] = None) -> Dict:
+    """
+    Detect indicators of hijacked/compromised domains being used as phishing stepping stones.
+    
+    Based on research: https://keepaware.com/blog/over-100-domains-hijacked
+    
+    Key indicators:
+    1. Suspicious URL path patterns (e.g., /tunnel/, /bid/, /invite/)
+    2. Document sharing lure content
+    3. Phishing kit JavaScript behaviors (atob, hash extraction, etc.)
+    4. Redirects to known phishing infrastructure (workers.dev, etc.)
+    5. Email tracking in URL hash
+    """
+    result = {
+        "has_hijack_path": False,
+        "hijack_path": "",
+        "has_doc_lure": False,
+        "doc_lure": "",
+        "has_phishing_js": False,
+        "phishing_js_found": [],
+        "redirects_to_phishing_infra": False,
+        "phishing_infra": "",
+        "has_email_in_url": False,
+        "email_tracking": "",
+        "risk_score_addition": 0,
+    }
+    
+    if not content and not final_url:
+        return result
+    
+    # === CHECK 1: Suspicious URL path patterns ===
+    # Hijacked sites often have phishing pages in paths like /tunnel/, /bid/, /secure/
+    if final_url:
+        parsed = urlparse(final_url)
+        path_lower = parsed.path.lower()
+        
+        for keyword in HIJACK_PATH_KEYWORDS:
+            if f'/{keyword}/' in path_lower or f'/{keyword}' == path_lower or path_lower.startswith(f'/{keyword}'):
+                result["has_hijack_path"] = True
+                result["hijack_path"] = keyword
+                result["risk_score_addition"] += 12
+                break
+        
+        # Check for suspicious filename patterns
+        if not result["has_hijack_path"]:
+            for pattern in HIJACK_FILE_PATTERNS:
+                if pattern in path_lower:
+                    result["has_hijack_path"] = True
+                    result["hijack_path"] = pattern
+                    result["risk_score_addition"] += 8
+                    break
+        
+        # === CHECK 5: Email tracking in URL ===
+        # Phishers embed victim email in URL hash: example.com/page#john@company.com
+        full_url = final_url
+        if '#' in full_url:
+            hash_part = full_url.split('#', 1)[1]
+            # Check for plain email
+            if '@' in hash_part and '.' in hash_part.split('@')[-1]:
+                result["has_email_in_url"] = True
+                result["email_tracking"] = "plain_email_in_hash"
+                result["risk_score_addition"] += 15
+            # Check for base64 encoded email (common pattern)
+            elif len(hash_part) > 10 and hash_part.replace('=', '').replace('+', '').replace('/', '').isalnum():
+                try:
+                    import base64
+                    decoded = base64.b64decode(hash_part).decode('utf-8', errors='ignore')
+                    if '@' in decoded and '.' in decoded:
+                        result["has_email_in_url"] = True
+                        result["email_tracking"] = "base64_email_in_hash"
+                        result["risk_score_addition"] += 18
+                except:
+                    pass
+    
+    # === CHECK 4: Redirects to known phishing infrastructure ===
+    urls_to_check = [final_url] if final_url else []
+    if redirect_chain:
+        urls_to_check.extend(redirect_chain)
+    
+    for url in urls_to_check:
+        if url:
+            url_lower = url.lower()
+            for infra in PHISHING_INFRASTRUCTURE:
+                if infra in url_lower:
+                    result["redirects_to_phishing_infra"] = True
+                    result["phishing_infra"] = infra
+                    result["risk_score_addition"] += 20
+                    break
+        if result["redirects_to_phishing_infra"]:
+            break
+    
+    if not content:
+        return result
+    
+    content_lower = content.lower()
+    
+    # === CHECK 2: Document sharing lure content ===
+    for lure in DOC_SHARING_LURES:
+        if lure in content_lower:
+            result["has_doc_lure"] = True
+            result["doc_lure"] = lure.decode('utf-8', errors='ignore')
+            result["risk_score_addition"] += 12
+            break
+    
+    # === CHECK 3: Phishing kit JavaScript behaviors ===
+    js_patterns_found = []
+    for pattern in PHISHING_JS_PATTERNS:
+        if pattern in content_lower:
+            js_patterns_found.append(pattern.decode('utf-8', errors='ignore'))
+    
+    if len(js_patterns_found) >= 2:  # Need 2+ patterns to flag
+        result["has_phishing_js"] = True
+        result["phishing_js_found"] = js_patterns_found[:5]
+        result["risk_score_addition"] += 15
+    
+    return result
+
+
 def rdap_lookup(domain: str, timeout: float) -> Tuple[str, int]:
     if not REQUESTS_AVAILABLE:
         return "", -1
@@ -1012,6 +1225,22 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.has_credential_form and not res.brands_detected:
         all_issues.append("CREDENTIAL FORM DETECTED → Login form on landing page")
     
+    # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
+    if res.redirects_to_phishing_infra:
+        all_issues.append(f"REDIRECTS TO PHISHING INFRASTRUCTURE ({res.phishing_infra_domain}) → Known malicious hosting")
+    
+    if res.has_doc_sharing_lure:
+        all_issues.append(f"DOCUMENT SHARING LURE → '{res.doc_lure_found}' - Common phishing tactic")
+    
+    if res.has_phishing_js_behavior:
+        all_issues.append(f"PHISHING KIT JS PATTERNS → Suspicious JavaScript: {res.phishing_js_patterns}")
+    
+    if res.has_email_in_url:
+        all_issues.append(f"EMAIL TRACKING IN URL → {res.url_email_tracking} - Victim tracking technique")
+    
+    if res.has_hijack_path_pattern:
+        all_issues.append(f"SUSPICIOUS URL PATH '/{res.hijack_path_found}/' → Common hijacked domain pattern")
+    
     # === POSITIVE SIGNALS ===
     if res.spf_exists and res.spf_mechanism == "-all":
         positives.append("Strict SPF (-all)")
@@ -1146,6 +1375,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         elif res.domain_age_days < 90:
             score += weights.get('domain_lt_90d', 5)
             signals.add("domain_lt_90d")
+        # Track established domains (for hijack detection combos)
+        if res.domain_age_days >= 365:
+            signals.add("domain_gt_1yr")  # No score penalty - just for combo detection
     
     # Domain type
     if res.is_suspicious_tld:
@@ -1253,6 +1485,23 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.malware_links_found:
         score += weights.get('malware_links', 25)
         signals.add("malware_links")
+    
+    # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
+    if res.has_hijack_path_pattern:
+        score += weights.get('hijack_path_pattern', 12)
+        signals.add("hijack_path_pattern")
+    if res.has_doc_sharing_lure:
+        score += weights.get('doc_sharing_lure', 15)
+        signals.add("doc_sharing_lure")
+    if res.has_phishing_js_behavior:
+        score += weights.get('phishing_js_behavior', 18)
+        signals.add("phishing_js_behavior")
+    if res.redirects_to_phishing_infra:
+        score += weights.get('phishing_infra_redirect', 25)
+        signals.add("phishing_infra_redirect")
+    if res.has_email_in_url:
+        score += weights.get('email_tracking_url', 20)
+        signals.add("email_tracking_url")
     
     # Combos
     combos = config.get('combos', DEFAULT_CONFIG['combos'])
@@ -1435,6 +1684,20 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.has_suspicious_iframe = ca["suspicious_iframe"]
         res.is_parking_page = ca["parking"]
         res.phishing_paths_found = ";".join(ca["phishing_paths"])
+    
+    # Check for hijacked domain / stepping stone indicators
+    redirect_chain_urls = res.redirect_chain.split(' → ') if res.redirect_chain else []
+    hijack = check_hijacked_domain_indicators(content, res.final_url, redirect_chain_urls)
+    res.has_hijack_path_pattern = hijack["has_hijack_path"]
+    res.hijack_path_found = hijack["hijack_path"]
+    res.has_doc_sharing_lure = hijack["has_doc_lure"]
+    res.doc_lure_found = hijack["doc_lure"]
+    res.has_phishing_js_behavior = hijack["has_phishing_js"]
+    res.phishing_js_patterns = ";".join(hijack["phishing_js_found"])
+    res.redirects_to_phishing_infra = hijack["redirects_to_phishing_infra"]
+    res.phishing_infra_domain = hijack["phishing_infra"]
+    res.has_email_in_url = hijack["has_email_in_url"]
+    res.url_email_tracking = hijack["email_tracking"]
     
     # RDAP
     if check_rdap:
