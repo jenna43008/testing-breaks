@@ -30,6 +30,12 @@ DEFAULT_CONFIG = {
         "credential_form": 12,        # Only concerning if combined with other signals
         "sensitive_fields": 10,
         
+        # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
+        "suspicious_prefix": 15,           # app-, my-, support-, login-, etc.
+        "suspicious_suffix": 15,           # account, setup, cancellation, etc.
+        "tech_support_tld": 20,            # .support, .tech, .help, etc.
+        "domain_brand_impersonation": 28,  # Brand name IN domain (app-spectrum.com)
+        
         # === DELIVERABILITY CONCERNS (Low weights - warn but don't deny alone) ===
         "no_spf": 8,                  # Missing SPF - their problem, not fraud
         "spf_neutral_all": 5,         # ?all - weak but not dangerous
@@ -114,6 +120,33 @@ DEFAULT_CONFIG = {
         
         # 429 throttling + new domain = MEDIUM-HIGH (selective exposure)
         "status_429_throttling+domain_lt_30d": 10,
+        
+        # === TECH SUPPORT SCAM PATTERN COMBOS ===
+        # Domain name patterns (app-brand.com, brandaccount.com) + other signals
+        
+        # Brand impersonation in domain name = VERY HIGH risk combos
+        "domain_brand_impersonation+credential_form": 30,
+        "domain_brand_impersonation+domain_lt_30d": 25,
+        "domain_brand_impersonation+suspicious_prefix": 20,
+        "domain_brand_impersonation+suspicious_suffix": 20,
+        "domain_brand_impersonation+tech_support_tld": 25,
+        "domain_brand_impersonation+no_https": 18,
+        
+        # Suspicious prefix (app-, support-, etc.) combos
+        "suspicious_prefix+domain_lt_30d": 18,
+        "suspicious_prefix+credential_form": 20,
+        "suspicious_prefix+tech_support_tld": 22,
+        "suspicious_prefix+suspicious_suffix": 18,
+        
+        # Suspicious suffix (account, setup, etc.) combos
+        "suspicious_suffix+domain_lt_30d": 15,
+        "suspicious_suffix+credential_form": 18,
+        "suspicious_suffix+tech_support_tld": 20,
+        
+        # Tech support scam TLD combos
+        "tech_support_tld+domain_lt_30d": 18,
+        "tech_support_tld+credential_form": 22,
+        "tech_support_tld+no_https": 15,
         
         # Minimal shell + JS redirect = VERY HIGH (classic phishing cloaking)
         "minimal_shell+js_redirect": 18,
