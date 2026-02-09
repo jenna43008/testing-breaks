@@ -140,6 +140,72 @@ DEFAULT_CONFIG = {
         # 429 throttling + new domain = MEDIUM-HIGH (selective exposure)
         "status_429_throttling+domain_lt_30d": 10,
         
+        # === ERROR RESPONSE CODE COMBOS (from predictive model research) ===
+        # "Response codes become very powerful when combined with infrastructure signals"
+        # "Most real phishing campaigns trigger 2-3 of these simultaneously"
+        
+        # --- 403 Cloaking + Redirect Combos (Very High) ---
+        # Doc: "403 blocking + redirect = strong cloaking / anti-analysis"
+        "status_403_cloaking+redirect_chain_2plus": 22,
+        "status_403_cloaking+redirect_temp_302_307": 22,
+        "status_403_cloaking+redirect_cross_domain": 20,
+        
+        # --- 403 Cloaking + No HTTPS Combo (High) ---
+        # Doc: Cheap disposable infra that also blocks scanners
+        "status_403_cloaking+no_https": 18,
+        
+        # --- 403 Cloaking + Content/Cloaking Combos (Very High) ---
+        # Doc: "200 loader shell + JS redirect = Very high" — same logic for 403
+        "status_403_cloaking+minimal_shell": 22,
+        "status_403_cloaking+js_redirect": 20,
+        "status_403_cloaking+phishing_paths": 22,
+        "status_403_cloaking+brand_impersonation": 25,
+        
+        # --- 429 Throttling + Redirect/Content Combos (Medium-High) ---
+        # Doc: "Indicates selective exposure infrastructure"
+        "status_429_throttling+domain_lt_7d": 15,
+        "status_429_throttling+redirect_chain_2plus": 12,
+        "status_429_throttling+redirect_temp_302_307": 12,
+        "status_429_throttling+credential_form": 15,
+        "status_429_throttling+no_https": 12,
+        "status_429_throttling+minimal_shell": 15,
+        
+        # --- 503 Disposable + Redirect/Content Combos (High) ---
+        # Doc: "Disposable phishing servers frequently unstable"
+        "status_503_disposable+redirect_chain_2plus": 15,
+        "status_503_disposable+redirect_temp_302_307": 15,
+        "status_503_disposable+redirect_cross_domain": 15,
+        "status_503_disposable+no_https": 15,
+        "status_503_disposable+credential_form": 18,
+        "status_503_disposable+minimal_shell": 15,
+        
+        # --- 401 Unauthorized + Infrastructure Combos (High) ---
+        # Doc: "401 on public-facing domain = unusual"
+        "status_401_unauthorized+domain_lt_7d": 18,
+        "status_401_unauthorized+domain_lt_30d": 12,
+        "status_401_unauthorized+no_https": 15,
+        "status_401_unauthorized+redirect_chain_2plus": 15,
+        "status_401_unauthorized+redirect_temp_302_307": 12,
+        "status_401_unauthorized+credential_form": 18,
+        "status_401_unauthorized+minimal_shell": 15,
+        
+        # --- Error Code Cross-Combos (High) ---
+        # Doc: "Most real phishing campaigns trigger 2-3 simultaneously"
+        "status_403_cloaking+status_503_disposable": 18,
+        "status_403_cloaking+status_429_throttling": 15,
+        "status_401_unauthorized+status_403_cloaking": 18,
+        "status_401_unauthorized+status_503_disposable": 15,
+        "status_429_throttling+status_503_disposable": 12,
+        
+        # --- Error Codes + Hijacked Domain Indicators (Very High) ---
+        # Established domain showing error codes + phishing infra = compromised
+        "status_403_cloaking+hijack_path_pattern": 22,
+        "status_403_cloaking+doc_sharing_lure": 20,
+        "status_403_cloaking+phishing_js_behavior": 22,
+        "status_403_cloaking+phishing_infra_redirect": 28,
+        "status_503_disposable+hijack_path_pattern": 15,
+        "status_503_disposable+phishing_infra_redirect": 22,
+        
         # === OPAQUE ENTITY / SUPPLIER FRAUD COMBOS ===
         # Access restricted + missing trust signals = potential B2B fraud vector
         "opaque_entity+domain_lt_30d": 25,           # New + opaque = very high risk
