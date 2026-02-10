@@ -4,7 +4,10 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
-VERSION: 4.3 (Feb 2025)
+VERSION: 4.4 (Feb 2025)
+- Added explicit TLS handshake failure detection (ssl.SSLError catch)
+- Added tls_handshake_failed / tls_connection_failed flags + scoring
+- Fixed bare except in follow_redirects (typed error capture)
 - Added e-commerce/retail scam detection (.shop, .store, .sale TLDs)
 - Added cross-domain brand link detection (clone store indicator)
 - Added business identity verification for e-commerce sites
@@ -12,7 +15,7 @@ VERSION: 4.3 (Feb 2025)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "4.3"
+ANALYZER_VERSION = "4.4"
 
 import re
 import socket
@@ -132,6 +135,8 @@ class DomainApprovalResult:
     # === WEB: TLS/CERT ===
     https_valid: bool = False
     tls_error: str = ""
+    tls_handshake_failed: bool = False       # v4.4: True when SSL handshake itself fails
+    tls_connection_failed: bool = False       # v4.4: True when TCP connect to 443 fails
     cert_self_signed: bool = False
     cert_expired: bool = False
     cert_wrong_host: bool = False
@@ -897,29 +902,85 @@ def check_domain_name_patterns(domain: str) -> Dict:
 # ============================================================================
 
 def check_tls(domain: str, timeout: float) -> Dict:
-    result = {"ok": False, "error": "", "self_signed": False, "expired": False, "wrong_host": False}
+    """
+    Probe TLS on port 443 and classify the failure mode.
+    
+    v4.4: Now explicitly catches ssl.SSLError for handshake failures
+    (cipher mismatch, protocol version, SSLV3_ALERT_HANDSHAKE_FAILURE, etc.)
+    instead of letting them fall through to a generic except.
+    
+    Returns:
+        ok                – handshake + cert verification succeeded
+        error             – human-readable error (empty on success)
+        handshake_failed  – SSL negotiation itself failed
+        connection_failed – TCP layer failed (refused, timeout, unreachable)
+        self_signed       – certificate is self-signed
+        expired           – certificate is expired
+        wrong_host        – certificate CN/SAN doesn't match domain
+    """
+    result = {
+        "ok": False,
+        "error": "",
+        "handshake_failed": False,
+        "connection_failed": False,
+        "self_signed": False,
+        "expired": False,
+        "wrong_host": False,
+    }
     ctx = ssl.create_default_context()
+
     try:
         with socket.create_connection((domain, 443), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=domain) as ssock:
                 ssock.getpeercert()
                 result["ok"] = True
+
+    # Certificate exists but fails validation
     except ssl.SSLCertVerificationError as e:
         err = str(e).lower()
-        result["error"] = str(e)[:150]
+        result["error"] = str(e)[:200]
         result["self_signed"] = "self signed" in err or "self-signed" in err
         result["expired"] = "expired" in err
         result["wrong_host"] = "hostname" in err or "match" in err
-    except Exception as e:
-        result["error"] = str(e)[:150]
+
+    # v4.4 FIX: Handshake-level failures — previously fell through to generic except
+    # Fires for: SSLV3_ALERT_HANDSHAKE_FAILURE, TLSV1_ALERT_PROTOCOL_VERSION,
+    # EOF occurred in violation of protocol, cipher mismatch, connection reset during handshake
+    except ssl.SSLError as e:
+        result["error"] = str(e)[:200]
+        result["handshake_failed"] = True
+
+    # DNS resolution failure or TCP timeout
+    except (socket.timeout, socket.gaierror) as e:
+        result["error"] = str(e)[:200]
+        result["connection_failed"] = True
+
+    # Port 443 is closed / nothing listening
+    except ConnectionRefusedError as e:
+        result["error"] = f"Connection refused on port 443: {e}"[:200]
+        result["connection_failed"] = True
+
+    # Network unreachable, host unreachable, etc.
+    except OSError as e:
+        result["error"] = str(e)[:200]
+        result["connection_failed"] = True
+
     return result
 
 
 def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> Dict:
+    """
+    Follow HTTP redirect chain and optionally fetch final content.
+    
+    v4.4: Replaced bare `except:` with typed exception handling so SSL errors,
+    connection errors, and timeouts are captured in separate result fields
+    instead of being silently swallowed.
+    """
     if not REQUESTS_AVAILABLE:
         return {"ok": False, "initial_status": 0, "hops": 0, "chain": [], "domains": [], 
                 "cross_domain": False, "uses_temp": False, "final_url": url, 
-                "all_statuses": set(), "content": b"", "content_length": -1}
+                "all_statuses": set(), "content": b"", "content_length": -1,
+                "ssl_error": "", "connection_error": "", "timeout_error": "", "error": ""}
     
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"})
@@ -929,6 +990,11 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
         "chain": [], "domains": [], "cross_domain": False,
         "uses_temp": False, "final_url": url, "all_statuses": set(),
         "content": b"", "content_length": -1,
+        # v4.4: typed error fields (was bare except that discarded all info)
+        "ssl_error": "",
+        "connection_error": "",
+        "timeout_error": "",
+        "error": "",
     }
     
     start_host = urlparse(url).netloc.lower()
@@ -976,10 +1042,29 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
                 try:
                     result["content"] = resp.content[:50000]
                     result["content_length"] = len(result["content"])
-                except:
+                except Exception:
                     pass
             return result
-        except:
+
+        # v4.4 FIX: typed exception handling (was bare `except:` that silently returned)
+        except requests.exceptions.SSLError as e:
+            result["ssl_error"] = str(e)[:200]
+            result["ok"] = False
+            return result
+
+        except requests.exceptions.ConnectionError as e:
+            result["connection_error"] = str(e)[:200]
+            result["ok"] = False
+            return result
+
+        except requests.exceptions.Timeout as e:
+            result["timeout_error"] = str(e)[:200]
+            result["ok"] = False
+            return result
+
+        except Exception as e:
+            result["error"] = str(e)[:200]
+            result["ok"] = False
             return result
     
     result["ok"] = True
@@ -1499,7 +1584,12 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     elif not res.ptr_matches_forward:
         all_issues.append("PTR MISMATCH → Forward/reverse DNS inconsistent; triggers spam filters")
     
-    if not res.https_valid:
+    # v4.4: Specific TLS failure messages instead of generic "NO VALID HTTPS"
+    if res.tls_handshake_failed:
+        all_issues.append(f"TLS HANDSHAKE FAILED ({res.tls_error}) → Server rejects secure connections; broken SSL config or intentional evasion")
+    elif res.tls_connection_failed:
+        all_issues.append(f"TLS CONNECTION FAILED ({res.tls_error}) → Cannot reach port 443; no HTTPS service running")
+    elif not res.https_valid:
         all_issues.append("NO VALID HTTPS → May indicate abandoned or suspicious domain")
     
     if res.is_suspicious_tld:
@@ -1773,6 +1863,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if not res.https_valid:
         score += weights.get('no_https', 25)
         signals.add("no_https")
+    
+    # v4.4: Specific TLS failure scoring (adds ON TOP of no_https)
+    if res.tls_handshake_failed:
+        score += weights.get('tls_handshake_failed', 20)
+        signals.add("tls_handshake_failed")
+    if res.tls_connection_failed:
+        score += weights.get('tls_connection_failed', 8)
+        signals.add("tls_connection_failed")
+    
     if res.cert_expired:
         score += weights.get('cert_expired', 15)
         signals.add("cert_expired")
@@ -2007,10 +2106,12 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.ip_blacklists_hit = ";".join(ip_bl_hits)
     res.ip_blacklist_count = ip_bl_count
     
-    # TLS
+    # TLS — v4.4: now captures handshake_failed and connection_failed separately
     tls = check_tls(domain, timeout)
     res.https_valid = tls["ok"]
     res.tls_error = tls["error"]
+    res.tls_handshake_failed = tls["handshake_failed"]       # v4.4
+    res.tls_connection_failed = tls["connection_failed"]     # v4.4
     res.cert_self_signed = tls["self_signed"]
     res.cert_expired = tls["expired"]
     res.cert_wrong_host = tls["wrong_host"]
