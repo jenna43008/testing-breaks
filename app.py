@@ -412,7 +412,7 @@ def admin_view():
     if not st.session_state.admin_authenticated:
         st.warning("⚠️ Admin access required")
         password = st.text_input("Enter admin password", type="password")
-        admin_password = st.session_state.config.get('admin_password', 'admin123')
+        admin_password = st.session_state.config.get('admin_password', 'Doma!nHe5lThOS')
         
         if st.button("Login"):
             if password == admin_password:
