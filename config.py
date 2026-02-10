@@ -15,7 +15,7 @@ DEFAULT_CONFIG = {
     "approve_threshold": 50,
     "timeout": 10.0,
     "check_rdap": True,
-    "admin_password": "admin123",  # CHANGE THIS!
+    "admin_password": "**********",  # CHANGE THIS!
     
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
