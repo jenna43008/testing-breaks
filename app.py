@@ -421,7 +421,7 @@ def admin_view():
             else:
                 st.error("Incorrect password")
         
-        st.info("Default password: `admin123` (change this in config!)")
+        st.info("Default password: `*********` (change this in config!)")
         return
     
     # Admin is authenticated
