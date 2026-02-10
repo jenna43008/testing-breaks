@@ -68,6 +68,8 @@ DEFAULT_CONFIG = {
         "no_ptr": 4,                  # Missing PTR - minor
         "ptr_mismatch": 5,
         "no_https": 8,                # No HTTPS - minor concern
+        "tls_handshake_failed": 20,   # SSL handshake fails (cipher/protocol mismatch)  # v4.4
+        "tls_connection_failed": 8,   # Can't reach port 443 (no HTTPS service)          # v4.4
         "http_accessible": 2,
         "cert_self_signed": 6,
         "cert_expired": 8,
