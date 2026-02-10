@@ -452,7 +452,8 @@ def admin_view():
             "Domain Age": ['domain_lt_7d', 'domain_lt_30d', 'domain_lt_90d'],
             "Domain Type": ['suspicious_tld', 'free_email_domain', 'disposable_email', 
                            'typosquat_detected', 'free_hosting'],
-            "Web/TLS": ['no_https', 'cert_expired', 'cert_self_signed', 'redirect_chain_2plus',
+            "Web/TLS": ['no_https', 'tls_handshake_failed', 'tls_connection_failed',   # v4.4: added TLS fields
+                       'cert_expired', 'cert_self_signed', 'redirect_chain_2plus',
                        'redirect_cross_domain', 'redirect_temp_302_307'],
             "Content/Phishing": ['credential_form', 'brand_impersonation', 'phishing_paths',
                                 'malware_links', 'minimal_shell', 'js_redirect'],
