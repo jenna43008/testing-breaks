@@ -293,12 +293,7 @@ def display_results(results: list):
             column_config=column_config
         )
         
-        # Also show expandable details for each domain
-        st.markdown("---")
-        st.subheader("📝 Detailed Results")
-        for _, row in summary_df.iterrows():
-            with st.expander(f"**{row['domain']}** - {row['recommendation']} (Score: {row['risk_score']})"):
-                st.markdown(row['summary'].replace(' • ', '\n- ').replace(' | ', '\n\n**'))
+
     
     with tab2:
         # Full details table with column config
