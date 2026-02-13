@@ -4,6 +4,11 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 4.5 (Feb 2025)
+- Added app store presence detection (iOS AASA, Android Asset Links, page scan, iTunes API)
+- App store presence as legitimacy bonus signal (rare for spammers to maintain real apps)
+- Confidence-tiered scoring: high/medium/low app presence → scaled bonus
+
 VERSION: 4.4 (Feb 2025)
 - Added explicit TLS handshake failure detection (ssl.SSLError catch)
 - Added tls_handshake_failed / tls_connection_failed flags + scoring
@@ -15,7 +20,7 @@ VERSION: 4.4 (Feb 2025)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "4.4"
+ANALYZER_VERSION = "4.5"
 
 import re
 import socket
@@ -43,6 +48,12 @@ except ImportError:
     DNS_AVAILABLE = False
 
 from config import DEFAULT_CONFIG, get_weight, get_combo_weight
+
+try:
+    from app_store_detection import check_app_store_presence
+    APP_STORE_DETECTION_AVAILABLE = True
+except ImportError:
+    APP_STORE_DETECTION_AVAILABLE = False
 
 
 # ============================================================================
@@ -211,6 +222,18 @@ class DomainApprovalResult:
     cross_domain_brand_links: str = ""       # e.g., "gabyandbeauty.com" from gabyandbeauty.shop
     missing_business_identity: bool = False  # No legal name, address, registration
     business_identity_signals: str = ""      # What was found/missing
+    
+    # === APP STORE PRESENCE (Legitimacy Signal) ===
+    app_store_has_presence: bool = False       # Any verified app store presence found
+    app_store_confidence: str = ""             # none, low, medium, high
+    app_store_ios_verified: bool = False       # Apple AASA deep link config found
+    app_store_android_verified: bool = False   # Android Asset Links found
+    app_store_page_links: bool = False         # App store links in page content
+    app_store_itunes_match: bool = False       # iTunes API match found
+    app_store_ios_app_ids: str = ""            # Semicolon-separated iOS app IDs
+    app_store_android_packages: str = ""       # Semicolon-separated Android packages
+    app_store_methods_found: str = ""          # Which detection methods found apps
+    app_store_summary: str = ""                # Human-readable summary
     
     # === SCORING DETAILS ===
     signals_triggered: str = ""
@@ -1701,6 +1724,23 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.mta_sts_exists:
         positives.append("MTA-STS enabled")
     
+    if res.app_store_has_presence:
+        if res.app_store_confidence == "high":
+            methods = []
+            if res.app_store_ios_verified:
+                methods.append("iOS deep links")
+            if res.app_store_android_verified:
+                methods.append("Android deep links")
+            if res.app_store_page_links:
+                methods.append("store links")
+            if res.app_store_itunes_match:
+                methods.append("iTunes match")
+            positives.append(f"App Store verified ({', '.join(methods)})")
+        elif res.app_store_confidence == "medium":
+            positives.append("App Store presence detected")
+    elif res.app_store_confidence == "low":
+        positives.append("Possible app store presence")
+    
     if res.mx_exists and not res.mx_is_null:
         positives.append("MX configured")
     
@@ -1793,6 +1833,19 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.mta_sts_exists:
         score += weights.get('has_mta_sts', -5)
         signals.add("has_mta_sts")
+    
+    # === APP STORE PRESENCE BONUS (Legitimacy Signal) ===
+    # Tiered by confidence: high (verified deep links) > medium (page links/API) > low (keyword only)
+    if res.app_store_has_presence:
+        if res.app_store_confidence == "high":
+            score += weights.get('app_store_high', -15)
+            signals.add("app_store_high")
+        elif res.app_store_confidence == "medium":
+            score += weights.get('app_store_medium', -10)
+            signals.add("app_store_medium")
+    elif res.app_store_confidence == "low":
+        score += weights.get('app_store_low', -3)
+        signals.add("app_store_low")
     
     # Blacklists - HIGH weight, these are real fraud signals
     if res.domain_blacklist_count > 0:
@@ -2218,6 +2271,23 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         # If access is restricted AND no trust signals found, mark as opaque entity
         if res.is_access_restricted and res.missing_trust_signals:
             res.is_opaque_entity = True
+    
+    # App Store Presence Detection (legitimacy signal)
+    if APP_STORE_DETECTION_AVAILABLE:
+        try:
+            app_result = check_app_store_presence(domain, content=content, timeout=5.0)
+            res.app_store_has_presence = app_result.get("has_any_app_presence", False)
+            res.app_store_confidence = app_result.get("confidence", "none")
+            res.app_store_ios_verified = app_result.get("ios_aasa", {}).get("exists", False)
+            res.app_store_android_verified = app_result.get("android_asset_links", {}).get("exists", False)
+            res.app_store_page_links = app_result.get("has_app_store_links", False)
+            res.app_store_itunes_match = app_result.get("has_itunes_match", False)
+            res.app_store_ios_app_ids = app_result.get("app_store_ios_app_ids", "")
+            res.app_store_android_packages = app_result.get("app_store_android_packages", "")
+            res.app_store_methods_found = app_result.get("app_store_methods_found", "")
+            res.app_store_summary = " | ".join(app_result.get("summary_lines", []))
+        except Exception:
+            pass  # Non-critical — don't break analysis if app store check fails
     
     # RDAP
     if check_rdap:
