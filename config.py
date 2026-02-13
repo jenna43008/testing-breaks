@@ -113,6 +113,12 @@ DEFAULT_CONFIG = {
         # === BONUSES (Reduce score) ===
         "has_bimi": -10,
         "has_mta_sts": -6,
+        
+        # === APP STORE PRESENCE BONUSES (Legitimacy signal) ===
+        # Rare for bad actors to maintain real app store presence
+        "app_store_high": -15,    # Verified deep links (AASA/assetlinks) or multiple signals
+        "app_store_medium": -10,  # Page links to app stores or iTunes API match
+        "app_store_low": -3,      # Keyword-only match in iTunes (weak signal)
     },
     
     "combos": {
@@ -312,6 +318,12 @@ DEFAULT_CONFIG = {
         "ptr_mismatch+domain_blacklisted": 10,
         "suspicious_tld+domain_lt_30d": 10,
         "suspicious_tld+redirect_chain_2plus": 10,
+        
+        # === APP STORE PRESENCE COMBOS (Legitimacy mitigation) ===
+        # App presence + strong email auth = very likely legitimate sender
+        "app_store_high+has_bimi": -8,              # Verified app + BIMI = strong legitimacy
+        "app_store_high+has_mta_sts": -5,           # Verified app + MTA-STS = security-conscious
+        "app_store_medium+has_bimi": -5,             # Moderate app presence + BIMI
     },
     
     "suspicious_tlds": [
