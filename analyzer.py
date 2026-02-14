@@ -4,6 +4,11 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 4.6 (Feb 2025)
+- Added hosting provider detection (NS records, ASN lookup, PTR patterns)
+- Configurable scoring tiers: budget shared hosts, free hosting, suspect hosts
+- ASN lookup via Team Cymru DNS for reliable network identification
+
 VERSION: 4.5 (Feb 2025)
 - Added app store presence detection (iOS AASA, Android Asset Links, page scan, iTunes API)
 - App store presence as legitimacy bonus signal (rare for spammers to maintain real apps)
@@ -20,7 +25,7 @@ VERSION: 4.4 (Feb 2025)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "4.5"
+ANALYZER_VERSION = "4.6"
 
 import re
 import socket
@@ -52,7 +57,7 @@ from config import DEFAULT_CONFIG, get_weight, get_combo_weight
 try:
     from app_store_detection import check_app_store_presence
     APP_STORE_DETECTION_AVAILABLE = True
-except ImportError:
+except Exception:
     APP_STORE_DETECTION_AVAILABLE = False
 
 
@@ -234,6 +239,13 @@ class DomainApprovalResult:
     app_store_android_packages: str = ""       # Semicolon-separated Android packages
     app_store_methods_found: str = ""          # Which detection methods found apps
     app_store_summary: str = ""                # Human-readable summary
+    
+    # === HOSTING PROVIDER DETECTION ===
+    hosting_provider: str = ""                  # Detected provider name (e.g., "Hostinger", "GoDaddy")
+    hosting_provider_type: str = ""             # budget_shared, free, suspect, premium, unknown
+    hosting_detected_via: str = ""              # ns, asn, ptr, or combination
+    hosting_asn: str = ""                       # ASN number if resolved
+    hosting_asn_org: str = ""                   # ASN organization name
     
     # === SCORING DETAILS ===
     signals_triggered: str = ""
@@ -696,6 +708,165 @@ def check_ip_blacklists(ip: str, blacklists: List[str]) -> Tuple[List[str], int]
     reversed_ip = '.'.join(reversed(ip.split('.')))
     hits = [bl for bl in blacklists if check_blacklist(reversed_ip, bl)]
     return hits, len(hits)
+
+
+# ============================================================================
+# HOSTING PROVIDER DETECTION
+# ============================================================================
+
+def get_asn_info(ip: str) -> Tuple[str, str]:
+    """
+    Look up ASN number and organization for an IP via Team Cymru DNS.
+    
+    Query: reversed_ip.origin.asn.cymru.com → TXT record
+    Response format: "ASN | IP/CIDR | CC | Registry | Date"
+    Then: AS<number>.asn.cymru.com → TXT record for org name
+    
+    Returns: (asn_number, asn_org_name) or ("", "") on failure
+    """
+    if not DNS_AVAILABLE or not ip:
+        return "", ""
+    
+    try:
+        reversed_ip = '.'.join(reversed(ip.split('.')))
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 3.0
+        resolver.lifetime = 3.0
+        
+        # Step 1: Get ASN number from IP
+        answers = resolver.resolve(f"{reversed_ip}.origin.asn.cymru.com", 'TXT')
+        if not answers:
+            return "", ""
+        
+        txt = str(answers[0]).strip('"').strip("'")
+        parts = [p.strip() for p in txt.split('|')]
+        if not parts:
+            return "", ""
+        
+        asn_number = parts[0].strip()
+        if not asn_number:
+            return "", ""
+        
+        # Step 2: Get org name from ASN
+        try:
+            org_answers = resolver.resolve(f"AS{asn_number}.asn.cymru.com", 'TXT')
+            if org_answers:
+                org_txt = str(org_answers[0]).strip('"').strip("'")
+                org_parts = [p.strip() for p in org_txt.split('|')]
+                # Org name is the last field
+                asn_org = org_parts[-1].strip() if len(org_parts) >= 5 else ""
+                return asn_number, asn_org
+        except Exception:
+            pass
+        
+        return asn_number, ""
+    except Exception:
+        return "", ""
+
+
+def check_hosting_provider(domain: str, ip: str, ns_records: List[str] = None, 
+                           ptr_record: str = "", hosting_config: dict = None) -> Dict:
+    """
+    Detect hosting provider using multiple signals:
+    1. Nameserver patterns (most hosts use branded NS)
+    2. ASN lookup (network owner identification)
+    3. PTR record patterns (reverse DNS often shows host)
+    
+    Returns dict with provider info and risk tier.
+    """
+    result = {
+        "provider": "",
+        "provider_type": "",      # budget_shared, free, suspect, premium, unknown
+        "detected_via": "",       # ns, asn, ptr
+        "asn": "",
+        "asn_org": "",
+        "match_details": [],      # What matched and how
+    }
+    
+    if not hosting_config:
+        hosting_config = {}
+    
+    providers = hosting_config.get("hosting_providers", {})
+    if not providers:
+        return result
+    
+    # Collect NS records if not provided
+    if ns_records is None:
+        ns_records = dns_query(domain, 'NS')
+    
+    ns_lower = [ns.lower().rstrip('.') for ns in ns_records]
+    ptr_lower = ptr_record.lower() if ptr_record else ""
+    
+    # Get ASN info
+    asn_number, asn_org = get_asn_info(ip)
+    result["asn"] = asn_number
+    result["asn_org"] = asn_org
+    asn_org_lower = asn_org.lower()
+    
+    best_match = None
+    best_priority = 999  # Lower = better match
+    
+    for provider_key, provider_def in providers.items():
+        matched = False
+        match_method = ""
+        
+        # Check NS patterns (priority 1 - most reliable)
+        ns_patterns = provider_def.get("ns_patterns", [])
+        for pattern in ns_patterns:
+            pattern_lower = pattern.lower()
+            for ns in ns_lower:
+                if pattern_lower in ns:
+                    matched = True
+                    match_method = "ns"
+                    break
+            if matched:
+                break
+        
+        # Check ASN numbers (priority 2 - very reliable)
+        if not matched:
+            asn_numbers = provider_def.get("asn_numbers", [])
+            if asn_number and asn_number in [str(a) for a in asn_numbers]:
+                matched = True
+                match_method = "asn"
+        
+        # Check ASN org name patterns (priority 3 - reliable)
+        if not matched:
+            asn_patterns = provider_def.get("asn_org_patterns", [])
+            for pattern in asn_patterns:
+                if pattern.lower() in asn_org_lower:
+                    matched = True
+                    match_method = "asn_org"
+                    break
+        
+        # Check PTR patterns (priority 4 - good but can be changed)
+        if not matched and ptr_lower:
+            ptr_patterns = provider_def.get("ptr_patterns", [])
+            for pattern in ptr_patterns:
+                if pattern.lower() in ptr_lower:
+                    matched = True
+                    match_method = "ptr"
+                    break
+        
+        if matched:
+            # Determine priority (ns > asn > ptr)
+            priority_map = {"ns": 1, "asn": 2, "asn_org": 3, "ptr": 4}
+            priority = priority_map.get(match_method, 5)
+            
+            if priority < best_priority:
+                best_priority = priority
+                best_match = {
+                    "provider": provider_def.get("name", provider_key),
+                    "provider_type": provider_def.get("type", "unknown"),
+                    "detected_via": match_method,
+                    "key": provider_key,
+                }
+    
+    if best_match:
+        result["provider"] = best_match["provider"]
+        result["provider_type"] = best_match["provider_type"]
+        result["detected_via"] = best_match["detected_via"]
+    
+    return result
 
 
 # ============================================================================
@@ -1621,6 +1792,14 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.is_free_hosting:
         all_issues.append("FREE HOSTING PROVIDER → Associated with spam; limited reputation potential")
     
+    if res.hosting_provider and res.hosting_provider_type in ("budget_shared", "free", "suspect"):
+        type_labels = {
+            "budget_shared": f"BUDGET SHARED HOST ({res.hosting_provider}) → Commonly used for spam/phishing; shared IP reputation risk",
+            "free": f"FREE HOSTING ({res.hosting_provider}) → Associated with throwaway sites and spam campaigns",
+            "suspect": f"SUSPECT HOST ({res.hosting_provider}) → Known bulletproof/abuse-tolerant hosting provider",
+        }
+        all_issues.append(type_labels.get(res.hosting_provider_type, f"HOSTING: {res.hosting_provider}"))
+    
     if res.is_free_email_domain:
         all_issues.append("FREE EMAIL PROVIDER DOMAIN → Cannot send bulk from consumer email domains")
     
@@ -1887,6 +2066,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         score += weights.get('free_hosting', 12)
         signals.add("free_hosting")
     
+    # === HOSTING PROVIDER DETECTION ===
+    if res.hosting_provider_type == "budget_shared":
+        score += weights.get('hosting_budget_shared', 8)
+        signals.add("hosting_budget_shared")
+    elif res.hosting_provider_type == "free":
+        score += weights.get('hosting_free', 12)
+        signals.add("hosting_free")
+    elif res.hosting_provider_type == "suspect":
+        score += weights.get('hosting_suspect', 18)
+        signals.add("hosting_suspect")
+    
     # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
     if res.has_suspicious_prefix:
         score += weights.get('suspicious_prefix', 15)
@@ -2074,6 +2264,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         'disposable_domains': DEFAULT_CONFIG.get('disposable_domains', []),
         'domain_blacklists': DEFAULT_CONFIG.get('domain_blacklists', []),
         'ip_blacklists': DEFAULT_CONFIG.get('ip_blacklists', []),
+        'hosting_providers': DEFAULT_CONFIG.get('hosting_providers', {}),
     }
     
     res = DomainApprovalResult(domain=domain)
@@ -2158,6 +2349,20 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     ip_bl_hits, ip_bl_count = check_ip_blacklists(res.ip_address, config['ip_blacklists'])
     res.ip_blacklists_hit = ";".join(ip_bl_hits)
     res.ip_blacklist_count = ip_bl_count
+    
+    # Hosting Provider Detection
+    ns_records = dns_query(domain, 'NS')
+    hosting_result = check_hosting_provider(
+        domain, res.ip_address, 
+        ns_records=ns_records, 
+        ptr_record=res.ptr_record,
+        hosting_config=config
+    )
+    res.hosting_provider = hosting_result["provider"]
+    res.hosting_provider_type = hosting_result["provider_type"]
+    res.hosting_detected_via = hosting_result["detected_via"]
+    res.hosting_asn = hosting_result["asn"]
+    res.hosting_asn_org = hosting_result["asn_org"]
     
     # TLS — v4.4: now captures handshake_failed and connection_failed separately
     tls = check_tls(domain, timeout)
