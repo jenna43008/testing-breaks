@@ -119,6 +119,12 @@ DEFAULT_CONFIG = {
         "app_store_high": -15,    # Verified deep links (AASA/assetlinks) or multiple signals
         "app_store_medium": -10,  # Page links to app stores or iTunes API match
         "app_store_low": -3,      # Keyword-only match in iTunes (weak signal)
+        
+        # === HOSTING PROVIDER PENALTIES ===
+        # Budget shared hosts and free hosts have higher spam/phishing rates
+        "hosting_budget_shared": 8,   # Hostinger, GoDaddy shared, Namecheap shared, etc.
+        "hosting_free": 12,           # 000webhost, InfinityFree, AwardSpace, etc.
+        "hosting_suspect": 18,        # Known bulletproof / abuse-tolerant hosts
     },
     
     "combos": {
@@ -324,6 +330,23 @@ DEFAULT_CONFIG = {
         "app_store_high+has_bimi": -8,              # Verified app + BIMI = strong legitimacy
         "app_store_high+has_mta_sts": -5,           # Verified app + MTA-STS = security-conscious
         "app_store_medium+has_bimi": -5,             # Moderate app presence + BIMI
+        
+        # === HOSTING PROVIDER COMBOS ===
+        # Budget/free hosting + other red flags = amplified risk
+        "hosting_budget_shared+domain_lt_30d": 12,       # New domain on cheap host
+        "hosting_budget_shared+domain_lt_7d": 18,        # Brand new domain on cheap host
+        "hosting_budget_shared+no_spf": 6,               # Cheap host + no email auth
+        "hosting_budget_shared+no_dmarc": 6,             # Cheap host + no DMARC
+        "hosting_budget_shared+credential_form": 15,     # Cheap host + login form
+        "hosting_budget_shared+brand_impersonation": 18, # Cheap host + brand abuse
+        "hosting_free+domain_lt_30d": 15,                # New domain on free host
+        "hosting_free+credential_form": 18,              # Free host + login form
+        "hosting_free+brand_impersonation": 22,          # Free host + brand abuse
+        "hosting_suspect+domain_lt_30d": 22,             # Suspect host + new domain
+        "hosting_suspect+domain_lt_7d": 28,              # Suspect host + brand new
+        "hosting_suspect+credential_form": 25,           # Suspect host + login form
+        "hosting_suspect+brand_impersonation": 28,       # Suspect host + brand abuse
+        "hosting_suspect+no_https": 18,                  # Suspect host + no HTTPS
     },
     
     "suspicious_tlds": [
@@ -364,6 +387,175 @@ DEFAULT_CONFIG = {
         "b.barracudacentral.org",
         "bl.spamcop.net",
     ],
+    
+    "hosting_providers": {
+        # =============================================================
+        # BUDGET SHARED HOSTS (type: "budget_shared")
+        # High spam/phishing rate due to cheap shared hosting plans
+        # =============================================================
+        "hostinger": {
+            "name": "Hostinger",
+            "type": "budget_shared",
+            "ns_patterns": ["hostinger.com", "dns-parking.com"],
+            "asn_numbers": [47583],
+            "asn_org_patterns": ["hostinger"],
+            "ptr_patterns": ["hostinger.com", "hostinger"],
+        },
+        "godaddy": {
+            "name": "GoDaddy",
+            "type": "budget_shared",
+            "ns_patterns": ["domaincontrol.com"],
+            "asn_numbers": [26496, 398101],
+            "asn_org_patterns": ["godaddy", "go daddy"],
+            "ptr_patterns": ["secureserver.net", "godaddy"],
+        },
+        "namecheap": {
+            "name": "Namecheap",
+            "type": "budget_shared",
+            "ns_patterns": ["registrar-servers.com", "namecheaphosting.com"],
+            "asn_numbers": [22612],
+            "asn_org_patterns": ["namecheap"],
+            "ptr_patterns": ["namecheap"],
+        },
+        "bluehost": {
+            "name": "Bluehost",
+            "type": "budget_shared",
+            "ns_patterns": ["bluehost.com"],
+            "asn_numbers": [11798],
+            "asn_org_patterns": ["bluehost", "newfold digital"],
+            "ptr_patterns": ["bluehost.com"],
+        },
+        "hostgator": {
+            "name": "HostGator",
+            "type": "budget_shared",
+            "ns_patterns": ["hostgator.com"],
+            "asn_numbers": [],
+            "asn_org_patterns": ["hostgator"],
+            "ptr_patterns": ["hostgator.com"],
+        },
+        "ionos": {
+            "name": "IONOS (1&1)",
+            "type": "budget_shared",
+            "ns_patterns": ["ui-dns.com", "ui-dns.de", "ui-dns.org", "ui-dns.biz"],
+            "asn_numbers": [8560],
+            "asn_org_patterns": ["ionos", "1&1", "1und1"],
+            "ptr_patterns": ["ionos.com", "1and1.com", "kundenserver.de"],
+        },
+        "dreamhost": {
+            "name": "DreamHost",
+            "type": "budget_shared",
+            "ns_patterns": ["dreamhost.com"],
+            "asn_numbers": [26347],
+            "asn_org_patterns": ["dreamhost"],
+            "ptr_patterns": ["dreamhost.com"],
+        },
+        "siteground": {
+            "name": "SiteGround",
+            "type": "budget_shared",
+            "ns_patterns": ["siteground.net", "sgvps.net"],
+            "asn_numbers": [],
+            "asn_org_patterns": ["siteground"],
+            "ptr_patterns": ["siteground.net", "sgvps.net"],
+        },
+        "a2hosting": {
+            "name": "A2 Hosting",
+            "type": "budget_shared",
+            "ns_patterns": ["a2hosting.com"],
+            "asn_numbers": [],
+            "asn_org_patterns": ["a2 hosting"],
+            "ptr_patterns": ["a2hosting.com"],
+        },
+        "ipage": {
+            "name": "iPage",
+            "type": "budget_shared",
+            "ns_patterns": ["ipage.com"],
+            "asn_numbers": [],
+            "asn_org_patterns": ["ipage"],
+            "ptr_patterns": ["ipage.com"],
+        },
+        
+        # =============================================================
+        # FREE HOSTING (type: "free")
+        # Very high spam/phishing rate - throwaway sites
+        # =============================================================
+        "000webhost": {
+            "name": "000webhost",
+            "type": "free",
+            "ns_patterns": ["000webhost"],
+            "asn_numbers": [],
+            "asn_org_patterns": ["000webhost"],
+            "ptr_patterns": ["000webhost"],
+        },
+        "infinityfree": {
+            "name": "InfinityFree",
+            "type": "free",
+            "ns_patterns": ["byet.org", "byethost"],
+            "asn_numbers": [],
+            "asn_org_patterns": ["infinityfree", "byet"],
+            "ptr_patterns": ["infinityfree", "byethost"],
+        },
+        "awardspace": {
+            "name": "AwardSpace",
+            "type": "free",
+            "ns_patterns": ["awardspace.com"],
+            "asn_numbers": [],
+            "asn_org_patterns": ["awardspace"],
+            "ptr_patterns": ["awardspace.com"],
+        },
+        "freehosting": {
+            "name": "FreeHosting.com",
+            "type": "free",
+            "ns_patterns": ["freehosting.com"],
+            "asn_numbers": [],
+            "asn_org_patterns": ["freehosting"],
+            "ptr_patterns": ["freehosting.com"],
+        },
+        "x10hosting": {
+            "name": "x10Hosting",
+            "type": "free",
+            "ns_patterns": ["x10hosting.com"],
+            "asn_numbers": [],
+            "asn_org_patterns": ["x10hosting"],
+            "ptr_patterns": ["x10hosting.com"],
+        },
+        
+        # =============================================================
+        # SUSPECT / BULLETPROOF HOSTS (type: "suspect")
+        # Known for tolerating abuse, used by cybercriminals
+        # =============================================================
+        "alexhost": {
+            "name": "AlexHost (Moldova)",
+            "type": "suspect",
+            "ns_patterns": ["alexhost.md"],
+            "asn_numbers": [200019],
+            "asn_org_patterns": ["alexhost"],
+            "ptr_patterns": ["alexhost"],
+        },
+        "yourserver": {
+            "name": "YourServer.se",
+            "type": "suspect",
+            "ns_patterns": ["yourserver.se"],
+            "asn_numbers": [],
+            "asn_org_patterns": ["yourserver"],
+            "ptr_patterns": ["yourserver"],
+        },
+        "privatelayer": {
+            "name": "PrivateLayer",
+            "type": "suspect",
+            "ns_patterns": ["privatelayer.com"],
+            "asn_numbers": [51852],
+            "asn_org_patterns": ["privatelayer"],
+            "ptr_patterns": ["privatelayer"],
+        },
+        "shinjiru": {
+            "name": "Shinjiru",
+            "type": "suspect",
+            "ns_patterns": ["shinjiru.com.my"],
+            "asn_numbers": [45839],
+            "asn_org_patterns": ["shinjiru"],
+            "ptr_patterns": ["shinjiru"],
+        },
+    },
 }
 
 
