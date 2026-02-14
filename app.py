@@ -397,6 +397,23 @@ def display_results(results: list):
             
             if domain_data.get('domain_age_days', -1) >= 0:
                 st.markdown(f"**Domain Age:** {domain_data['domain_age_days']} days")
+            
+            # Hosting Provider display
+            if domain_data.get('hosting_provider'):
+                provider = domain_data['hosting_provider']
+                ptype = domain_data.get('hosting_provider_type', '')
+                via = domain_data.get('hosting_detected_via', '')
+                asn_org = domain_data.get('hosting_asn_org', '')
+                type_icons = {
+                    'budget_shared': '⚠️',
+                    'free': '🚩',
+                    'suspect': '🔴',
+                    'premium': '✅',
+                }
+                icon = type_icons.get(ptype, 'ℹ️')
+                st.markdown(f"**Hosting:** {icon} {provider} ({ptype}) — detected via {via}")
+                if asn_org:
+                    st.markdown(f"**ASN Org:** {asn_org}")
 
 
 def admin_view():
@@ -452,7 +469,8 @@ def admin_view():
                        'redirect_cross_domain', 'redirect_temp_302_307'],
             "Content/Phishing": ['credential_form', 'brand_impersonation', 'phishing_paths',
                                 'malware_links', 'minimal_shell', 'js_redirect'],
-            "Bonuses (Reduce Score)": ['has_bimi', 'has_mta_sts']
+            "Hosting Provider": ['hosting_budget_shared', 'hosting_free', 'hosting_suspect'],
+            "Bonuses (Reduce Score)": ['has_bimi', 'has_mta_sts'],
         }
         
         new_weights = {}
