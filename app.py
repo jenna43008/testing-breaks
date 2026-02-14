@@ -258,15 +258,6 @@ def display_results(results: list):
         # Summary table with color coding
         summary_df = df[['domain', 'risk_score', 'recommendation', 'summary']].copy()
         
-        # Add app store indicator column if available
-        if 'app_store_confidence' in df.columns:
-            summary_df['app_store'] = df['app_store_confidence'].apply(
-                lambda c: '✅ Verified' if c == 'high'
-                    else '📱 Found' if c == 'medium'
-                    else '🔍 Maybe' if c == 'low'
-                    else '—'
-            )
-        
         def color_recommendation(val):
             if val == 'APPROVE':
                 return 'background-color: #d4edda; color: #155724'
@@ -293,7 +284,6 @@ def display_results(results: list):
             "risk_score": st.column_config.NumberColumn("Score", width="small"),
             "recommendation": st.column_config.TextColumn("Result", width="small"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
-            "app_store": st.column_config.TextColumn("Apps", width="small"),
         }
         
         st.dataframe(
@@ -313,9 +303,6 @@ def display_results(results: list):
             "recommendation": st.column_config.TextColumn("Result", width="small"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
             "signals_triggered": st.column_config.TextColumn("Signals", width="medium"),
-            "app_store_confidence": st.column_config.TextColumn("App Store", width="small"),
-            "app_store_methods_found": st.column_config.TextColumn("App Methods", width="medium"),
-            "app_store_summary": st.column_config.TextColumn("App Details", width="large"),
         }
         st.dataframe(df, use_container_width=True, height=400, column_config=full_column_config)
         
@@ -326,8 +313,7 @@ def display_results(results: list):
                 "Columns",
                 all_cols,
                 default=['domain', 'risk_score', 'recommendation', 'summary', 
-                        'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days',
-                        'app_store_confidence', 'app_store_methods_found']
+                        'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
             )
             if selected_cols:
                 st.dataframe(df[selected_cols], use_container_width=True)
@@ -354,10 +340,7 @@ def display_results(results: list):
         with col2:
             # Summary CSV (just key columns)
             summary_csv = BytesIO()
-            summary_cols = ['domain', 'risk_score', 'recommendation', 'summary']
-            if 'app_store_confidence' in df.columns:
-                summary_cols.extend(['app_store_confidence', 'app_store_methods_found'])
-            df[summary_cols].to_csv(summary_csv, index=False)
+            df[['domain', 'risk_score', 'recommendation', 'summary']].to_csv(summary_csv, index=False)
             summary_csv.seek(0)
             st.download_button(
                 label="📥 Download Summary CSV",
@@ -414,67 +397,6 @@ def display_results(results: list):
             
             if domain_data.get('domain_age_days', -1) >= 0:
                 st.markdown(f"**Domain Age:** {domain_data['domain_age_days']} days")
-        
-        # === APP STORE PRESENCE SECTION ===
-        app_confidence = domain_data.get('app_store_confidence', 'none') or 'none'
-        
-        if app_confidence != 'none':
-            st.markdown("---")
-            st.markdown("### 📱 App Store Presence")
-            
-            if app_confidence == 'high':
-                st.success("✅ **High confidence** — Verified app store presence (deep link configs found)")
-            elif app_confidence == 'medium':
-                st.info("📱 **Medium confidence** — App store presence detected")
-            elif app_confidence == 'low':
-                st.warning("🔍 **Low confidence** — Possible keyword matches only")
-            
-            # Detection method details
-            methods = domain_data.get('app_store_methods_found', '') or ''
-            if methods:
-                method_labels = {
-                    'apple_aasa': '🍎 Apple App Site Association (verified deep links)',
-                    'android_assetlinks': '🤖 Android Asset Links (verified deep links)',
-                    'page_ios_links': '📱 iOS App Store links found in page HTML',
-                    'page_android_links': '📱 Google Play links found in page HTML',
-                    'ios_smart_banner': '📲 iOS Smart App Banner meta tag',
-                    'itunes_api': '🔍 iTunes Search API match',
-                }
-                st.markdown("**Detection methods:**")
-                for method in methods.split(';'):
-                    method = method.strip()
-                    if method:
-                        label = method_labels.get(method, method)
-                        st.markdown(f"  • {label}")
-            
-            # iOS app IDs
-            ios_ids = domain_data.get('app_store_ios_app_ids', '') or ''
-            if ios_ids:
-                with st.expander("🍎 iOS App IDs"):
-                    for aid in ios_ids.split(';'):
-                        aid = aid.strip()
-                        if aid:
-                            if aid.isdigit():
-                                st.markdown(f"  App ID: `{aid}` — [View in App Store](https://apps.apple.com/app/id{aid})")
-                            else:
-                                st.code(aid, language=None)
-            
-            # Android packages
-            android_pkgs = domain_data.get('app_store_android_packages', '') or ''
-            if android_pkgs:
-                with st.expander("🤖 Android Packages"):
-                    for pkg in android_pkgs.split(';'):
-                        pkg = pkg.strip()
-                        if pkg:
-                            st.markdown(f"  📦 `{pkg}` — [View on Google Play](https://play.google.com/store/apps/details?id={pkg})")
-            
-            # Full summary
-            app_summary = domain_data.get('app_store_summary', '') or ''
-            if app_summary and app_summary != 'No app store presence detected':
-                with st.expander("📋 Full App Store Detection Summary"):
-                    for line in app_summary.split(' | '):
-                        if line.strip():
-                            st.markdown(line.strip())
 
 
 def admin_view():
@@ -530,8 +452,7 @@ def admin_view():
                        'redirect_cross_domain', 'redirect_temp_302_307'],
             "Content/Phishing": ['credential_form', 'brand_impersonation', 'phishing_paths',
                                 'malware_links', 'minimal_shell', 'js_redirect'],
-            "Bonuses (Reduce Score)": ['has_bimi', 'has_mta_sts',
-                                       'app_store_high', 'app_store_medium', 'app_store_low']
+            "Bonuses (Reduce Score)": ['has_bimi', 'has_mta_sts']
         }
         
         new_weights = {}
