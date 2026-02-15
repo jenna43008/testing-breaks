@@ -395,6 +395,109 @@ DEFAULT_CONFIG = {
         "hosting_platform+mx_selfhosted+no_dkim": 10,   # Platform + self MX + no DKIM
     },
     
+    # ==========================================================================
+    # CUSTOM RULES ENGINE
+    # ==========================================================================
+    # Rules provide if/then logic beyond simple combos. Each rule can use:
+    #
+    #   if_all:  ALL signals must be present (AND logic)
+    #   if_any:  AT LEAST ONE signal must be present (OR logic)
+    #   if_not:  NONE of these signals may be present (exclusion)
+    #   score:   points to add (positive = riskier, negative = safer)
+    #   name:    unique identifier (shown in output)
+    #   label:   human-readable description (shown in ISSUES when triggered)
+    #
+    # HOW IT WORKS:
+    #   1. if_all is checked first — ALL must match (skip rule if any missing)
+    #   2. if_any is checked next — AT LEAST ONE must match (skip if none match)
+    #   3. if_not is checked last — NONE may be present (skip if any found)
+    #   4. If all conditions pass, the rule fires and score is applied
+    #
+    # AVAILABLE SIGNALS (use in if_all, if_any, if_not):
+    #   Email auth:     no_spf, no_dkim, no_dmarc, spf_pass_all, spf_softfail_all,
+    #                   spf_neutral_all, dmarc_p_none, dmarc_no_rua,
+    #                   spf_no_external_includes
+    #   MX:             no_mx, null_mx, mx_enterprise, mx_disposable, mx_selfhosted,
+    #                   mx_mail_prefix
+    #   DNS:            no_ptr, ptr_mismatch
+    #   Trust:          has_bimi, has_mta_sts
+    #   App store:      app_store_high, app_store_medium, app_store_low,
+    #                   app_store_platform_false_positive
+    #   Blacklists:     domain_blacklisted, ip_blacklisted
+    #   Domain age:     domain_lt_7d, domain_lt_30d, domain_lt_90d, domain_gt_1yr
+    #   Domain type:    suspicious_tld, free_email_domain, disposable_email,
+    #                   typosquat_detected, free_hosting
+    #   Hosting:        hosting_budget_shared, hosting_free, hosting_suspect,
+    #                   hosting_platform
+    #   Domain name:    suspicious_prefix, suspicious_suffix, is_tech_support_tld,
+    #                   domain_brand_impersonation
+    #   TLD variant:    tld_variant_spoofing
+    #   Web:            no_https, tls_handshake_failed, tls_connection_failed,
+    #                   cert_expired, cert_self_signed
+    #   Redirects:      redirect_chain_2plus, redirect_cross_domain, redirect_temp_302_307
+    #   Status codes:   status_401_unauthorized, status_403_cloaking,
+    #                   status_429_throttling, status_503_disposable
+    #   Content:        minimal_shell, js_redirect, meta_refresh, has_external_js,
+    #                   missing_trust_signals, access_restricted, opaque_entity
+    #   Scam patterns:  hijack_path_pattern, doc_sharing_lure, phishing_js_behavior,
+    #                   phishing_infra_redirect, email_tracking_url
+    #   E-commerce:     retail_scam_tld, cross_domain_brand_link, ecommerce_no_identity
+    #
+    # EXAMPLES:
+    #
+    #   "Phishing mail template but NOT on a known enterprise MX"
+    #   {
+    #       "name": "phish_mail_no_enterprise",
+    #       "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none"],
+    #       "if_not": ["mx_enterprise", "has_bimi"],
+    #       "score": 15,
+    #       "label": "Phishing mail server template without enterprise email"
+    #   }
+    #
+    #   "New domain on ANY cheap/free hosting"
+    #   {
+    #       "name": "new_domain_cheap_host",
+    #       "if_all": ["domain_lt_30d"],
+    #       "if_any": ["hosting_budget_shared", "hosting_free", "hosting_platform"],
+    #       "score": 12,
+    #       "label": "New domain on cheap/free hosting"
+    #   }
+    #
+    #   "Established domain with good auth gets a bonus"
+    #   {
+    #       "name": "established_good_auth",
+    #       "if_all": ["domain_gt_1yr", "has_bimi"],
+    #       "if_not": ["no_dkim", "no_dmarc", "no_spf"],
+    #       "score": -10,
+    #       "label": "Established domain with full email authentication"
+    #   }
+    #
+    "rules": [
+        # --- Built-in rules (demonstrating the engine) ---
+        {
+            "name": "phish_factory_template",
+            "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none", "no_ptr"],
+            "if_not": ["mx_enterprise", "has_bimi", "domain_gt_1yr"],
+            "score": 10,
+            "label": "Phishing factory template: mail.{domain} + no DKIM + weak DMARC + no PTR"
+        },
+        {
+            "name": "platform_phish_setup",
+            "if_all": ["mx_selfhosted", "no_dkim"],
+            "if_any": ["hosting_platform", "hosting_free"],
+            "if_not": ["mx_enterprise", "app_store_high"],
+            "score": 8,
+            "label": "Free/platform hosting with self-hosted email and no DKIM"
+        },
+        {
+            "name": "zero_email_auth",
+            "if_all": ["no_spf", "no_dkim", "no_dmarc"],
+            "if_not": ["domain_gt_1yr"],
+            "score": 10,
+            "label": "No email authentication at all on non-established domain"
+        },
+    ],
+    
     "suspicious_tlds": [
         '.xyz', '.top', '.work', '.click', '.link', '.info', '.biz', '.online',
         '.site', '.website', '.space', '.fun', '.icu', '.buzz', '.club',
@@ -433,6 +536,29 @@ DEFAULT_CONFIG = {
         "b.barracudacentral.org",
         "bl.spamcop.net",
     ],
+    
+    # ==========================================================================
+    # BLOCKED ASN ORGANIZATIONS
+    # ==========================================================================
+    # Domains hosted on these ASN orgs get an instant high score (default: 100).
+    # Match is case-insensitive substring against the ASN org name.
+    # Use this for hosting providers you've confirmed are consistently used
+    # by phishing/spam campaigns in your specific threat landscape.
+    #
+    # To find an ASN org name: run a domain through the analyzer and check
+    # the hosting_asn_org field, or use "whois <IP>" / "dig TXT <IP>.origin.asn.cymru.com"
+    #
+    # Examples: "render" matches "Render" (AS397273)
+    #           "frantech" matches "FranTech Solutions" (bulletproof host)
+    #
+    "blocked_asn_orgs": [
+        # ASN org name substrings — case-insensitive match against hosting ASN org.
+        # Instant DENY (100 points) when matched. Add your known-bad providers here.
+        "render",           # AS397273 — Render.com, heavily abused for phishing infra
+        # "frantech",       # AS53667 — BuyVM/Frantech, bulletproof-adjacent
+        # "combahton",      # AS30823 — German bulletproof host
+    ],
+    "blocked_asn_org_score": 100,  # Score to apply when matched
     
     "hosting_providers": {
         # =============================================================
@@ -724,6 +850,23 @@ def load_config() -> dict:
                     merged['weights'] = {**DEFAULT_CONFIG['weights'], **loaded['weights']}
                 if 'combos' in loaded:
                     merged['combos'] = {**DEFAULT_CONFIG['combos'], **loaded['combos']}
+                # Rules: merge by name (user rules override defaults with same name,
+                # new user rules are added). Set "rules_replace": true in config.json
+                # to completely replace defaults instead of merging.
+                if 'rules' in loaded:
+                    if loaded.get('rules_replace', False):
+                        # Full replacement mode
+                        merged['rules'] = loaded['rules']
+                    else:
+                        # Merge mode: start with defaults, override by name, add new
+                        default_rules = {r['name']: r for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r}
+                        for user_rule in loaded['rules']:
+                            name = user_rule.get('name', '')
+                            if name:
+                                default_rules[name] = user_rule  # Override or add
+                            else:
+                                default_rules[f"_unnamed_{id(user_rule)}"] = user_rule
+                        merged['rules'] = list(default_rules.values())
                 return merged
         except Exception as e:
             print(f"Error loading config: {e}")
