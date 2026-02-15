@@ -468,8 +468,11 @@ IMPERSONATED_BRANDS = [
 ]
 
 # Content-based brand detection (for page content scanning)
+# NOTE: 'apple' removed — triggers on every site with apple-touch-icon/
+# apple-mobile-web-app-capable meta tags. Apple phishing is caught by
+# typosquatting, domain name patterns, credential forms, and phishing paths.
 BRAND_KEYWORDS = [
-    b'paypal', b'amazon', b'microsoft', b'apple', b'google', b'facebook',
+    b'paypal', b'amazon', b'microsoft', b'google', b'facebook',
     b'instagram', b'netflix', b'bank of america', b'chase', b'wells fargo',
     b'usps', b'fedex', b'dropbox', b'docusign',
 ]
@@ -2190,6 +2193,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     # === TLD VARIANT SPOOFING ===
     if res.tld_variant_detected:
         all_issues.append(f"TLD VARIANT SPOOF ({res.tld_variant_domain}) → Established business exists at variant TLD; signup domain appears to be impersonating it. {res.tld_variant_summary}")
+    elif res.tld_variant_summary and res.tld_variant_summary.startswith("CHECK ERROR"):
+        all_issues.append(f"TLD VARIANT CHECK: {res.tld_variant_summary}")
     
     if res.has_suspicious_prefix:
         all_issues.append(f"SUSPICIOUS PREFIX '{res.suspicious_prefix_found}' → Common phishing/scam domain pattern")
@@ -3004,8 +3009,9 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.tld_variant_content_words = tld_variant["variant_content_words"]
         res.tld_variant_signup_content_words = tld_variant["signup_content_words"]
         res.tld_variant_summary = tld_variant["summary"]
-    except Exception:
-        pass  # Non-critical — don't break analysis if TLD variant check fails
+    except Exception as e:
+        # Surface error in results so it's visible during debugging
+        res.tld_variant_summary = f"CHECK ERROR: {type(e).__name__}: {str(e)[:200]}"
     
     # RDAP
     if check_rdap:
