@@ -36,6 +36,9 @@ DEFAULT_CONFIG = {
         "tech_support_tld": 20,            # .support, .tech, .help, etc.
         "domain_brand_impersonation": 28,  # Brand name IN domain (app-spectrum.com)
         
+        # === TLD VARIANT SPOOFING DETECTION ===
+        "tld_variant_spoofing": 30,        # Signup domain is TLD variant of established business
+        
         # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
         "hijack_path_pattern": 12,         # /tunnel/, /bid/, /secure/ paths
         "doc_sharing_lure": 15,            # "Secure Document Sharing" content
@@ -235,6 +238,15 @@ DEFAULT_CONFIG = {
         
         # === TECH SUPPORT SCAM PATTERN COMBOS ===
         # Domain name patterns (app-brand.com, brandaccount.com) + other signals
+        
+        # TLD variant spoofing combos — amplify when combined with other spoof signals
+        "tld_variant_spoofing+domain_lt_30d": 25,           # New domain + TLD variant = very high
+        "tld_variant_spoofing+domain_lt_7d": 30,            # Brand new + TLD variant = near certain
+        "tld_variant_spoofing+minimal_shell": 20,           # Hollow page + TLD variant
+        "tld_variant_spoofing+no_dkim": 15,                 # No email auth + TLD variant
+        "tld_variant_spoofing+parking_page": 18,            # Parking page + TLD variant
+        "tld_variant_spoofing+missing_trust_signals": 15,   # No corporate pages + TLD variant
+        "tld_variant_spoofing+hosting_budget_shared": 12,   # Budget host + TLD variant
         
         # Brand impersonation in domain name = VERY HIGH risk combos
         "domain_brand_impersonation+credential_form": 30,
