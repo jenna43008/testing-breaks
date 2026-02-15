@@ -1435,6 +1435,9 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
     signup_words = _count_page_words(signup_content) if signup_content else 0
     result["signup_content_words"] = signup_words
     
+    # Check signup domain's own email infrastructure (for disparity comparison)
+    signup_email = _check_variant_email_infra(domain)
+    
     # Generate TLD variants
     variants = _generate_tld_variants(domain)
     if not variants:
@@ -1442,12 +1445,14 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
     
     best_variant = None
     best_score = 0  # Track the "most established" variant
+    diagnostics = []  # Track what we found for debug output
     
     for variant_domain in variants:
         # Step 1: DNS resolution — does the variant exist?
         try:
             socket.gethostbyname(variant_domain)
         except Exception:
+            diagnostics.append(f"{variant_domain}: no DNS")
             continue  # Variant doesn't resolve — skip
         
         # Step 2: Fetch variant's page content
@@ -1473,30 +1478,58 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
         # Step 5: Calculate asymmetry score
         # Higher = more likely the variant is the real business and signup is the spoof
         asymmetry_score = 0
+        score_reasons = []
         
-        # Content volume asymmetry
-        if variant_words >= VARIANT_CONTENT_THRESHOLD:
+        # --- SIGNUP HOLLOWNESS (independent signal) ---
+        # A near-empty signup page is suspicious on its own when a variant exists
+        if signup_words < 30:
             asymmetry_score += 2
-            if signup_words < 50:
-                asymmetry_score += 3  # Huge disparity — variant has content, signup is hollow
-            elif variant_words >= signup_words * VARIANT_CONTENT_RATIO:
-                asymmetry_score += 2  # Significant disparity
+            score_reasons.append(f"signup hollow ({signup_words}w)")
+            # Variant has ANY meaningful content (even SPA shell with meta/titles)
+            if variant_words >= 30:
+                asymmetry_score += 1
+                score_reasons.append(f"variant has content ({variant_words}w)")
         
-        # Email infrastructure asymmetry
+        # --- CONTENT VOLUME ASYMMETRY ---
+        if variant_words >= VARIANT_CONTENT_THRESHOLD:
+            asymmetry_score += 1
+            score_reasons.append(f"variant substantive ({variant_words}w)")
+            if signup_words < 50:
+                asymmetry_score += 1  # Big disparity
+                score_reasons.append("content disparity")
+        
+        # --- EMAIL INFRASTRUCTURE ON VARIANT ---
         if variant_email["auth_count"] >= VARIANT_EMAIL_AUTH_MIN:
             asymmetry_score += 2
+            score_reasons.append(f"variant email auth ({variant_email['auth_count']}/4)")
             if variant_email["auth_count"] >= 3:
-                asymmetry_score += 1  # Well-configured email
+                asymmetry_score += 1
+                score_reasons.append("variant strong email")
         
-        # Business legitimacy indicators
+        # --- EMAIL AUTH DISPARITY (variant vs signup) ---
+        # If variant has significantly better email auth than signup, strong signal
+        email_gap = variant_email["auth_count"] - signup_email["auth_count"]
+        if email_gap >= 2:
+            asymmetry_score += 2
+            score_reasons.append(f"email disparity (variant {variant_email['auth_count']} vs signup {signup_email['auth_count']})")
+        elif email_gap >= 1:
+            asymmetry_score += 1
+            score_reasons.append(f"email gap +{email_gap}")
+        
+        # --- BUSINESS LEGITIMACY INDICATORS ---
         if variant_indicators["indicator_count"] >= 2:
             asymmetry_score += 2
+            score_reasons.append(f"biz indicators ({variant_indicators['indicator_count']})")
         if variant_indicators["indicator_count"] >= 4:
             asymmetry_score += 1
         
         # Company registration is a very strong signal
         if variant_indicators["has_company_number"]:
             asymmetry_score += 2
+            score_reasons.append("company reg found")
+        
+        diag = f"{variant_domain}: score={asymmetry_score} [{', '.join(score_reasons)}] words={variant_words} email={variant_email['auth_count']}/4"
+        diagnostics.append(diag)
         
         # Track best variant
         if asymmetry_score > best_score:
@@ -1508,6 +1541,7 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
                 "indicators": variant_indicators,
                 "score": asymmetry_score,
                 "content": variant_content,
+                "score_reasons": score_reasons,
             }
     
     # Decision: flag if asymmetry score is high enough
@@ -1542,6 +1576,18 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
         if email_signals:
             summary_parts.append(f"variant email auth: {'+'.join(email_signals)}")
         
+        # Signup email weakness
+        signup_signals = []
+        if signup_email["spf_exists"]:
+            signup_signals.append("SPF")
+        if signup_email["dkim_exists"]:
+            signup_signals.append("DKIM")
+        if signup_email["mx_exists"]:
+            signup_signals.append("MX")
+        if signup_email["dmarc_exists"]:
+            signup_signals.append("DMARC")
+        summary_parts.append(f"signup email auth: {'+'.join(signup_signals) if signup_signals else 'none'}")
+        
         # Business indicators
         biz_signals = []
         if v["indicators"]["has_company_number"]:
@@ -1557,7 +1603,19 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
         if biz_signals:
             summary_parts.append(f"variant signals: {', '.join(biz_signals)}")
         
+        summary_parts.append(f"asymmetry: {v['score']}")
         result["summary"] = " → ".join(summary_parts)
+    
+    else:
+        # Always provide diagnostic output so we can see what happened
+        diag_summary = f"TLD VARIANT CHECK: signup={signup_words}w, signup_email={signup_email['auth_count']}/4"
+        if diagnostics:
+            diag_summary += " | " + " | ".join(diagnostics)
+        else:
+            diag_summary += " | no variants resolved"
+        if best_variant:
+            diag_summary += f" | best={best_variant['domain']} score={best_variant['score']} (threshold={DETECTION_THRESHOLD})"
+        result["summary"] = diag_summary
     
     return result
 
@@ -2193,8 +2251,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     # === TLD VARIANT SPOOFING ===
     if res.tld_variant_detected:
         all_issues.append(f"TLD VARIANT SPOOF ({res.tld_variant_domain}) → Established business exists at variant TLD; signup domain appears to be impersonating it. {res.tld_variant_summary}")
-    elif res.tld_variant_summary and res.tld_variant_summary.startswith("CHECK ERROR"):
-        all_issues.append(f"TLD VARIANT CHECK: {res.tld_variant_summary}")
+    elif res.tld_variant_summary:
+        # Always show diagnostic output (starts with "TLD VARIANT CHECK:" when below threshold,
+        # or "CHECK ERROR:" on exception) so we can see what the function found
+        all_issues.append(res.tld_variant_summary)
     
     if res.has_suspicious_prefix:
         all_issues.append(f"SUSPICIOUS PREFIX '{res.suspicious_prefix_found}' → Common phishing/scam domain pattern")
