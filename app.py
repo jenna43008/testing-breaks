@@ -303,6 +303,7 @@ def display_results(results: list):
             "recommendation": st.column_config.TextColumn("Result", width="small"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
             "signals_triggered": st.column_config.TextColumn("Signals", width="medium"),
+            "combos_triggered": st.column_config.TextColumn("Combos", width="medium"),
         }
         st.dataframe(df, use_container_width=True, height=400, column_config=full_column_config)
         
@@ -313,7 +314,7 @@ def display_results(results: list):
                 "Columns",
                 all_cols,
                 default=['domain', 'risk_score', 'recommendation', 'summary', 
-                        'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
+                        'combos_triggered', 'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
             )
             if selected_cols:
                 st.dataframe(df[selected_cols], use_container_width=True)
@@ -427,6 +428,22 @@ def display_results(results: list):
                 }
                 mx_icon = mx_icons.get(mx_ptype, 'ℹ️')
                 st.markdown(f"**MX Provider:** {mx_icon} {mx_ptype} ({mx_primary})")
+            
+            # Combos triggered display
+            combos_str = domain_data.get('combos_triggered', '')
+            if combos_str:
+                combos_list = combos_str.split(';')
+                config = st.session_state.config
+                combos_cfg = config.get('combos', DEFAULT_CONFIG.get('combos', {}))
+                combo_details = []
+                total_combo_pts = 0
+                for c in combos_list:
+                    pts = combos_cfg.get(c, 0)
+                    total_combo_pts += pts
+                    combo_details.append(f"  • `{c}` → +{pts}")
+                st.markdown(f"**🔗 Combo Scoring:** +{total_combo_pts} points from {len(combos_list)} combo(s)")
+                with st.expander("View triggered combos"):
+                    st.markdown("\n".join(combo_details))
 
 
 def admin_view():
