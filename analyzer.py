@@ -120,6 +120,10 @@ class DomainApprovalResult:
     mx_uses_free_provider: bool = False
     mx_primary: str = ""
     mx_provider_type: str = ""  # "enterprise", "standard", "disposable", "selfhosted", "unknown"
+    mx_is_mail_prefix: bool = False  # MX is exactly mail.{domain} — phishing template fingerprint
+    
+    # === EMAIL: SPF PROVIDER ANALYSIS ===
+    spf_has_external_includes: bool = False  # SPF includes a real email provider (Google, Microsoft, etc.)
     
     # === EMAIL: BIMI ===
     bimi_exists: bool = False
@@ -2363,7 +2367,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.mx_provider_type == "disposable":
         all_issues.append(f"DISPOSABLE MX PROVIDER ({res.mx_primary}) → Cheap/temporary email service commonly used for spam")
     elif res.mx_provider_type == "selfhosted":
-        all_issues.append(f"SELF-HOSTED MX ({res.mx_primary}) → MX points to own domain; no external provider oversight")
+        if res.mx_is_mail_prefix:
+            all_issues.append(f"SELF-HOSTED MX ({res.mx_primary}) → mail.{{domain}} template pattern; common phishing infrastructure fingerprint")
+        else:
+            all_issues.append(f"SELF-HOSTED MX ({res.mx_primary}) → MX points to own domain; no external provider oversight")
     
     if not res.ptr_exists:
         all_issues.append("NO PTR RECORD → Corporate/enterprise email filters may reject")
@@ -2384,11 +2391,12 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.is_free_hosting:
         all_issues.append("FREE HOSTING PROVIDER → Associated with spam; limited reputation potential")
     
-    if res.hosting_provider and res.hosting_provider_type in ("budget_shared", "free", "suspect"):
+    if res.hosting_provider and res.hosting_provider_type in ("budget_shared", "free", "suspect", "platform"):
         type_labels = {
             "budget_shared": f"BUDGET SHARED HOST ({res.hosting_provider}) → Commonly used for spam/phishing; shared IP reputation risk",
             "free": f"FREE HOSTING ({res.hosting_provider}) → Associated with throwaway sites and spam campaigns",
             "suspect": f"SUSPECT HOST ({res.hosting_provider}) → Known bulletproof/abuse-tolerant hosting provider",
+            "platform": f"DEV PLATFORM HOST ({res.hosting_provider}) → Developer platform with free tier; custom domains used for phishing infrastructure",
         }
         all_issues.append(type_labels.get(res.hosting_provider_type, f"HOSTING: {res.hosting_provider}"))
     
@@ -2496,19 +2504,25 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         positives.append("MTA-STS enabled")
     
     if res.app_store_has_presence:
+        is_platform_fp = res.hosting_provider_type == "platform"
         if res.app_store_confidence == "high":
-            methods = []
-            if res.app_store_ios_verified:
-                methods.append("iOS deep links")
-            if res.app_store_android_verified:
-                methods.append("Android deep links")
-            if res.app_store_page_links:
-                methods.append("store links")
-            if res.app_store_itunes_match:
-                methods.append("iTunes match")
-            positives.append(f"App Store verified ({', '.join(methods)})")
+            if is_platform_fp:
+                # Don't show as positive — it's the platform's AASA, not the domain's
+                pass
+            else:
+                methods = []
+                if res.app_store_ios_verified:
+                    methods.append("iOS deep links")
+                if res.app_store_android_verified:
+                    methods.append("Android deep links")
+                if res.app_store_page_links:
+                    methods.append("store links")
+                if res.app_store_itunes_match:
+                    methods.append("iTunes match")
+                positives.append(f"App Store verified ({', '.join(methods)})")
         elif res.app_store_confidence == "medium":
-            positives.append("App Store presence detected")
+            if not is_platform_fp:
+                positives.append("App Store presence detected")
     elif res.app_store_confidence == "low":
         positives.append("Possible app store presence")
     
@@ -2610,6 +2624,19 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         score += weights.get('mx_selfhosted', 6)
         signals.add("mx_selfhosted")
     
+    # mail.{domain} template fingerprint — stronger than generic selfhosted
+    # This exact pattern is used by phishing infrastructure toolkits
+    if res.mx_is_mail_prefix:
+        score += weights.get('mx_mail_prefix', 4)
+        signals.add("mx_mail_prefix")
+    
+    # SPF exists but has NO external email provider includes
+    # Legit businesses almost always include Google/Microsoft/SendGrid/etc.
+    # Self-only SPF (just a/mx mechanisms) = no real email provider
+    if res.spf_exists and not res.spf_has_external_includes:
+        score += weights.get('spf_no_external_includes', 3)
+        signals.add("spf_no_external_includes")
+    
     if not res.ptr_exists:
         score += weights.get('no_ptr', 4)
         signals.add("no_ptr")
@@ -2626,13 +2653,22 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     
     # === APP STORE PRESENCE BONUS (Legitimacy Signal) ===
     # Tiered by confidence: high (verified deep links) > medium (page links/API) > low (keyword only)
+    # IMPORTANT: Platform hosting providers (Render, Netlify, Vercel, etc.) serve their OWN
+    # AASA/asset-links files for ALL custom domains. A domain on Render getting "iOS deep links"
+    # is detecting Render's app, not the domain owner's app. Suppress the bonus in this case.
+    is_platform_hosted = res.hosting_provider_type == "platform"
     if res.app_store_has_presence:
         if res.app_store_confidence == "high":
-            score += weights.get('app_store_high', -15)
-            signals.add("app_store_high")
+            if is_platform_hosted:
+                # Platform's AASA, not the domain's — don't give bonus
+                signals.add("app_store_platform_false_positive")
+            else:
+                score += weights.get('app_store_high', -15)
+                signals.add("app_store_high")
         elif res.app_store_confidence == "medium":
-            score += weights.get('app_store_medium', -10)
-            signals.add("app_store_medium")
+            if not is_platform_hosted:
+                score += weights.get('app_store_medium', -10)
+                signals.add("app_store_medium")
     elif res.app_store_confidence == "low":
         score += weights.get('app_store_low', -3)
         signals.add("app_store_low")
@@ -2687,6 +2723,11 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     elif res.hosting_provider_type == "suspect":
         score += weights.get('hosting_suspect', 18)
         signals.add("hosting_suspect")
+    elif res.hosting_provider_type == "platform":
+        # Dev platforms (Render, Netlify, Vercel) aren't inherently bad,
+        # but custom domains on free-tier platforms sending email is a red flag
+        score += weights.get('hosting_platform', 4)
+        signals.add("hosting_platform")
     
     # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
     if res.has_suspicious_prefix:
@@ -2929,6 +2970,23 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.spf_includes = ";".join(spf_parsed.get("includes", []))
         res.spf_lookup_count = spf_parsed.get("lookups", 0)
         res.spf_syntax_valid = spf_parsed.get("valid", True)
+        # Check if SPF includes any real external email provider
+        KNOWN_SPF_PROVIDERS = [
+            '_spf.google.com', 'google.com', 'googlemail.com',
+            'spf.protection.outlook.com', 'outlook.com', 'microsoft.com',
+            'amazonses.com', 'sendgrid.net', 'mailgun.org', 'mandrillapp.com',
+            'mailchimp.com', 'postmarkapp.com', 'sparkpostmail.com',
+            'zoho.com', 'zoho.eu', 'fastmail.com', 'messagingengine.com',
+            'icloud.com', 'apple.com', 'protonmail.ch',
+            'mimecast.com', 'pphosted.com', 'fireeyecloud.com',
+            'secureserver.net', 'emailsrvr.com', 'hostinger.com',
+            'ovh.net', 'gandi.net', 'ionos.com',
+        ]
+        includes_list = spf_parsed.get("includes", [])
+        res.spf_has_external_includes = any(
+            any(provider in inc.lower() for provider in KNOWN_SPF_PROVIDERS)
+            for inc in includes_list
+        )
     
     # DKIM
     res.dkim_exists, dkim_selectors = check_dkim(domain)
@@ -2951,6 +3009,11 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         free_mx = ['google.com', 'googlemail.com', 'yahoodns', 'outlook.com']
         res.mx_uses_free_provider = any(f in res.mx_primary.lower() for f in free_mx)
         res.mx_provider_type = classify_mx_provider(mx_records, domain, config)
+        # Detect mail.{domain} template fingerprint — common in phishing infrastructure
+        domain_lower = domain.lower()
+        res.mx_is_mail_prefix = any(
+            h.lower() == f"mail.{domain_lower}" for _, h in mx_records
+        )
     
     # BIMI
     res.bimi_exists, res.bimi_record = get_bimi(domain)
