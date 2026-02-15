@@ -2547,6 +2547,11 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.redirect_count > 0 and res.redirect_domains:
         parts.append(f"REDIRECT PATH: {res.redirect_domains}")
     
+    # Combo scoring breakdown
+    if res.combos_triggered:
+        combo_list = res.combos_triggered.split(';')
+        parts.append(f"COMBOS ({len(combo_list)}): " + ", ".join(combo_list))
+    
     return " | ".join(parts)
 
 
