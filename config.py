@@ -56,10 +56,10 @@ DEFAULT_CONFIG = {
         "spf_too_many_lookups": 4,
         "spf_syntax_error": 6,
         "no_dmarc": 10,               # Missing DMARC - deliverability issue only
-        "dmarc_p_none": 5,            # p=none - not protecting but not fraud
+        "dmarc_p_none": 8,            # p=none - tells receivers to do nothing about failures (raised from 5)
         "dmarc_no_rua": 2,            # No reporting - trivial
         "dmarc_syntax_error": 4,
-        "no_dkim": 6,                 # Missing DKIM - deliverability issue only
+        "no_dkim": 10,                # Missing DKIM - strong risk signal per disabled apps data (raised from 6)
         "no_mx": 8,                   # No MX - can't receive bounces
         "null_mx": 12,
         "mx_free_provider": 6,
@@ -117,14 +117,19 @@ DEFAULT_CONFIG = {
         # === APP STORE PRESENCE BONUSES (Legitimacy signal) ===
         # Rare for bad actors to maintain real app store presence
         "app_store_high": -15,    # Verified deep links (AASA/assetlinks) or multiple signals
-        "app_store_medium": -10,  # Page links to app stores or iTunes API match
-        "app_store_low": -3,      # Keyword-only match in iTunes (weak signal)
+        "app_store_medium": -5,   # Page links to app stores or iTunes API match (reduced - easy to fake)
+        "app_store_low": 0,       # Keyword-only match in iTunes (disabled - too weak, 66% of disabled apps had this)
         
         # === HOSTING PROVIDER PENALTIES ===
         # Budget shared hosts and free hosts have higher spam/phishing rates
         "hosting_budget_shared": 8,   # Hostinger, GoDaddy shared, Namecheap shared, etc.
         "hosting_free": 12,           # 000webhost, InfinityFree, AwardSpace, etc.
         "hosting_suspect": 18,        # Known bulletproof / abuse-tolerant hosts
+        
+        # === MX PROVIDER SCORING (v4.7) ===
+        "mx_disposable": 10,          # Disposable/cheap MX (Titan, ImprovMX, Hostinger email, etc.)
+        "mx_selfhosted": 6,           # Self-hosted MX on same domain/IP - no provider oversight
+        "mx_enterprise_bonus": -5,    # Enterprise MX (Google Workspace, M365, Proofpoint) = legitimacy signal
     },
     
     "combos": {
@@ -347,6 +352,18 @@ DEFAULT_CONFIG = {
         "hosting_suspect+credential_form": 25,           # Suspect host + login form
         "hosting_suspect+brand_impersonation": 28,       # Suspect host + brand abuse
         "hosting_suspect+no_https": 18,                  # Suspect host + no HTTPS
+        
+        # === WEAK AUTH COMBOS (v4.7 - from disabled apps analysis) ===
+        "no_dkim+dmarc_p_none": 8,                   # No DKIM + permissive DMARC - 84% of disabled apps had this
+        "no_dkim+dmarc_p_none+spf_softfail_all": 6,  # Triple weak auth - most common bad actor profile (+6 additional)
+        "hosting_budget_shared+no_dkim": 6,           # Budget host + no DKIM - high risk combo
+        
+        # === MX PROVIDER COMBOS (v4.7) ===
+        "mx_disposable+no_dkim": 8,                      # Disposable MX + no DKIM
+        "mx_disposable+dmarc_p_none": 6,                 # Disposable MX + permissive DMARC
+        "mx_disposable+hosting_budget_shared": 8,        # Disposable MX + budget host
+        "mx_selfhosted+no_dkim": 6,                      # Self-hosted MX + no DKIM
+        "mx_selfhosted+hosting_budget_shared": 6,        # Self-hosted MX + budget host
     },
     
     "suspicious_tlds": [
@@ -554,6 +571,51 @@ DEFAULT_CONFIG = {
             "asn_numbers": [45839],
             "asn_org_patterns": ["shinjiru"],
             "ptr_patterns": ["shinjiru"],
+        },
+    },
+    
+    "mx_providers": {
+        "enterprise": {
+            # Enterprise MX = strong legitimacy signal
+            "patterns": [
+                "google.com", "googlemail.com", "gmail-smtp",           # Google Workspace
+                "outlook.com", "microsoft.com", "protection.outlook",   # Microsoft 365
+                "pphosted.com", "proofpoint.com",                       # Proofpoint
+                "mimecast.com",                                         # Mimecast
+                "barracuda",                                            # Barracuda
+                "messagelabs.com", "symantec",                          # Broadcom/Symantec
+            ],
+        },
+        "standard": {
+            # Legitimate but not enterprise-grade
+            "patterns": [
+                "zoho.com", "zohomail",                                 # Zoho
+                "fastmail.com", "messagingengine",                      # Fastmail
+                "icloud.com", "apple.com",                              # iCloud
+                "yandex.ru", "yandex.net",                              # Yandex
+                "ovh.net",                                              # OVH
+                "emailsrvr.com", "rackspace",                           # Rackspace
+                "secureserver.net",                                     # GoDaddy email
+            ],
+        },
+        "disposable": {
+            # Cheap/disposable MX - high risk signal
+            "patterns": [
+                "titan.email", "titanmail",                             # Titan (cheap, popular with spammers)
+                "improvmx.com",                                         # ImprovMX (forwarding)
+                "forwardemail.net",                                     # Forward Email
+                "migadu.com",                                           # Migadu
+                "mail-in-a-box",                                        # Self-hosted kit
+                "pobox.com",                                            # Pobox forwarding
+                "runbox.com",                                           # Runbox
+                "mailfence.com",                                        # Mailfence
+                "hostinger.com",                                        # Hostinger email
+                "privateemail.com",                                     # Namecheap email
+                "registrar-servers.com",                                # Namecheap default
+                "ionos.com", "perfora.net",                             # IONOS
+                "hover.com",                                            # Hover
+                "dreamhost.com",                                        # DreamHost
+            ],
         },
     },
 }
