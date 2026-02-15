@@ -414,6 +414,19 @@ def display_results(results: list):
                 st.markdown(f"**Hosting:** {icon} {provider} ({ptype}) — detected via {via}")
                 if asn_org:
                     st.markdown(f"**ASN Org:** {asn_org}")
+            
+            # MX Provider display
+            mx_ptype = domain_data.get('mx_provider_type', '')
+            if mx_ptype and mx_ptype != 'unknown':
+                mx_primary = domain_data.get('mx_primary', '')
+                mx_icons = {
+                    'enterprise': '✅',
+                    'standard': 'ℹ️',
+                    'disposable': '⚠️',
+                    'selfhosted': '⚠️',
+                }
+                mx_icon = mx_icons.get(mx_ptype, 'ℹ️')
+                st.markdown(f"**MX Provider:** {mx_icon} {mx_ptype} ({mx_primary})")
 
 
 def admin_view():
