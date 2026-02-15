@@ -113,6 +113,7 @@ class DomainApprovalResult:
     mx_is_null: bool = False
     mx_uses_free_provider: bool = False
     mx_primary: str = ""
+    mx_provider_type: str = ""  # "enterprise", "standard", "disposable", "selfhosted", "unknown"
     
     # === EMAIL: BIMI ===
     bimi_exists: bool = False
@@ -666,6 +667,49 @@ def get_mx(domain: str) -> Tuple[bool, List[Tuple[int, str]], bool]:
         return True, mx, is_null
     except Exception:
         return False, [], False
+
+
+def classify_mx_provider(mx_records: List[Tuple[int, str]], domain: str, config: dict) -> str:
+    """Classify MX provider type based on MX hostnames.
+    
+    Returns: 'enterprise', 'standard', 'disposable', 'selfhosted', or 'unknown'
+    """
+    if not mx_records:
+        return "unknown"
+    
+    mx_providers = config.get('mx_providers', {})
+    
+    # Check all MX hostnames (primary first, but check all)
+    all_mx_hosts = [h.lower() for _, h in mx_records]
+    
+    # Check enterprise patterns first (highest priority)
+    enterprise_patterns = mx_providers.get('enterprise', {}).get('patterns', [])
+    for mx_host in all_mx_hosts:
+        for pattern in enterprise_patterns:
+            if pattern.lower() in mx_host:
+                return "enterprise"
+    
+    # Check standard patterns
+    standard_patterns = mx_providers.get('standard', {}).get('patterns', [])
+    for mx_host in all_mx_hosts:
+        for pattern in standard_patterns:
+            if pattern.lower() in mx_host:
+                return "standard"
+    
+    # Check disposable patterns
+    disposable_patterns = mx_providers.get('disposable', {}).get('patterns', [])
+    for mx_host in all_mx_hosts:
+        for pattern in disposable_patterns:
+            if pattern.lower() in mx_host:
+                return "disposable"
+    
+    # Check if self-hosted (MX points to same domain or subdomain)
+    domain_lower = domain.lower()
+    for mx_host in all_mx_hosts:
+        if mx_host == domain_lower or mx_host.endswith('.' + domain_lower):
+            return "selfhosted"
+    
+    return "unknown"
 
 
 def get_bimi(domain: str) -> Tuple[bool, str]:
@@ -1773,6 +1817,11 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     elif res.mx_is_null:
         all_issues.append("NULL MX RECORD → Domain explicitly cannot receive email")
     
+    if res.mx_provider_type == "disposable":
+        all_issues.append(f"DISPOSABLE MX PROVIDER ({res.mx_primary}) → Cheap/temporary email service commonly used for spam")
+    elif res.mx_provider_type == "selfhosted":
+        all_issues.append(f"SELF-HOSTED MX ({res.mx_primary}) → MX points to own domain; no external provider oversight")
+    
     if not res.ptr_exists:
         all_issues.append("NO PTR RECORD → Corporate/enterprise email filters may reject")
     elif not res.ptr_matches_forward:
@@ -1921,7 +1970,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         positives.append("Possible app store presence")
     
     if res.mx_exists and not res.mx_is_null:
-        positives.append("MX configured")
+        if res.mx_provider_type == "enterprise":
+            positives.append("Enterprise MX (Google/Microsoft/Proofpoint)")
+        else:
+            positives.append("MX configured")
     
     if res.ptr_exists and res.ptr_matches_forward:
         positives.append("PTR matches")
@@ -1998,6 +2050,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     elif res.mx_is_null:
         score += weights.get('null_mx', 12)
         signals.add("null_mx")
+    
+    # MX provider type scoring (v4.7)
+    if res.mx_provider_type == "enterprise":
+        score += weights.get('mx_enterprise_bonus', -5)
+        signals.add("mx_enterprise")
+    elif res.mx_provider_type == "disposable":
+        score += weights.get('mx_disposable', 10)
+        signals.add("mx_disposable")
+    elif res.mx_provider_type == "selfhosted":
+        score += weights.get('mx_selfhosted', 6)
+        signals.add("mx_selfhosted")
     
     if not res.ptr_exists:
         score += weights.get('no_ptr', 4)
@@ -2231,7 +2294,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     combos_hit = []
     for combo_key, bonus in combos.items():
         parts = combo_key.split('+')
-        if len(parts) == 2 and parts[0] in signals and parts[1] in signals:
+        if all(p in signals for p in parts):
             score += bonus
             combos_hit.append(combo_key)
     
@@ -2334,6 +2397,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.mx_primary = mx_records[0][1] if mx_records else ""
         free_mx = ['google.com', 'googlemail.com', 'yahoodns', 'outlook.com']
         res.mx_uses_free_provider = any(f in res.mx_primary.lower() for f in free_mx)
+        res.mx_provider_type = classify_mx_provider(mx_records, domain, config)
     
     # BIMI
     res.bimi_exists, res.bimi_record = get_bimi(domain)
