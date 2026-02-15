@@ -267,10 +267,13 @@ class DomainApprovalResult:
     hosting_detected_via: str = ""              # ns, asn, ptr, or combination
     hosting_asn: str = ""                       # ASN number if resolved
     hosting_asn_org: str = ""                   # ASN organization name
+    blocked_asn_org_match: str = ""             # Matched blocked ASN org pattern (if any)
     
     # === SCORING DETAILS ===
     signals_triggered: str = ""
     combos_triggered: str = ""
+    rules_triggered: str = ""                    # Custom rules that fired (name:score pairs)
+    rules_labels: str = ""                       # Human-readable labels for triggered rules
 
 
 # ============================================================================
@@ -2398,6 +2401,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         }
         all_issues.append(type_labels.get(res.hosting_provider_type, f"HOSTING: {res.hosting_provider}"))
     
+    if res.blocked_asn_org_match:
+        all_issues.append(f"BLOCKED ASN ORG ({res.blocked_asn_org_match} / {res.hosting_asn_org}) → Domain hosted on blocked network; ASN {res.hosting_asn}")
+    
     if res.is_free_email_domain:
         all_issues.append("FREE EMAIL PROVIDER DOMAIN → Cannot send bulk from consumer email domains")
     
@@ -2475,6 +2481,12 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     if res.has_hijack_path_pattern:
         all_issues.append(f"SUSPICIOUS URL PATH '/{res.hijack_path_found}/' → Common hijacked domain pattern")
+    
+    # === CUSTOM RULE LABELS ===
+    if res.rules_labels:
+        for label in res.rules_labels.split(';'):
+            if label.strip():
+                all_issues.append(f"RULE: {label.strip()}")
     
     # === POSITIVE SIGNALS ===
     if res.spf_exists and res.spf_mechanism == "-all":
@@ -2563,6 +2575,11 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.combos_triggered:
         combo_list = res.combos_triggered.split(';')
         parts.append(f"COMBOS ({len(combo_list)}): " + ", ".join(combo_list))
+    
+    # Custom rules breakdown
+    if res.rules_triggered:
+        rules_list = res.rules_triggered.split(';')
+        parts.append(f"RULES ({len(rules_list)}): " + ", ".join(rules_list))
     
     return " | ".join(parts)
 
@@ -2678,6 +2695,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.ip_blacklist_count > 0:
         score += weights.get('ip_blacklisted', 35) * min(res.ip_blacklist_count, 3)
         signals.add("ip_blacklisted")
+    
+    # Blocked ASN organizations - instant high score
+    blocked_asn_orgs = config.get('blocked_asn_orgs', [])
+    if res.hosting_asn_org and blocked_asn_orgs:
+        asn_org_lower = res.hosting_asn_org.lower()
+        matched_asn = next((org for org in blocked_asn_orgs if org.lower() in asn_org_lower), None)
+        if matched_asn:
+            asn_score = config.get('blocked_asn_org_score', 100)
+            score += asn_score
+            signals.add("blocked_asn_org")
+            res.blocked_asn_org_match = matched_asn  # Store for display
     
     # Domain age
     if res.domain_age_days >= 0:
@@ -2890,6 +2918,43 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             score += bonus
             combos_hit.append(combo_key)
     
+    # === CUSTOM RULES ENGINE ===
+    # Rules support if/then/else logic beyond simple combos:
+    #   if_all:  ALL listed signals must be present (AND)
+    #   if_any:  AT LEAST ONE listed signal must be present (OR)
+    #   if_not:  NONE of these signals may be present (exclusion)
+    #   score:   points to add (positive = riskier, negative = safer)
+    #   name:    identifier for the rule
+    #   label:   human-readable description shown in output
+    rules = config.get('rules', DEFAULT_CONFIG.get('rules', []))
+    rules_hit = []
+    rules_labels = []
+    for rule in rules:
+        rule_name = rule.get('name', 'unnamed_rule')
+        
+        # Check if_all: every signal in this list must be present
+        if_all = rule.get('if_all', [])
+        if if_all and not all(s in signals for s in if_all):
+            continue
+        
+        # Check if_any: at least one signal in this list must be present
+        if_any = rule.get('if_any', [])
+        if if_any and not any(s in signals for s in if_any):
+            continue
+        
+        # Check if_not: none of these signals may be present
+        if_not = rule.get('if_not', [])
+        if if_not and any(s in signals for s in if_not):
+            continue
+        
+        # All conditions met — rule fires
+        rule_score = rule.get('score', 0)
+        rule_label = rule.get('label', '')
+        score += rule_score
+        rules_hit.append(f"{rule_name}({rule_score:+d})")
+        if rule_label:
+            rules_labels.append(rule_label)
+    
     res.risk_score = max(0, min(score, 100))
     
     bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
@@ -2898,6 +2963,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     res.recommendation = "APPROVE" if res.risk_score <= threshold else "DENY"
     res.signals_triggered = ";".join(sorted(signals))
     res.combos_triggered = ";".join(combos_hit)
+    res.rules_triggered = ";".join(rules_hit)
+    res.rules_labels = ";".join(rules_labels)
     res.summary = generate_summary(res, signals, res.domain_age_days >= 0)
 
 
