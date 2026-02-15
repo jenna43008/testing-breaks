@@ -1307,6 +1307,9 @@ def _check_variant_email_infra(variant_domain: str) -> Dict:
         "mx_exists": False,
         "dmarc_exists": False,
         "auth_count": 0,
+        "mx_selfhosted": False,
+        "mx_external": False,       # True if MX points to known provider (not self-hosted)
+        "mx_hosts": [],             # Raw MX hostnames for diagnostics
     }
     
     # SPF
@@ -1316,6 +1319,38 @@ def _check_variant_email_infra(variant_domain: str) -> Dict:
     # MX
     mx_exists, mx_records, _ = get_mx(variant_domain)
     result["mx_exists"] = mx_exists
+    
+    if mx_exists and mx_records:
+        all_mx_hosts = [h.lower() for _, h in mx_records]
+        result["mx_hosts"] = all_mx_hosts
+        
+        domain_lower = variant_domain.lower()
+        
+        # Check self-hosted: MX points to own domain or subdomain
+        is_selfhosted = any(
+            h == domain_lower or h.endswith('.' + domain_lower) 
+            for h in all_mx_hosts
+        )
+        result["mx_selfhosted"] = is_selfhosted
+        
+        # Check external provider (enterprise or standard patterns)
+        # These are common hosted email providers — if MX points here, it's external
+        EXTERNAL_MX_PATTERNS = [
+            # Enterprise
+            'google.com', 'googlemail.com', 'outlook.com', 'microsoft.com',
+            'protection.outlook.com', 'ppe-hosted.com',
+            # Standard  
+            'mxroute.com', 'zoho.com', 'fastmail.com', 'protonmail.ch',
+            'messagingengine.com', 'migadu.com', 'tutanota.de',
+            'emailsrvr.com', 'secureserver.net', 'icloud.com',
+            'registrar-servers.com', 'hostinger.com', 'ionos.com',
+            'dreamhost.com', 'bluehost.com', 'siteground.net',
+            'ovh.net', 'gandi.net', 'namecheap.com',
+        ]
+        result["mx_external"] = not is_selfhosted and any(
+            any(pattern in h for pattern in EXTERNAL_MX_PATTERNS)
+            for h in all_mx_hosts
+        )
     
     # DMARC
     _, dmarc_exists, _ = get_dmarc(variant_domain)
@@ -1516,6 +1551,17 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
             asymmetry_score += 1
             score_reasons.append(f"email gap +{email_gap}")
         
+        # --- MX TYPE DISPARITY ---
+        # Signup has self-hosted MX (mail.domain.uk) while variant has external provider
+        # This is a strong spoof signal: real businesses use hosted email, spoofs point MX at themselves
+        if signup_email["mx_selfhosted"] and variant_email["mx_external"]:
+            asymmetry_score += 2
+            score_reasons.append(f"MX disparity (signup selfhosted vs variant external)")
+        elif signup_email["mx_selfhosted"] and not variant_email["mx_selfhosted"]:
+            # Variant at least isn't selfhosted, even if we can't confirm provider
+            asymmetry_score += 1
+            score_reasons.append(f"signup MX selfhosted")
+        
         # --- BUSINESS LEGITIMACY INDICATORS ---
         if variant_indicators["indicator_count"] >= 2:
             asymmetry_score += 2
@@ -1528,7 +1574,7 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
             asymmetry_score += 2
             score_reasons.append("company reg found")
         
-        diag = f"{variant_domain}: score={asymmetry_score} [{', '.join(score_reasons)}] words={variant_words} email={variant_email['auth_count']}/4"
+        diag = f"{variant_domain}: score={asymmetry_score} [{', '.join(score_reasons)}] words={variant_words} email={variant_email['auth_count']}/4 mx_ext={variant_email['mx_external']}"
         diagnostics.append(diag)
         
         # Track best variant
@@ -1583,7 +1629,10 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
         if signup_email["dkim_exists"]:
             signup_signals.append("DKIM")
         if signup_email["mx_exists"]:
-            signup_signals.append("MX")
+            if signup_email["mx_selfhosted"]:
+                signup_signals.append("MX(selfhosted)")
+            else:
+                signup_signals.append("MX")
         if signup_email["dmarc_exists"]:
             signup_signals.append("DMARC")
         summary_parts.append(f"signup email auth: {'+'.join(signup_signals) if signup_signals else 'none'}")
@@ -1608,7 +1657,8 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
     
     else:
         # Always provide diagnostic output so we can see what happened
-        diag_summary = f"TLD VARIANT CHECK: signup={signup_words}w, signup_email={signup_email['auth_count']}/4"
+        mx_type = "selfhosted" if signup_email["mx_selfhosted"] else ("external" if signup_email["mx_external"] else "unknown")
+        diag_summary = f"TLD VARIANT CHECK: signup={signup_words}w, signup_email={signup_email['auth_count']}/4, signup_mx={mx_type}"
         if diagnostics:
             diag_summary += " | " + " | ".join(diagnostics)
         else:
