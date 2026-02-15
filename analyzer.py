@@ -2305,10 +2305,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     # === TLD VARIANT SPOOFING ===
     if res.tld_variant_detected:
         all_issues.append(f"TLD VARIANT SPOOF ({res.tld_variant_domain}) → Established business exists at variant TLD; signup domain appears to be impersonating it. {res.tld_variant_summary}")
-    elif res.tld_variant_summary:
-        # Always show diagnostic output (starts with "TLD VARIANT CHECK:" when below threshold,
-        # or "CHECK ERROR:" on exception) so we can see what the function found
-        all_issues.append(res.tld_variant_summary)
+    # Diagnostic detail (TLD VARIANT CHECK / CHECK ERROR) is stored in res.tld_variant_summary
+    # but NOT shown in issues — it was confusing users into thinking spoofing was detected
     
     if res.has_suspicious_prefix:
         all_issues.append(f"SUSPICIOUS PREFIX '{res.suspicious_prefix_found}' → Common phishing/scam domain pattern")
