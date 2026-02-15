@@ -482,6 +482,9 @@ def admin_view():
                        'redirect_cross_domain', 'redirect_temp_302_307'],
             "Content/Phishing": ['credential_form', 'brand_impersonation', 'phishing_paths',
                                 'malware_links', 'minimal_shell', 'js_redirect'],
+            "Domain Name Patterns": ['suspicious_prefix', 'suspicious_suffix', 
+                                     'tech_support_tld', 'domain_brand_impersonation',
+                                     'tld_variant_spoofing'],
             "Hosting Provider": ['hosting_budget_shared', 'hosting_free', 'hosting_suspect'],
             "Bonuses (Reduce Score)": ['has_bimi', 'has_mta_sts'],
         }
