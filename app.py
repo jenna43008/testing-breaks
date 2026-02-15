@@ -461,7 +461,7 @@ def admin_view():
     config = st.session_state.config
     
     # Tabs for different config sections
-    tab1, tab2, tab3, tab4 = st.tabs(["⚖️ Scoring Weights", "🎯 Thresholds", "📋 Lists", "💾 Import/Export"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["⚖️ Scoring Weights", "🔗 Signal Combos", "🎯 Thresholds", "📋 Lists", "💾 Import/Export"])
     
     with tab1:
         st.header("⚖️ Scoring Weights")
@@ -511,6 +511,65 @@ def admin_view():
         config['weights'] = {**weights, **new_weights}
     
     with tab2:
+        st.header("🔗 Signal Combination Weights")
+        st.caption("Bonus points when two signals occur together. These amplify the base weights above.")
+        
+        combos = config.get('combos', DEFAULT_CONFIG.get('combos', {}))
+        
+        # Group combos by first signal prefix
+        combo_groups = {}
+        for combo_key, combo_val in sorted(combos.items()):
+            prefix = combo_key.split('+')[0] if '+' in combo_key else combo_key
+            # Map to friendly category names
+            if 'tld_variant' in prefix:
+                category = "TLD Variant Spoofing"
+            elif 'domain_brand' in prefix or 'brand_impersonation' in combo_key:
+                category = "Brand Impersonation"
+            elif 'suspicious_prefix' in prefix or 'suspicious_suffix' in prefix or 'tech_support' in prefix:
+                category = "Tech Support Scam Patterns"
+            elif 'status_' in prefix:
+                category = "HTTP Status Code"
+            elif 'hijack' in combo_key or 'phishing_infra' in prefix or 'doc_sharing' in prefix or 'phishing_js' in prefix:
+                category = "Hijacked Domain / Phishing"
+            elif 'hosting_' in prefix:
+                category = "Hosting Provider"
+            elif 'mx_' in prefix:
+                category = "MX Provider"
+            elif 'opaque' in prefix or 'access_restricted' in prefix or 'missing_trust' in prefix:
+                category = "Opaque Entity"
+            elif 'no_spf' in prefix or 'no_dkim' in prefix or 'no_dmarc' in prefix or 'spf_' in prefix or 'no_mx' in prefix:
+                category = "Email Auth"
+            elif 'typosquat' in prefix or 'domain_blacklisted' in prefix:
+                category = "Fraud / Blacklist"
+            elif 'app_store' in prefix:
+                category = "App Store (Legitimacy)"
+            else:
+                category = "Other"
+            
+            if category not in combo_groups:
+                combo_groups[category] = {}
+            combo_groups[category][combo_key] = combo_val
+        
+        new_combos = {}
+        for category in sorted(combo_groups.keys()):
+            group = combo_groups[category]
+            with st.expander(f"**{category}** ({len(group)} combos)", expanded=(category == "TLD Variant Spoofing")):
+                cols = st.columns(2)
+                for i, (combo_key, combo_val) in enumerate(sorted(group.items())):
+                    with cols[i % 2]:
+                        new_val = st.number_input(
+                            combo_key,
+                            min_value=-50,
+                            max_value=100,
+                            value=combo_val,
+                            step=1,
+                            key=f"combo_{combo_key}",
+                        )
+                        new_combos[combo_key] = new_val
+        
+        config['combos'] = {**combos, **new_combos}
+    
+    with tab3:
         st.header("🎯 Thresholds & Settings")
         
         col1, col2 = st.columns(2)
@@ -546,7 +605,7 @@ def admin_view():
             if new_password:
                 config['admin_password'] = new_password
     
-    with tab3:
+    with tab4:
         st.header("📋 Pattern Lists")
         
         st.subheader("Suspicious TLDs")
@@ -565,7 +624,7 @@ def admin_view():
         )
         config['protected_brands'] = [b.strip().lower() for b in protected_brands.splitlines() if b.strip()]
     
-    with tab4:
+    with tab5:
         st.header("💾 Import/Export Configuration")
         
         col1, col2 = st.columns(2)
