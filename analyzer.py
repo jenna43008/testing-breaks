@@ -4,6 +4,12 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 4.7 (Feb 2025)
+- Added TLD variant spoofing detection (gordondown.uk → gordondown.co.uk pattern)
+- Generates TLD variants (.uk↔.co.uk, .com, .io↔.com, etc.)
+- Compares content volume, email infrastructure, and business identity asymmetry
+- Flags when established business exists at variant TLD and signup domain is hollow
+
 VERSION: 4.6 (Feb 2025)
 - Added hosting provider detection (NS records, ASN lookup, PTR patterns)
 - Configurable scoring tiers: budget shared hosts, free hosting, suspect hosts
@@ -25,7 +31,7 @@ VERSION: 4.4 (Feb 2025)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "4.6"
+ANALYZER_VERSION = "4.7"
 
 import re
 import socket
@@ -240,6 +246,16 @@ class DomainApprovalResult:
     app_store_android_packages: str = ""       # Semicolon-separated Android packages
     app_store_methods_found: str = ""          # Which detection methods found apps
     app_store_summary: str = ""                # Human-readable summary
+    
+    # === TLD VARIANT SPOOFING DETECTION ===
+    tld_variant_detected: bool = False           # A TLD variant with established presence was found
+    tld_variant_domain: str = ""                 # The established variant domain (e.g., "gordondown.co.uk")
+    tld_variant_has_content: bool = False         # Variant has substantive website content
+    tld_variant_has_email_infra: bool = False     # Variant has email auth configured (SPF/DKIM/MX)
+    tld_variant_domain_age_days: int = -1         # Variant domain age in days
+    tld_variant_content_words: int = 0            # Word count on variant's page
+    tld_variant_signup_content_words: int = 0     # Word count on signup domain's page
+    tld_variant_summary: str = ""                 # Human-readable summary of the comparison
     
     # === HOSTING PROVIDER DETECTION ===
     hosting_provider: str = ""                  # Detected provider name (e.g., "Hostinger", "GoDaddy")
@@ -1136,6 +1152,414 @@ def check_domain_name_patterns(domain: str) -> Dict:
 
 
 # ============================================================================
+# TLD VARIANT SPOOFING DETECTION
+# ============================================================================
+# Detects when a signup domain is a TLD variant of an established business.
+# Example: gordondown.uk spoofing gordondown.co.uk
+# The .uk/.co.uk pair is the most common UK spoofing vector, but we also
+# check .com and other high-value TLD pairs.
+# ============================================================================
+
+# TLD variant pairs to check — order matters: (signup_suffix, variant_suffix)
+# We generate variants by stripping the signup TLD and appending the variant TLD.
+# These are checked bidirectionally via the generation logic below.
+UK_TLD_VARIANTS = [
+    ('.uk', '.co.uk'),
+    ('.co.uk', '.uk'),
+    ('.uk', '.org.uk'),
+    ('.org.uk', '.uk'),
+]
+
+# Always-check TLD variants (appended to base name regardless of signup TLD)
+UNIVERSAL_TLD_VARIANTS = ['.com']
+
+# Additional pairs for non-UK domains
+EXTRA_TLD_VARIANTS = [
+    ('.co', '.com'),
+    ('.io', '.com'),
+    ('.net', '.com'),
+    ('.org', '.com'),
+    ('.app', '.com'),
+]
+
+# Minimum word count for a page to be considered "substantive"
+VARIANT_CONTENT_THRESHOLD = 80
+# Minimum word count disparity ratio (variant must have N× more words)
+VARIANT_CONTENT_RATIO = 4
+# Minimum email auth signals on variant for asymmetry flag
+VARIANT_EMAIL_AUTH_MIN = 2  # e.g., SPF + MX, or SPF + DKIM
+
+
+def _extract_base_and_tld(domain: str) -> Tuple[str, str]:
+    """
+    Extract the registrable base name and its effective TLD.
+    
+    Examples:
+        gordondown.uk       → ("gordondown", ".uk")
+        gordondown.co.uk    → ("gordondown", ".co.uk")
+        example.com         → ("example", ".com")
+        mysite.org.uk       → ("mysite", ".org.uk")
+    """
+    domain = domain.lower().strip().rstrip('.')
+    
+    # Check compound TLDs first (order: longest first)
+    compound_tlds = [
+        '.co.uk', '.org.uk', '.ac.uk', '.gov.uk', '.net.uk', '.me.uk',
+        '.co.nz', '.co.za', '.co.in', '.co.jp', '.co.kr',
+        '.com.au', '.com.br', '.com.mx', '.com.ar',
+        '.org.au', '.net.au',
+    ]
+    for ctld in compound_tlds:
+        if domain.endswith(ctld):
+            base = domain[:-len(ctld)]
+            if base and '.' not in base:  # Only handle second-level domains
+                return base, ctld
+            elif '.' in base:
+                # Subdomain case — take last label before the compound TLD
+                return base.rsplit('.', 1)[-1], ctld
+    
+    # Simple TLD
+    parts = domain.rsplit('.', 1)
+    if len(parts) == 2:
+        base = parts[0]
+        tld = '.' + parts[1]
+        # Handle subdomain case
+        if '.' in base:
+            base = base.rsplit('.', 1)[-1]
+        return base, tld
+    
+    return domain, ""
+
+
+def _generate_tld_variants(domain: str) -> List[str]:
+    """
+    Generate TLD variant domains to check for the given signup domain.
+    
+    For gordondown.uk → ["gordondown.co.uk", "gordondown.com"]
+    For gordondown.co.uk → ["gordondown.uk", "gordondown.com"]
+    For example.com → ["example.co.uk", "example.net", "example.org"] (if .com)
+    """
+    base, tld = _extract_base_and_tld(domain)
+    if not base or not tld:
+        return []
+    
+    variants = set()
+    
+    # Check UK-specific TLD pairs
+    for signup_tld, variant_tld in UK_TLD_VARIANTS:
+        if tld == signup_tld:
+            candidate = base + variant_tld
+            if candidate != domain.lower():
+                variants.add(candidate)
+    
+    # Check other TLD pairs
+    for signup_tld, variant_tld in EXTRA_TLD_VARIANTS:
+        if tld == signup_tld:
+            candidate = base + variant_tld
+            if candidate != domain.lower():
+                variants.add(candidate)
+    
+    # Always check .com if the signup domain isn't .com
+    if tld != '.com':
+        candidate = base + '.com'
+        if candidate != domain.lower():
+            variants.add(candidate)
+    
+    # If the signup IS .com, check .co.uk (common UK business TLD)
+    if tld == '.com':
+        variants.add(base + '.co.uk')
+    
+    return list(variants)
+
+
+def _count_page_words(content: bytes) -> int:
+    """Count words in HTML content (strip tags first)."""
+    if not content:
+        return 0
+    try:
+        text = content.decode('utf-8', errors='ignore')
+    except Exception:
+        text = str(content)
+    
+    # Remove script/style blocks
+    text = re.sub(r'<script[^>]*>.*?</script>', ' ', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<style[^>]*>.*?</style>', ' ', text, flags=re.DOTALL | re.IGNORECASE)
+    # Remove HTML tags
+    text = re.sub(r'<[^>]+>', ' ', text)
+    # Remove HTML entities
+    text = re.sub(r'&[a-zA-Z]+;', ' ', text)
+    text = re.sub(r'&#?\w+;', ' ', text)
+    # Collapse whitespace and count
+    words = text.split()
+    # Filter out very short tokens (likely artifacts)
+    words = [w for w in words if len(w) >= 2]
+    return len(words)
+
+
+def _check_variant_email_infra(variant_domain: str) -> Dict:
+    """Quick email infrastructure check on a variant domain."""
+    result = {
+        "spf_exists": False,
+        "dkim_exists": False,
+        "mx_exists": False,
+        "dmarc_exists": False,
+        "auth_count": 0,
+    }
+    
+    # SPF
+    _, spf_exists, _ = get_spf(variant_domain)
+    result["spf_exists"] = spf_exists
+    
+    # MX
+    mx_exists, mx_records, _ = get_mx(variant_domain)
+    result["mx_exists"] = mx_exists
+    
+    # DMARC
+    _, dmarc_exists, _ = get_dmarc(variant_domain)
+    result["dmarc_exists"] = dmarc_exists
+    
+    # DKIM (quick check — just try a few common selectors)
+    dkim_exists, _ = check_dkim(variant_domain)
+    result["dkim_exists"] = dkim_exists
+    
+    result["auth_count"] = sum([
+        result["spf_exists"],
+        result["dkim_exists"],
+        result["mx_exists"],
+        result["dmarc_exists"],
+    ])
+    
+    return result
+
+
+def _check_variant_content_indicators(content: bytes) -> Dict:
+    """Check for business legitimacy indicators in variant page content."""
+    result = {
+        "has_navigation": False,
+        "has_contact_info": False,
+        "has_company_number": False,
+        "has_vat_number": False,
+        "has_professional_membership": False,
+        "has_multiple_pages": False,
+        "indicator_count": 0,
+    }
+    
+    if not content:
+        return result
+    
+    text = content.decode('utf-8', errors='ignore').lower()
+    
+    # Navigation links (suggests multi-page site)
+    nav_patterns = [
+        r'<nav\b', r'class="nav', r'class="menu', r'id="menu',
+        r'<ul[^>]*class="[^"]*nav', r'role="navigation"',
+    ]
+    result["has_navigation"] = any(re.search(p, text) for p in nav_patterns)
+    
+    # Multiple internal links (more than just a placeholder)
+    internal_links = re.findall(r'<a\s+[^>]*href=["\'](?!/|#|http|mailto|tel)[^"\']+["\']', text)
+    relative_links = re.findall(r'<a\s+[^>]*href=["\']/[^"\']+["\']', text)
+    result["has_multiple_pages"] = (len(internal_links) + len(relative_links)) >= 3
+    
+    # Contact information
+    contact_patterns = [
+        r'\b\d{3,5}\s?\d{3,4}\s?\d{3,4}\b',  # Phone numbers
+        r'\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b',  # Email addresses
+        r'\bcontact\s*us\b', r'\bget\s*in\s*touch\b',
+    ]
+    result["has_contact_info"] = any(re.search(p, text) for p in contact_patterns)
+    
+    # Company registration number (UK Companies House format, or generic)
+    company_patterns = [
+        r'company\s*(?:number|no\.?|registration|reg\.?)\s*[:.]?\s*\d{6,8}',
+        r'registered\s*(?:in\s+)?(?:england|wales|scotland)\b',
+        r'companies\s*house\b',
+    ]
+    result["has_company_number"] = any(re.search(p, text) for p in company_patterns)
+    
+    # VAT number
+    vat_patterns = [
+        r'vat\s*(?:number|no\.?|reg\.?)\s*[:.]?\s*(?:gb)?\s*\d{9}',
+        r'vat\s*[:.]?\s*(?:gb)?\s*\d{3}\s*\d{4}\s*\d{2}',
+    ]
+    result["has_vat_number"] = any(re.search(p, text) for p in vat_patterns)
+    
+    # Professional memberships (accounting, legal, etc.)
+    membership_patterns = [
+        r'\bicaew\b', r'\bacca\b', r'\bciot\b', r'\bcima\b',  # Accounting
+        r'\bsra\b', r'\blaw\s*society\b',  # Legal
+        r'\brics\b', r'\briba\b',  # Property/Architecture
+        r'\bfca\b', r'\bcertified\s+accountant', r'\bchartered\b',
+    ]
+    result["has_professional_membership"] = any(re.search(p, text) for p in membership_patterns)
+    
+    result["indicator_count"] = sum([
+        result["has_navigation"],
+        result["has_contact_info"],
+        result["has_company_number"],
+        result["has_vat_number"],
+        result["has_professional_membership"],
+        result["has_multiple_pages"],
+    ])
+    
+    return result
+
+
+def check_tld_variant_spoofing(domain: str, signup_content: bytes = None, 
+                                 timeout: float = 8.0) -> Dict:
+    """
+    Check if the signup domain is a TLD variant of an established business domain.
+    
+    This catches the gordondown.uk-spoofing-gordondown.co.uk pattern:
+    - Generate TLD variants of the signup domain
+    - Check if any variant resolves to an established business
+    - Compare content and email infrastructure asymmetry
+    
+    Returns dict with detection results.
+    """
+    result = {
+        "tld_variant_detected": False,
+        "variant_domain": "",
+        "variant_has_content": False,
+        "variant_has_email_infra": False,
+        "variant_domain_age_days": -1,
+        "variant_content_words": 0,
+        "signup_content_words": 0,
+        "summary": "",
+    }
+    
+    # Count words on signup domain's page
+    signup_words = _count_page_words(signup_content) if signup_content else 0
+    result["signup_content_words"] = signup_words
+    
+    # Generate TLD variants
+    variants = _generate_tld_variants(domain)
+    if not variants:
+        return result
+    
+    best_variant = None
+    best_score = 0  # Track the "most established" variant
+    
+    for variant_domain in variants:
+        # Step 1: DNS resolution — does the variant exist?
+        try:
+            socket.gethostbyname(variant_domain)
+        except Exception:
+            continue  # Variant doesn't resolve — skip
+        
+        # Step 2: Fetch variant's page content
+        variant_content = None
+        if REQUESTS_AVAILABLE:
+            variant_http = follow_redirects(f"https://{variant_domain}", timeout, fetch_content=True)
+            if variant_http["ok"]:
+                variant_content = variant_http["content"]
+            else:
+                # Try HTTP if HTTPS fails
+                variant_http = follow_redirects(f"http://{variant_domain}", timeout, fetch_content=True)
+                if variant_http["ok"]:
+                    variant_content = variant_http["content"]
+        
+        variant_words = _count_page_words(variant_content)
+        
+        # Step 3: Check email infrastructure on variant
+        variant_email = _check_variant_email_infra(variant_domain)
+        
+        # Step 4: Check content legitimacy indicators
+        variant_indicators = _check_variant_content_indicators(variant_content)
+        
+        # Step 5: Calculate asymmetry score
+        # Higher = more likely the variant is the real business and signup is the spoof
+        asymmetry_score = 0
+        
+        # Content volume asymmetry
+        if variant_words >= VARIANT_CONTENT_THRESHOLD:
+            asymmetry_score += 2
+            if signup_words < 50:
+                asymmetry_score += 3  # Huge disparity — variant has content, signup is hollow
+            elif variant_words >= signup_words * VARIANT_CONTENT_RATIO:
+                asymmetry_score += 2  # Significant disparity
+        
+        # Email infrastructure asymmetry
+        if variant_email["auth_count"] >= VARIANT_EMAIL_AUTH_MIN:
+            asymmetry_score += 2
+            if variant_email["auth_count"] >= 3:
+                asymmetry_score += 1  # Well-configured email
+        
+        # Business legitimacy indicators
+        if variant_indicators["indicator_count"] >= 2:
+            asymmetry_score += 2
+        if variant_indicators["indicator_count"] >= 4:
+            asymmetry_score += 1
+        
+        # Company registration is a very strong signal
+        if variant_indicators["has_company_number"]:
+            asymmetry_score += 2
+        
+        # Track best variant
+        if asymmetry_score > best_score:
+            best_score = asymmetry_score
+            best_variant = {
+                "domain": variant_domain,
+                "words": variant_words,
+                "email": variant_email,
+                "indicators": variant_indicators,
+                "score": asymmetry_score,
+                "content": variant_content,
+            }
+    
+    # Decision: flag if asymmetry score is high enough
+    # Threshold: score >= 5 means clear asymmetry (established variant vs hollow signup)
+    DETECTION_THRESHOLD = 5
+    
+    if best_variant and best_variant["score"] >= DETECTION_THRESHOLD:
+        v = best_variant
+        result["tld_variant_detected"] = True
+        result["variant_domain"] = v["domain"]
+        result["variant_has_content"] = v["words"] >= VARIANT_CONTENT_THRESHOLD
+        result["variant_has_email_infra"] = v["email"]["auth_count"] >= VARIANT_EMAIL_AUTH_MIN
+        result["variant_content_words"] = v["words"]
+        
+        # Build human-readable summary
+        summary_parts = []
+        summary_parts.append(f"TLD VARIANT: {v['domain']}")
+        
+        # Content comparison
+        summary_parts.append(f"variant has {v['words']} words vs signup has {signup_words} words")
+        
+        # Email infra
+        email_signals = []
+        if v["email"]["spf_exists"]:
+            email_signals.append("SPF")
+        if v["email"]["dkim_exists"]:
+            email_signals.append("DKIM")
+        if v["email"]["mx_exists"]:
+            email_signals.append("MX")
+        if v["email"]["dmarc_exists"]:
+            email_signals.append("DMARC")
+        if email_signals:
+            summary_parts.append(f"variant email auth: {'+'.join(email_signals)}")
+        
+        # Business indicators
+        biz_signals = []
+        if v["indicators"]["has_company_number"]:
+            biz_signals.append("company reg")
+        if v["indicators"]["has_vat_number"]:
+            biz_signals.append("VAT")
+        if v["indicators"]["has_professional_membership"]:
+            biz_signals.append("professional body")
+        if v["indicators"]["has_navigation"]:
+            biz_signals.append("full site")
+        if v["indicators"]["has_contact_info"]:
+            biz_signals.append("contact info")
+        if biz_signals:
+            summary_parts.append(f"variant signals: {', '.join(biz_signals)}")
+        
+        result["summary"] = " → ".join(summary_parts)
+    
+    return result
+
+
+# ============================================================================
 # WEB FUNCTIONS
 # ============================================================================
 
@@ -1763,6 +2187,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.domain_impersonates_brand:
         all_issues.append(f"DOMAIN IMPERSONATES '{res.domain_impersonates_brand.upper()}' → Brand name in domain; classic tech support scam pattern")
     
+    # === TLD VARIANT SPOOFING ===
+    if res.tld_variant_detected:
+        all_issues.append(f"TLD VARIANT SPOOF ({res.tld_variant_domain}) → Established business exists at variant TLD; signup domain appears to be impersonating it. {res.tld_variant_summary}")
+    
     if res.has_suspicious_prefix:
         all_issues.append(f"SUSPICIOUS PREFIX '{res.suspicious_prefix_found}' → Common phishing/scam domain pattern")
     
@@ -2153,6 +2581,11 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.domain_impersonates_brand:
         score += weights.get('domain_brand_impersonation', 25)
         signals.add("domain_brand_impersonation")
+    
+    # === TLD VARIANT SPOOFING DETECTION ===
+    if res.tld_variant_detected:
+        score += weights.get('tld_variant_spoofing', 30)
+        signals.add("tld_variant_spoofing")
     
     # E-commerce / Retail scam indicators
     if res.is_retail_scam_tld:
@@ -2557,6 +2990,22 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.app_store_summary = " | ".join(app_result.get("summary_lines", []))
         except Exception:
             pass  # Non-critical — don't break analysis if app store check fails
+    
+    # TLD Variant Spoofing Detection
+    # Check if signup domain is a TLD variant of an established business
+    # e.g., gordondown.uk spoofing gordondown.co.uk
+    try:
+        tld_variant = check_tld_variant_spoofing(domain, signup_content=content, timeout=timeout)
+        res.tld_variant_detected = tld_variant["tld_variant_detected"]
+        res.tld_variant_domain = tld_variant["variant_domain"]
+        res.tld_variant_has_content = tld_variant["variant_has_content"]
+        res.tld_variant_has_email_infra = tld_variant["variant_has_email_infra"]
+        res.tld_variant_domain_age_days = tld_variant["variant_domain_age_days"]
+        res.tld_variant_content_words = tld_variant["variant_content_words"]
+        res.tld_variant_signup_content_words = tld_variant["signup_content_words"]
+        res.tld_variant_summary = tld_variant["summary"]
+    except Exception:
+        pass  # Non-critical — don't break analysis if TLD variant check fails
     
     # RDAP
     if check_rdap:
