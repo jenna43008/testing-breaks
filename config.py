@@ -377,6 +377,22 @@ DEFAULT_CONFIG = {
         "mx_disposable+hosting_budget_shared": 8,        # Disposable MX + budget host
         "mx_selfhosted+no_dkim": 6,                      # Self-hosted MX + no DKIM
         "mx_selfhosted+hosting_budget_shared": 6,        # Self-hosted MX + budget host
+        
+        # === PHISHING MAIL TEMPLATE COMBOS (v5.1 - from Swedish invoice phish analysis) ===
+        # Cookie-cutter phishing infrastructure: mail.{domain} + no DKIM + DMARC p=none + no PTR
+        "mx_mail_prefix+no_dkim": 5,                     # mail.{domain} template + no DKIM
+        "mx_mail_prefix+no_ptr": 4,                      # mail.{domain} template + no reverse DNS
+        "mx_mail_prefix+no_dkim+dmarc_p_none": 8,        # Triple: phishing mail server template
+        "mx_mail_prefix+no_dkim+dmarc_p_none+no_ptr": 10,  # FULL phishing template fingerprint
+        "spf_no_external_includes+mx_selfhosted": 5,     # No real email provider anywhere
+        "spf_no_external_includes+mx_mail_prefix": 5,    # Self-only SPF + mail.{domain} template
+        
+        # === PLATFORM HOSTING COMBOS (v5.1) ===
+        # Dev platforms (Render, Netlify, Vercel) with self-hosted email = phishing setup
+        "hosting_platform+mx_selfhosted": 6,             # Platform hosting + self-hosted MX
+        "hosting_platform+mx_mail_prefix": 8,            # Platform hosting + mail.{domain} template
+        "hosting_platform+no_dkim": 5,                   # Platform hosting + no DKIM
+        "hosting_platform+mx_selfhosted+no_dkim": 10,   # Platform + self MX + no DKIM
     },
     
     "suspicious_tlds": [
@@ -584,6 +600,59 @@ DEFAULT_CONFIG = {
             "asn_numbers": [45839],
             "asn_org_patterns": ["shinjiru"],
             "ptr_patterns": ["shinjiru"],
+        },
+        
+        # =============================================================
+        # DEVELOPER PLATFORM HOSTING (type: "platform")
+        # Legitimate dev platforms but heavily abused for phishing.
+        # Free tiers allow rapid domain setup with HTTPS.
+        # These platforms serve their OWN AASA/asset-links files for
+        # all custom domains, causing false app-store-presence positives.
+        # =============================================================
+        "render": {
+            "name": "Render",
+            "type": "platform",
+            "ns_patterns": [],
+            "asn_numbers": [397273],
+            "asn_org_patterns": ["render"],
+            "ptr_patterns": ["onrender.com"],
+            "known_ips": ["216.24.57.1"],
+        },
+        "netlify": {
+            "name": "Netlify",
+            "type": "platform",
+            "ns_patterns": ["dns1.p01.nsone.net"],
+            "asn_numbers": [395747],
+            "asn_org_patterns": ["netlify"],
+            "ptr_patterns": ["netlify"],
+            "known_ips": [],
+        },
+        "vercel": {
+            "name": "Vercel",
+            "type": "platform",
+            "ns_patterns": [],
+            "asn_numbers": [209242],
+            "asn_org_patterns": ["vercel"],
+            "ptr_patterns": ["vercel"],
+            "known_ips": ["76.76.21.21"],
+        },
+        "railway": {
+            "name": "Railway",
+            "type": "platform",
+            "ns_patterns": [],
+            "asn_numbers": [],
+            "asn_org_patterns": ["railway"],
+            "ptr_patterns": ["railway.app"],
+            "known_ips": [],
+        },
+        "fly_io": {
+            "name": "Fly.io",
+            "type": "platform",
+            "ns_patterns": [],
+            "asn_numbers": [40509],
+            "asn_org_patterns": ["fly.io"],
+            "ptr_patterns": ["fly.dev"],
+            "known_ips": [],
         },
     },
     
