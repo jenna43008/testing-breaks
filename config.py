@@ -247,6 +247,7 @@ DEFAULT_CONFIG = {
         "tld_variant_spoofing+parking_page": 18,            # Parking page + TLD variant
         "tld_variant_spoofing+missing_trust_signals": 15,   # No corporate pages + TLD variant
         "tld_variant_spoofing+hosting_budget_shared": 12,   # Budget host + TLD variant
+        "tld_variant_spoofing+mx_selfhosted": 15,            # Self-hosted MX + TLD variant
         
         # Brand impersonation in domain name = VERY HIGH risk combos
         "domain_brand_impersonation+credential_form": 30,
