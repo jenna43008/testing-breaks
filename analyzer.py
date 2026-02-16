@@ -4,6 +4,12 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 5.2 (Feb 2025)
+- Added brand + spoofing keyword detection (easyjetconnect, amazonverify, etc.)
+- Expanded IMPERSONATED_BRANDS to include airlines, travel, banks, shipping, telecoms
+- New signal: brand_spoofing_keyword — fires when brand name + phishing keyword detected
+- Brand+keyword scores on top of domain_brand_impersonation for amplified risk
+
 VERSION: 4.7 (Feb 2025)
 - Added TLD variant spoofing detection (gordondown.uk → gordondown.co.uk pattern)
 - Generates TLD variants (.uk↔.co.uk, .com, .io↔.com, etc.)
@@ -31,7 +37,7 @@ VERSION: 4.4 (Feb 2025)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "4.7"
+ANALYZER_VERSION = "5.2"
 
 import re
 import socket
@@ -158,6 +164,8 @@ class DomainApprovalResult:
     is_tech_support_tld: bool = False
     domain_impersonates_brand: str = ""  # Brand found in domain name
     domain_pattern_risk: str = ""  # Summary of suspicious patterns
+    brand_spoofing_keyword: str = ""     # Spoofing keyword found with brand (e.g., "connect" in easyjetconnect)
+    brand_plus_keyword_domain: bool = False  # True when brand + spoofing keyword detected
     
     # === WEB: TLS/CERT ===
     https_valid: bool = False
@@ -437,7 +445,8 @@ BUSINESS_IDENTITY_PATTERNS = [
 ]
 
 # Expanded brand list for domain-name impersonation detection
-# Includes: ISPs, security software, streaming, tech companies, utilities
+# Includes: ISPs, security software, streaming, tech companies, utilities,
+# airlines, travel, shipping, financial services, e-commerce
 IMPERSONATED_BRANDS = [
     # Major tech companies (already in content check)
     'paypal', 'amazon', 'microsoft', 'apple', 'google', 'facebook', 'netflix',
@@ -472,6 +481,97 @@ IMPERSONATED_BRANDS = [
     
     # Other commonly impersonated
     'geeksquad', 'bestbuy', 'costco', 'walmart', 'target',
+    
+    # === Airlines (high-value phishing targets — booking/payment data) ===
+    'easyjet', 'ryanair', 'british airways', 'britishairways', 'emirates',
+    'lufthansa', 'airfrance', 'klm', 'southwest', 'southwestairlines',
+    'delta', 'united', 'american airlines', 'americanairlines',
+    'jetblue', 'spirit', 'frontier airlines', 'allegiant', 'alaska airlines',
+    'wizzair', 'vueling', 'eurowings', 'norwegian', 'tui', 'jet2',
+    'qantas', 'virgin atlantic', 'virginatlantic', 'aer lingus', 'aerlingus',
+    'turkish airlines', 'turkishairlines', 'cathay pacific', 'cathaypacific',
+    'singapore airlines', 'singaporeairlines', 'etihad', 'qatar airways',
+    'qatarairways', 'airindia',
+    
+    # === Travel / Booking (phishing targets — payment/personal data) ===
+    'booking', 'expedia', 'airbnb', 'tripadvisor', 'hotels', 'trivago',
+    'kayak', 'skyscanner', 'priceline', 'orbitz', 'travelocity',
+    'lastminute', 'trainline', 'eurostar', 'flixbus',
+    
+    # === Shipping / Logistics (delivery phishing — customs fees, tracking) ===
+    'fedex', 'usps', 'ups', 'dhl', 'royalmail', 'hermes', 'evri',
+    'yodel', 'dpd', 'parcelforce', 'postnl', 'laposte', 'correos',
+    'deutschepost', 'aramex', 'maersk',
+    
+    # === Banks / Financial (high-value: account access, payments) ===
+    'bankofamerica', 'chase', 'wellsfargo', 'citibank', 'hsbc',
+    'barclays', 'lloyds', 'natwest', 'santander', 'halifax',
+    'nationwide', 'tsb', 'monzo', 'revolut', 'starling',
+    'capitalone', 'americanexpress', 'amex', 'discover',
+    'goldmansachs', 'morganstanley', 'schwab', 'fidelity', 'vanguard',
+    'robinhood', 'coinbase', 'binance', 'kraken', 'blockchain', 'metamask',
+    
+    # === Payment / Fintech ===
+    'stripe', 'square', 'venmo', 'zelle', 'cashapp', 'wise', 'transferwise',
+    'klarna', 'afterpay', 'affirm', 'clearpay',
+    
+    # === E-commerce / Retail ===
+    'ebay', 'alibaba', 'aliexpress', 'etsy', 'shopify', 'wish',
+    'wayfair', 'asos', 'zara', 'shein', 'temu',
+    
+    # === Telecoms ===
+    'vodafone', 'tmobile', 'sprint', 'three', 'orange', 'telefonica',
+    'bt', 'ee', 'o2', 'giffgaff', 'sky', 'virgin media', 'virginmedia',
+    
+    # === Government / Tax (seasonal phishing spikes) ===
+    'hmrc', 'irs', 'dvla', 'govuk',
+]
+
+# ============================================================================
+# BRAND SPOOFING KEYWORDS
+# ============================================================================
+# When a known brand name appears in a domain COMBINED with one of these
+# keywords, the risk is significantly higher. These keywords mimic legitimate
+# brand services/portals (easyjetconnect.com, amazonverify.com, etc.)
+#
+# Scored as a separate signal on top of domain_brand_impersonation.
+# ============================================================================
+
+BRAND_SPOOFING_KEYWORDS = [
+    # Connection / Access
+    'connect', 'connected', 'connection', 'linking', 'link',
+    # Authentication / Verification
+    'login', 'logon', 'signin', 'signup', 'signon',
+    'verify', 'verification', 'validate', 'confirm', 'auth',
+    # Account / Portal
+    'account', 'accounts', 'myaccount', 'portal', 'dashboard',
+    'member', 'members', 'membership', 'profile', 'user',
+    # Security / Trust
+    'secure', 'security', 'safe', 'protect', 'protection', 'shield',
+    'trust', 'trusted', 'official', 'verified',
+    # Support / Service
+    'support', 'helpdesk', 'help', 'service', 'services', 'care',
+    'customer', 'contact', 'assist', 'center', 'centre',
+    # Updates / Billing
+    'update', 'upgrade', 'renew', 'renewal', 'billing', 'payment',
+    'pay', 'invoice', 'refund', 'claim', 'reward', 'rewards',
+    # Tracking / Delivery (shipping brand phishing)
+    'track', 'tracking', 'deliver', 'delivery', 'parcel', 'package',
+    'shipment', 'shipping', 'dispatch', 'customs', 'collect',
+    # Booking / Travel (airline/travel brand phishing)
+    'book', 'booking', 'bookings', 'reserve', 'reservation',
+    'flight', 'flights', 'checkin', 'boardingpass', 'itinerary',
+    # Notifications / Communication
+    'notify', 'notification', 'notifications', 'alert', 'alerts',
+    'message', 'messages', 'inbox', 'mail', 'email',
+    # Management / Admin
+    'manage', 'manager', 'admin', 'panel', 'control',
+    # App / Digital
+    'app', 'apps', 'online', 'web', 'digital', 'cloud',
+    # Action / Download
+    'download', 'install', 'setup', 'activate', 'activation',
+    # Status
+    'status', 'info', 'information', 'notice', 'advisory',
 ]
 
 # Content-based brand detection (for page content scanning)
@@ -1042,6 +1142,7 @@ def check_domain_name_patterns(domain: str) -> Dict:
     2. Suspicious suffixes: account, setup, cancellation, support, etc.
     3. Tech support scam TLDs: .support, .tech, .help, etc.
     4. Brand names embedded in domain: spectrum, verizon, norton, etc.
+    5. Brand + spoofing keyword: easyjetconnect, amazonverify, etc. (v5.2)
     
     Returns dict with detection results.
     """
@@ -1052,6 +1153,8 @@ def check_domain_name_patterns(domain: str) -> Dict:
         "suspicious_suffix": "",
         "is_tech_support_tld": False,
         "domain_impersonates_brand": "",
+        "brand_spoofing_keyword": "",
+        "brand_plus_keyword": False,
         "patterns_found": [],
         "risk_score_addition": 0,
     }
@@ -1137,6 +1240,8 @@ def check_domain_name_patterns(domain: str) -> Dict:
     
     # === CHECK 4: Brand impersonation in domain name ===
     # This catches domains like "app-spectrum.com", "nortonaccount.com"
+    matched_brand = ""
+    matched_brand_normalized = ""
     for brand in IMPERSONATED_BRANDS:
         brand_normalized = brand.replace(' ', '').lower()
         
@@ -1148,14 +1253,49 @@ def check_domain_name_patterns(domain: str) -> Dict:
         if brand_normalized in normalized:
             # Make sure it's not the legitimate domain
             legitimate = [f"{brand_normalized}.com", f"{brand_normalized}.net", 
-                         f"{brand_normalized}.org", f"{brand_normalized}.co"]
+                         f"{brand_normalized}.org", f"{brand_normalized}.co",
+                         f"{brand_normalized}.co.uk", f"{brand_normalized}.com.au",
+                         f"{brand_normalized}.eu", f"{brand_normalized}.de",
+                         f"{brand_normalized}.fr", f"{brand_normalized}.io"]
             if domain_lower not in legitimate:
                 # Make sure the domain isn't just a longer legit name
                 # e.g., "spectrum.net" vs "spectrumaccount.com"
                 if normalized != brand_normalized:
+                    matched_brand = brand
+                    matched_brand_normalized = brand_normalized
                     result["domain_impersonates_brand"] = brand
                     result["patterns_found"].append(f"brand:{brand}")
                     result["risk_score_addition"] += 20
+                    break
+    
+    # === CHECK 5: Brand + Spoofing Keyword Detection (v5.2) ===
+    # If a brand was found, check if the remaining text is a spoofing keyword.
+    # This catches easyjetconnect.com, amazonverify.net, chaselogin.com, etc.
+    # These are MUCH higher risk than a brand name alone because they specifically
+    # mimic legitimate brand service names/subdomains.
+    if matched_brand_normalized:
+        # Extract the non-brand portion of the domain name
+        brand_pos = normalized.find(matched_brand_normalized)
+        if brand_pos >= 0:
+            before_brand = normalized[:brand_pos]
+            after_brand = normalized[brand_pos + len(matched_brand_normalized):]
+            
+            # Check both portions for spoofing keywords
+            for keyword in BRAND_SPOOFING_KEYWORDS:
+                keyword_lower = keyword.lower()
+                # Check after the brand: easyjet[connect], amazon[verify]
+                if after_brand and (after_brand == keyword_lower or after_brand.startswith(keyword_lower)):
+                    result["brand_spoofing_keyword"] = keyword
+                    result["brand_plus_keyword"] = True
+                    result["patterns_found"].append(f"brand_keyword:{matched_brand}+{keyword}")
+                    result["risk_score_addition"] += 15  # Additional on top of brand impersonation
+                    break
+                # Check before the brand: [my]paypal, [secure]chase
+                if before_brand and (before_brand == keyword_lower or before_brand.endswith(keyword_lower)):
+                    result["brand_spoofing_keyword"] = keyword
+                    result["brand_plus_keyword"] = True
+                    result["patterns_found"].append(f"brand_keyword:{keyword}+{matched_brand}")
+                    result["risk_score_addition"] += 15
                     break
     
     return result
@@ -2303,7 +2443,12 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
     if res.domain_impersonates_brand:
-        all_issues.append(f"DOMAIN IMPERSONATES '{res.domain_impersonates_brand.upper()}' → Brand name in domain; classic tech support scam pattern")
+        if res.brand_plus_keyword_domain:
+            all_issues.append(
+                f"BRAND + SPOOFING KEYWORD '{res.domain_impersonates_brand.upper()}' + '{res.brand_spoofing_keyword}' "
+                f"→ Domain mimics legitimate brand service/portal (e.g., {res.domain_impersonates_brand}connect.com = phishing)")
+        else:
+            all_issues.append(f"DOMAIN IMPERSONATES '{res.domain_impersonates_brand.upper()}' → Brand name in domain; classic tech support scam pattern")
     
     # === TLD VARIANT SPOOFING ===
     if res.tld_variant_detected:
@@ -2769,6 +2914,13 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         score += weights.get('domain_brand_impersonation', 25)
         signals.add("domain_brand_impersonation")
     
+    # Brand + spoofing keyword: easyjetconnect, amazonverify, chaselogin, etc.
+    # This is a much stronger signal than brand name alone — it specifically
+    # mimics legitimate brand service names/subdomains
+    if res.brand_plus_keyword_domain:
+        score += weights.get('brand_spoofing_keyword', 20)
+        signals.add("brand_spoofing_keyword")
+    
     # === TLD VARIANT SPOOFING DETECTION ===
     if res.tld_variant_detected:
         score += weights.get('tld_variant_spoofing', 30)
@@ -3024,6 +3176,8 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.suspicious_suffix_found = domain_patterns["suspicious_suffix"]
     res.is_tech_support_tld = domain_patterns["is_tech_support_tld"]
     res.domain_impersonates_brand = domain_patterns["domain_impersonates_brand"]
+    res.brand_spoofing_keyword = domain_patterns["brand_spoofing_keyword"]
+    res.brand_plus_keyword_domain = domain_patterns["brand_plus_keyword"]
     res.domain_pattern_risk = ";".join(domain_patterns["patterns_found"])
     
     # SPF
