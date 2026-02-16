@@ -4,29 +4,29 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
-VERSION: 5.2 (Feb 2025)
+VERSION: 5.2 (Feb 2026)
 - Added brand + spoofing keyword detection (easyjetconnect, amazonverify, etc.)
 - Expanded IMPERSONATED_BRANDS to include airlines, travel, banks, shipping, telecoms
 - New signal: brand_spoofing_keyword — fires when brand name + phishing keyword detected
 - Brand+keyword scores on top of domain_brand_impersonation for amplified risk
 
-VERSION: 4.7 (Feb 2025)
+VERSION: 4.7 (Feb 2026)
 - Added TLD variant spoofing detection (gordondown.uk → gordondown.co.uk pattern)
 - Generates TLD variants (.uk↔.co.uk, .com, .io↔.com, etc.)
 - Compares content volume, email infrastructure, and business identity asymmetry
 - Flags when established business exists at variant TLD and signup domain is hollow
 
-VERSION: 4.6 (Feb 2025)
+VERSION: 4.6 (Feb 2026)
 - Added hosting provider detection (NS records, ASN lookup, PTR patterns)
 - Configurable scoring tiers: budget shared hosts, free hosting, suspect hosts
 - ASN lookup via Team Cymru DNS for reliable network identification
 
-VERSION: 4.5 (Feb 2025)
+VERSION: 4.5 (Feb 2026)
 - Added app store presence detection (iOS AASA, Android Asset Links, page scan, iTunes API)
 - App store presence as legitimacy bonus signal (rare for spammers to maintain real apps)
 - Confidence-tiered scoring: high/medium/low app presence → scaled bonus
 
-VERSION: 4.4 (Feb 2025)
+VERSION: 4.4 (Feb 2026)
 - Added explicit TLS handshake failure detection (ssl.SSLError catch)
 - Added tls_handshake_failed / tls_connection_failed flags + scoring
 - Fixed bare except in follow_redirects (typed error capture)
