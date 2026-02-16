@@ -501,6 +501,7 @@ def admin_view():
                                 'malware_links', 'minimal_shell', 'js_redirect'],
             "Domain Name Patterns": ['suspicious_prefix', 'suspicious_suffix', 
                                      'tech_support_tld', 'domain_brand_impersonation',
+                                     'brand_spoofing_keyword',
                                      'tld_variant_spoofing'],
             "Hosting Provider": ['hosting_budget_shared', 'hosting_free', 'hosting_suspect'],
             "Bonuses (Reduce Score)": ['has_bimi', 'has_mta_sts'],
@@ -540,7 +541,7 @@ def admin_view():
             # Map to friendly category names
             if 'tld_variant' in prefix:
                 category = "TLD Variant Spoofing"
-            elif 'domain_brand' in prefix or 'brand_impersonation' in combo_key:
+            elif 'domain_brand' in prefix or 'brand_impersonation' in combo_key or 'brand_spoofing' in prefix:
                 category = "Brand Impersonation"
             elif 'suspicious_prefix' in prefix or 'suspicious_suffix' in prefix or 'tech_support' in prefix:
                 category = "Tech Support Scam Patterns"
@@ -707,7 +708,7 @@ def main():
     
     # Footer
     st.sidebar.markdown("---")
-    st.sidebar.caption(f"Domain Sender Approval v2.1 | Analyzer v{ANALYZER_VERSION}")
+    st.sidebar.caption(f"Domain Sender Approval v2.2 | Analyzer v{ANALYZER_VERSION}")
     st.sidebar.caption(f"Threshold: {st.session_state.config.get('approve_threshold', 50)}")
 
 
