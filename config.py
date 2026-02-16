@@ -35,6 +35,7 @@ DEFAULT_CONFIG = {
         "suspicious_suffix": 15,           # account, setup, cancellation, etc.
         "tech_support_tld": 20,            # .support, .tech, .help, etc.
         "domain_brand_impersonation": 28,  # Brand name IN domain (app-spectrum.com)
+        "brand_spoofing_keyword": 20,      # Brand + phishing keyword (easyjetconnect, amazonverify)
         
         # === TLD VARIANT SPOOFING DETECTION ===
         "tld_variant_spoofing": 30,        # Signup domain is TLD variant of established business
@@ -257,6 +258,25 @@ DEFAULT_CONFIG = {
         "domain_brand_impersonation+tech_support_tld": 25,
         "domain_brand_impersonation+no_https": 18,
         
+        # === BRAND + SPOOFING KEYWORD COMBOS (v5.2) ===
+        # Brand + keyword (easyjetconnect, amazonverify) is already very high risk.
+        # These combos push score firmly into DENY territory when combined with
+        # other phishing infrastructure signals.
+        "brand_spoofing_keyword+domain_lt_30d": 20,          # New domain + brand+keyword = near certain phishing
+        "brand_spoofing_keyword+domain_lt_7d": 25,           # Brand new + brand+keyword = certain phishing
+        "brand_spoofing_keyword+minimal_shell": 18,          # Hollow site + brand+keyword
+        "brand_spoofing_keyword+credential_form": 25,        # Login form + brand+keyword = classic phish
+        "brand_spoofing_keyword+no_dkim": 12,                # No email auth + brand+keyword
+        "brand_spoofing_keyword+no_dmarc": 10,               # No DMARC + brand+keyword
+        "brand_spoofing_keyword+hosting_budget_shared": 12,  # Cheap host + brand+keyword
+        "brand_spoofing_keyword+hosting_free": 15,           # Free host + brand+keyword
+        "brand_spoofing_keyword+hosting_platform": 12,       # Platform host + brand+keyword
+        "brand_spoofing_keyword+parking_page": 15,           # Parked + brand+keyword
+        "brand_spoofing_keyword+missing_trust_signals": 12,  # No corporate pages + brand+keyword
+        "brand_spoofing_keyword+no_https": 15,               # No HTTPS + brand+keyword
+        "brand_spoofing_keyword+mx_selfhosted": 12,          # Self-hosted MX + brand+keyword
+        "brand_spoofing_keyword+mx_disposable": 12,          # Disposable MX + brand+keyword
+        
         # Suspicious prefix (app-, support-, etc.) combos
         "suspicious_prefix+domain_lt_30d": 18,
         "suspicious_prefix+credential_form": 20,
@@ -430,7 +450,7 @@ DEFAULT_CONFIG = {
     #   Hosting:        hosting_budget_shared, hosting_free, hosting_suspect,
     #                   hosting_platform
     #   Domain name:    suspicious_prefix, suspicious_suffix, is_tech_support_tld,
-    #                   domain_brand_impersonation
+    #                   domain_brand_impersonation, brand_spoofing_keyword
     #   TLD variant:    tld_variant_spoofing
     #   Web:            no_https, tls_handshake_failed, tls_connection_failed,
     #                   cert_expired, cert_self_signed
@@ -496,6 +516,13 @@ DEFAULT_CONFIG = {
             "score": 10,
             "label": "No email authentication at all on non-established domain"
         },
+        {
+            "name": "brand_keyword_phish",
+            "if_all": ["brand_spoofing_keyword", "domain_brand_impersonation"],
+            "if_not": ["domain_gt_1yr", "app_store_high", "mx_enterprise"],
+            "score": 10,
+            "label": "Brand + spoofing keyword domain without established legitimacy signals"
+        },
     ],
     
     "suspicious_tlds": [
@@ -516,6 +543,18 @@ DEFAULT_CONFIG = {
         'coinbase', 'binance', 'kraken', 'blockchain', 'metamask',
         'walmart', 'target', 'bestbuy', 'costco', 'homedepot', 'lowes',
         'ebay', 'alibaba', 'aliexpress', 'etsy', 'shopify', 'stripe',
+        # Airlines (high-value phishing targets)
+        'easyjet', 'ryanair', 'southwest', 'delta', 'united', 'jetblue',
+        'lufthansa', 'emirates', 'qantas', 'wizzair',
+        # Travel / Booking
+        'booking', 'expedia', 'airbnb', 'tripadvisor',
+        # Banks / Financial
+        'hsbc', 'barclays', 'lloyds', 'natwest', 'santander',
+        'monzo', 'revolut', 'venmo', 'cashapp', 'zelle', 'klarna',
+        # Shipping / Logistics
+        'royalmail', 'hermes', 'evri', 'dpd',
+        # Telecoms
+        'vodafone', 'tmobile', 'verizon', 'spectrum',
     ],
     
     "disposable_domains": [
