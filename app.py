@@ -588,9 +588,11 @@ def admin_view():
     
     with tab2:
         st.header("🔗 Signal Combination Weights")
-        st.caption("Bonus points when two signals occur together. These amplify the base weights above.")
+        st.caption("Bonus points when two signals occur together. These amplify the base weights above. "
+                   "Disabled combos are greyed out and will not fire during analysis.")
         
         combos = config.get('combos', DEFAULT_CONFIG.get('combos', {}))
+        disabled_combos = set(config.get('disabled_combos', []))
         
         # Group combos by first signal prefix
         combo_groups = {}
@@ -627,23 +629,97 @@ def admin_view():
             combo_groups[category][combo_key] = combo_val
         
         new_combos = {}
+        new_disabled = set()
+        
         for category in sorted(combo_groups.keys()):
             group = combo_groups[category]
-            with st.expander(f"**{category}** ({len(group)} combos)", expanded=(category == "TLD Variant Spoofing")):
-                cols = st.columns(2)
-                for i, (combo_key, combo_val) in enumerate(sorted(group.items())):
-                    with cols[i % 2]:
+            # Count enabled/disabled in this group
+            enabled_count = sum(1 for k in group if k not in disabled_combos)
+            disabled_count = len(group) - enabled_count
+            group_label = f"**{category}** ({enabled_count} active"
+            if disabled_count > 0:
+                group_label += f", {disabled_count} disabled"
+            group_label += ")"
+            
+            with st.expander(group_label, expanded=False):
+                # Bulk toggle for entire category
+                bulk_col1, bulk_col2 = st.columns([1, 1])
+                with bulk_col1:
+                    if st.button(f"✅ Enable all in {category}", key=f"enable_all_{category}"):
+                        for k in group:
+                            disabled_combos.discard(k)
+                        st.rerun()
+                with bulk_col2:
+                    if st.button(f"⛔ Disable all in {category}", key=f"disable_all_{category}"):
+                        for k in group:
+                            disabled_combos.add(k)
+                        st.rerun()
+                
+                st.markdown("---")
+                
+                for combo_key, combo_val in sorted(group.items()):
+                    is_disabled = combo_key in disabled_combos
+                    
+                    toggle_col, name_col, score_col = st.columns([0.4, 2.5, 1])
+                    
+                    with toggle_col:
+                        combo_enabled = st.toggle(
+                            "on",
+                            value=not is_disabled,
+                            key=f"combo_toggle_{combo_key}",
+                            label_visibility="collapsed",
+                        )
+                        if not combo_enabled:
+                            new_disabled.add(combo_key)
+                    
+                    with name_col:
+                        if combo_enabled:
+                            st.markdown(f"`{combo_key}`")
+                        else:
+                            st.markdown(f"~~`{combo_key}`~~ *(disabled)*")
+                    
+                    with score_col:
                         new_val = st.number_input(
-                            combo_key,
+                            "pts",
                             min_value=-50,
                             max_value=100,
                             value=combo_val,
                             step=1,
                             key=f"combo_{combo_key}",
+                            label_visibility="collapsed",
+                            disabled=not combo_enabled,
                         )
                         new_combos[combo_key] = new_val
         
+        # ==============================================================
+        # ADD NEW COMBO
+        # ==============================================================
+        st.markdown("---")
+        st.subheader("➕ Add New Combo")
+        st.caption("Create a new signal combination. Enter two or more signal names separated by `+`.")
+        
+        with st.form("new_combo_form"):
+            new_combo_key = st.text_input(
+                "Combo key (signal1+signal2)", 
+                placeholder="e.g. mx_selfhosted+hosting_platform+no_dkim",
+                help="Use signal names from the Scoring Weights tab, joined with +"
+            )
+            new_combo_score = st.number_input("Score (bonus points when both signals fire)", 
+                                              min_value=-50, max_value=100, value=10, step=1,
+                                              key="new_combo_score")
+            combo_submitted = st.form_submit_button("Add Combo")
+            if combo_submitted and new_combo_key:
+                clean_key = new_combo_key.strip().replace(' ', '')
+                if '+' not in clean_key:
+                    st.error("Combo must contain at least two signals joined by `+`")
+                elif clean_key in combos:
+                    st.error(f"Combo `{clean_key}` already exists. Edit its score above.")
+                else:
+                    new_combos[clean_key] = new_combo_score
+                    st.success(f"Combo `{clean_key}` (+{new_combo_score}) added! Click **Save Configuration** to persist.")
+        
         config['combos'] = {**combos, **new_combos}
+        config['disabled_combos'] = sorted(new_disabled)
     
     with tab3:
         st.header("📐 Custom Rules")
