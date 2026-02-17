@@ -2461,7 +2461,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     # === TLD VARIANT SPOOFING ===
     if res.tld_variant_detected:
-        all_issues.append(f"TLD VARIANT SPOOF ({res.tld_variant_domain}) → Established business exists at variant TLD; signup domain appears to be impersonating it. {res.tld_variant_summary}")
+        all_issues.append(f"TLD VARIANT SPOOF ({res.tld_variant_domain}) → Established business exists at variant TLD")
     # Diagnostic detail (TLD VARIANT CHECK / CHECK ERROR) is stored in res.tld_variant_summary
     # but NOT shown in issues — it was confusing users into thinking spoofing was detected
     
@@ -2705,35 +2705,26 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     # === BUILD SUMMARY ===
     parts = []
     
+    # High-risk phishing infra flag (most important — show first)
+    if res.high_risk_phish_infra:
+        parts.append(f"🚨 HIGH-RISK PHISHING INFRA → {res.high_risk_phish_infra_reason}")
+    
     # Recommendation with score
     if res.recommendation == "DENY":
-        parts.append(f"⛔ DENY (Score: {res.risk_score}/100, Threshold: 50)")
+        parts.append(f"⛔ DENY (Score: {res.risk_score})")
     else:
-        parts.append(f"✅ APPROVE (Score: {res.risk_score}/100)")
+        parts.append(f"✅ APPROVE (Score: {res.risk_score})")
     
-    # ALL issues with impacts
+    # Top issues only (limit to 3 most important, keep it readable)
     if all_issues:
-        parts.append("ISSUES FOUND: " + " • ".join(all_issues))
-    else:
-        parts.append("ISSUES FOUND: None")
+        top_issues = all_issues[:3]
+        parts.append(" • ".join(top_issues))
+        if len(all_issues) > 3:
+            parts.append(f"+{len(all_issues) - 3} more issues")
     
-    # Positive signals
+    # Positive signals (compact)
     if positives:
-        parts.append("POSITIVE SIGNALS: " + ", ".join(positives))
-    
-    # Redirect path if applicable
-    if res.redirect_count > 0 and res.redirect_domains:
-        parts.append(f"REDIRECT PATH: {res.redirect_domains}")
-    
-    # Combo scoring breakdown
-    if res.combos_triggered:
-        combo_list = res.combos_triggered.split(';')
-        parts.append(f"COMBOS ({len(combo_list)}): " + ", ".join(combo_list))
-    
-    # Custom rules breakdown
-    if res.rules_triggered:
-        rules_list = res.rules_triggered.split(';')
-        parts.append(f"RULES ({len(rules_list)}): " + ", ".join(rules_list))
+        parts.append("✓ " + ", ".join(positives))
     
     return " | ".join(parts)
 
