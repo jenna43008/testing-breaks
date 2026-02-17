@@ -415,6 +415,10 @@ DEFAULT_CONFIG = {
         "hosting_platform+mx_selfhosted+no_dkim": 10,   # Platform + self MX + no DKIM
     },
     
+    # Combos in this list are disabled and will not fire during analysis.
+    # Managed via the Admin Config UI — toggle combos on/off.
+    "disabled_combos": [],
+    
     # ==========================================================================
     # CUSTOM RULES ENGINE
     # ==========================================================================
@@ -889,6 +893,10 @@ def load_config() -> dict:
                     merged['weights'] = {**DEFAULT_CONFIG['weights'], **loaded['weights']}
                 if 'combos' in loaded:
                     merged['combos'] = {**DEFAULT_CONFIG['combos'], **loaded['combos']}
+                if 'disabled_combos' in loaded:
+                    merged['disabled_combos'] = loaded['disabled_combos']
+                else:
+                    merged['disabled_combos'] = []
                 # Rules: merge by name (user rules override defaults with same name,
                 # new user rules are added). Set "rules_replace": true in config.json
                 # to completely replace defaults instead of merging.
