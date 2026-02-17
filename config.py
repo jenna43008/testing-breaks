@@ -136,397 +136,220 @@ DEFAULT_CONFIG = {
         "mx_enterprise_bonus": -5,    # Enterprise MX (Google Workspace, M365, Proofpoint) = legitimacy signal
     },
     
-    "combos": {
-        # === CRITICAL PHISHING INFRASTRUCTURE COMBOS (from research) ===
-        # These detect infrastructure intent, not just content
-        
-        # New domain + redirect chain = HIGH (attackers register, redirect, abandon)
-        "domain_lt_7d+redirect_chain_2plus": 20,
-        "domain_lt_7d+redirect_temp_302_307": 18,
-        "domain_lt_30d+redirect_chain_2plus": 12,
-        "domain_lt_30d+redirect_temp_302_307": 10,
-        
-        # 403 cloaking + new domain = VERY HIGH (scanner blocking on fresh domain)
-        "status_403_cloaking+domain_lt_7d": 25,
-        "status_403_cloaking+domain_lt_30d": 15,
-        "status_403_cloaking+credential_form": 20,
-        
-        # No HTTPS + redirect = CRITICAL (cheap disposable infrastructure)
-        "no_https+redirect_chain_2plus": 18,
-        "no_https+redirect_temp_302_307": 15,
-        "no_https+redirect_cross_domain": 15,
-        
-        # 503 + new domain = HIGH (disposable/bulletproof hosting)
-        "status_503_disposable+domain_lt_7d": 18,
-        "status_503_disposable+domain_lt_30d": 12,
-        
-        # 429 throttling + new domain = MEDIUM-HIGH (selective exposure)
-        "status_429_throttling+domain_lt_30d": 10,
-        
-        # === ERROR RESPONSE CODE COMBOS (from predictive model research) ===
-        # "Response codes become very powerful when combined with infrastructure signals"
-        # "Most real phishing campaigns trigger 2-3 of these simultaneously"
-        
-        # --- 403 Cloaking + Redirect Combos (Very High) ---
-        # Doc: "403 blocking + redirect = strong cloaking / anti-analysis"
-        "status_403_cloaking+redirect_chain_2plus": 22,
-        "status_403_cloaking+redirect_temp_302_307": 22,
-        "status_403_cloaking+redirect_cross_domain": 20,
-        
-        # --- 403 Cloaking + No HTTPS Combo (High) ---
-        # Doc: Cheap disposable infra that also blocks scanners
-        "status_403_cloaking+no_https": 18,
-        
-        # --- 403 Cloaking + Content/Cloaking Combos (Very High) ---
-        # Doc: "200 loader shell + JS redirect = Very high" — same logic for 403
-        "status_403_cloaking+minimal_shell": 22,
-        "status_403_cloaking+js_redirect": 20,
-        "status_403_cloaking+phishing_paths": 22,
-        "status_403_cloaking+brand_impersonation": 25,
-        
-        # --- 429 Throttling + Redirect/Content Combos (Medium-High) ---
-        # Doc: "Indicates selective exposure infrastructure"
-        "status_429_throttling+domain_lt_7d": 15,
-        "status_429_throttling+redirect_chain_2plus": 12,
-        "status_429_throttling+redirect_temp_302_307": 12,
-        "status_429_throttling+credential_form": 15,
-        "status_429_throttling+no_https": 12,
-        "status_429_throttling+minimal_shell": 15,
-        
-        # --- 503 Disposable + Redirect/Content Combos (High) ---
-        # Doc: "Disposable phishing servers frequently unstable"
-        "status_503_disposable+redirect_chain_2plus": 15,
-        "status_503_disposable+redirect_temp_302_307": 15,
-        "status_503_disposable+redirect_cross_domain": 15,
-        "status_503_disposable+no_https": 15,
-        "status_503_disposable+credential_form": 18,
-        "status_503_disposable+minimal_shell": 15,
-        
-        # --- 401 Unauthorized + Infrastructure Combos (High) ---
-        # Doc: "401 on public-facing domain = unusual"
-        "status_401_unauthorized+domain_lt_7d": 18,
-        "status_401_unauthorized+domain_lt_30d": 12,
-        "status_401_unauthorized+no_https": 15,
-        "status_401_unauthorized+redirect_chain_2plus": 15,
-        "status_401_unauthorized+redirect_temp_302_307": 12,
-        "status_401_unauthorized+credential_form": 18,
-        "status_401_unauthorized+minimal_shell": 15,
-        
-        # --- Error Code Cross-Combos (High) ---
-        # Doc: "Most real phishing campaigns trigger 2-3 simultaneously"
-        "status_403_cloaking+status_503_disposable": 18,
-        "status_403_cloaking+status_429_throttling": 15,
-        "status_401_unauthorized+status_403_cloaking": 18,
-        "status_401_unauthorized+status_503_disposable": 15,
-        "status_429_throttling+status_503_disposable": 12,
-        
-        # --- Error Codes + Hijacked Domain Indicators (Very High) ---
-        # Established domain showing error codes + phishing infra = compromised
-        "status_403_cloaking+hijack_path_pattern": 22,
-        "status_403_cloaking+doc_sharing_lure": 20,
-        "status_403_cloaking+phishing_js_behavior": 22,
-        "status_403_cloaking+phishing_infra_redirect": 28,
-        "status_503_disposable+hijack_path_pattern": 15,
-        "status_503_disposable+phishing_infra_redirect": 22,
-        
-        # === OPAQUE ENTITY / SUPPLIER FRAUD COMBOS ===
-        # Access restricted + missing trust signals = potential B2B fraud vector
-        "opaque_entity+domain_lt_30d": 25,           # New + opaque = very high risk
-        "opaque_entity+domain_lt_90d": 18,           # Newer + opaque = high risk
-        "access_restricted+missing_trust_signals": 15,  # Can't verify entity
-        "access_restricted+domain_lt_30d": 15,       # New domain that blocks access
-        "missing_trust_signals+domain_lt_30d": 12,   # New domain with no corporate footprint
-        
-        # === TECH SUPPORT SCAM PATTERN COMBOS ===
-        # Domain name patterns (app-brand.com, brandaccount.com) + other signals
-        
-        # TLD variant spoofing combos — amplify when combined with other spoof signals
-        "tld_variant_spoofing+domain_lt_30d": 25,           # New domain + TLD variant = very high
-        "tld_variant_spoofing+domain_lt_7d": 30,            # Brand new + TLD variant = near certain
-        "tld_variant_spoofing+minimal_shell": 20,           # Hollow page + TLD variant
-        "tld_variant_spoofing+no_dkim": 15,                 # No email auth + TLD variant
-        "tld_variant_spoofing+parking_page": 18,            # Parking page + TLD variant
-        "tld_variant_spoofing+missing_trust_signals": 15,   # No corporate pages + TLD variant
-        "tld_variant_spoofing+hosting_budget_shared": 12,   # Budget host + TLD variant
-        "tld_variant_spoofing+mx_selfhosted": 15,            # Self-hosted MX + TLD variant
-        
-        # Brand impersonation in domain name = VERY HIGH risk combos
-        "domain_brand_impersonation+credential_form": 30,
-        "domain_brand_impersonation+domain_lt_30d": 25,
-        "domain_brand_impersonation+suspicious_prefix": 20,
-        "domain_brand_impersonation+suspicious_suffix": 20,
-        "domain_brand_impersonation+tech_support_tld": 25,
-        "domain_brand_impersonation+no_https": 18,
-        
-        # === BRAND + SPOOFING KEYWORD COMBOS (v5.2) ===
-        # Brand + keyword (easyjetconnect, amazonverify) is already very high risk.
-        # These combos push score firmly into DENY territory when combined with
-        # other phishing infrastructure signals.
-        "brand_spoofing_keyword+domain_lt_30d": 20,          # New domain + brand+keyword = near certain phishing
-        "brand_spoofing_keyword+domain_lt_7d": 25,           # Brand new + brand+keyword = certain phishing
-        "brand_spoofing_keyword+minimal_shell": 18,          # Hollow site + brand+keyword
-        "brand_spoofing_keyword+credential_form": 25,        # Login form + brand+keyword = classic phish
-        "brand_spoofing_keyword+no_dkim": 12,                # No email auth + brand+keyword
-        "brand_spoofing_keyword+no_dmarc": 10,               # No DMARC + brand+keyword
-        "brand_spoofing_keyword+hosting_budget_shared": 12,  # Cheap host + brand+keyword
-        "brand_spoofing_keyword+hosting_free": 15,           # Free host + brand+keyword
-        "brand_spoofing_keyword+hosting_platform": 12,       # Platform host + brand+keyword
-        "brand_spoofing_keyword+parking_page": 15,           # Parked + brand+keyword
-        "brand_spoofing_keyword+missing_trust_signals": 12,  # No corporate pages + brand+keyword
-        "brand_spoofing_keyword+no_https": 15,               # No HTTPS + brand+keyword
-        "brand_spoofing_keyword+mx_selfhosted": 12,          # Self-hosted MX + brand+keyword
-        "brand_spoofing_keyword+mx_disposable": 12,          # Disposable MX + brand+keyword
-        
-        # Suspicious prefix (app-, support-, etc.) combos
-        "suspicious_prefix+domain_lt_30d": 18,
-        "suspicious_prefix+credential_form": 20,
-        "suspicious_prefix+tech_support_tld": 22,
-        "suspicious_prefix+suspicious_suffix": 18,
-        
-        # Suspicious suffix (account, setup, etc.) combos
-        "suspicious_suffix+domain_lt_30d": 15,
-        "suspicious_suffix+credential_form": 18,
-        "suspicious_suffix+tech_support_tld": 20,
-        
-        # Tech support scam TLD combos
-        "tech_support_tld+domain_lt_30d": 18,
-        "tech_support_tld+credential_form": 22,
-        "tech_support_tld+no_https": 15,
-        
-        # === HIJACKED DOMAIN / STEPPING STONE COMBOS ===
-        # Key insight: Old established domains with phishing content = hijacked
-        
-        # Phishing infrastructure redirect combos (workers.dev, etc.)
-        "phishing_infra_redirect+credential_form": 30,
-        "phishing_infra_redirect+doc_sharing_lure": 25,
-        "phishing_infra_redirect+domain_gt_1yr": 28,  # Old domain redirecting to phishing infra
-        
-        # Document sharing lure combos
-        "doc_sharing_lure+credential_form": 25,
-        "doc_sharing_lure+hijack_path_pattern": 22,
-        "doc_sharing_lure+phishing_js_behavior": 25,
-        "doc_sharing_lure+email_tracking_url": 22,
-        
-        # Email tracking in URL combos
-        "email_tracking_url+credential_form": 28,
-        "email_tracking_url+doc_sharing_lure": 22,
-        "email_tracking_url+phishing_js_behavior": 25,
-        
-        # Phishing JS behavior combos
-        "phishing_js_behavior+credential_form": 25,
-        "phishing_js_behavior+hijack_path_pattern": 20,
-        "phishing_js_behavior+minimal_shell": 22,
-        
-        # Hijack path pattern combos
-        "hijack_path_pattern+credential_form": 20,
-        "hijack_path_pattern+domain_gt_1yr": 18,  # Established domain with suspicious path
-        
-        # Minimal shell + JS redirect = VERY HIGH (classic phishing cloaking)
-        "minimal_shell+js_redirect": 18,
-        "minimal_shell+domain_lt_30d": 12,
-        "minimal_shell+credential_form": 15,
-        
-        # Cross-domain redirect + new domain = HIGH
-        "redirect_cross_domain+domain_lt_7d": 18,
-        "redirect_cross_domain+domain_lt_30d": 12,
-        
-        # === FRAUD/BRAND ABUSE COMBOS ===
-        "typosquat_detected+credential_form": 35,
-        "typosquat_detected+domain_lt_30d": 28,
-        "typosquat_detected+redirect_chain_2plus": 25,
-        "brand_impersonation+credential_form": 35,
-        "brand_impersonation+domain_lt_30d": 22,
-        "brand_impersonation+no_https": 20,
-        "domain_blacklisted+domain_lt_30d": 30,
-        
-        # === DELIVERABILITY COMBOS (lower penalties) ===
-        "no_spf+no_dmarc": 4,
-        "spf_pass_all+no_dmarc": 15,
-        "no_dkim+no_dmarc": 3,
-        "no_spf+no_dkim": 3,
-        "no_spf+domain_lt_30d": 5,
-        "no_dmarc+domain_lt_30d": 5,
-        "no_dkim+domain_lt_30d": 4,
-        "no_spf+domain_lt_7d": 10,
-        "no_dmarc+domain_lt_7d": 10,
-        "no_mx+domain_lt_30d": 6,
-        
-        # === OTHER SUSPICIOUS COMBOS ===
-        "credential_form+no_https": 12,
-        "phishing_paths+credential_form": 15,
-        "phishing_paths+domain_lt_30d": 12,
-        "free_email_domain+credential_form": 10,
-        "disposable_email+no_spf": 8,
-        "disposable_email+domain_lt_30d": 18,
-        "no_ptr+domain_lt_30d": 4,
-        "ptr_mismatch+domain_blacklisted": 10,
-        "suspicious_tld+domain_lt_30d": 10,
-        "suspicious_tld+redirect_chain_2plus": 10,
-        
-        # === APP STORE PRESENCE COMBOS (Legitimacy mitigation) ===
-        # App presence + strong email auth = very likely legitimate sender
-        "app_store_high+has_bimi": -8,              # Verified app + BIMI = strong legitimacy
-        "app_store_high+has_mta_sts": -5,           # Verified app + MTA-STS = security-conscious
-        "app_store_medium+has_bimi": -5,             # Moderate app presence + BIMI
-        
-        # === HOSTING PROVIDER COMBOS ===
-        # Budget/free hosting + other red flags = amplified risk
-        "hosting_budget_shared+domain_lt_30d": 12,       # New domain on cheap host
-        "hosting_budget_shared+domain_lt_7d": 18,        # Brand new domain on cheap host
-        "hosting_budget_shared+no_spf": 6,               # Cheap host + no email auth
-        "hosting_budget_shared+no_dmarc": 6,             # Cheap host + no DMARC
-        "hosting_budget_shared+credential_form": 15,     # Cheap host + login form
-        "hosting_budget_shared+brand_impersonation": 18, # Cheap host + brand abuse
-        "hosting_free+domain_lt_30d": 15,                # New domain on free host
-        "hosting_free+credential_form": 18,              # Free host + login form
-        "hosting_free+brand_impersonation": 22,          # Free host + brand abuse
-        "hosting_suspect+domain_lt_30d": 22,             # Suspect host + new domain
-        "hosting_suspect+domain_lt_7d": 28,              # Suspect host + brand new
-        "hosting_suspect+credential_form": 25,           # Suspect host + login form
-        "hosting_suspect+brand_impersonation": 28,       # Suspect host + brand abuse
-        "hosting_suspect+no_https": 18,                  # Suspect host + no HTTPS
-        
-        # === WEAK AUTH COMBOS (v4.7 - from disabled apps analysis) ===
-        "no_dkim+dmarc_p_none": 8,                   # No DKIM + permissive DMARC - 84% of disabled apps had this
-        "no_dkim+dmarc_p_none+spf_softfail_all": 6,  # Triple weak auth - most common bad actor profile (+6 additional)
-        "hosting_budget_shared+no_dkim": 6,           # Budget host + no DKIM - high risk combo
-        
-        # === MX PROVIDER COMBOS (v4.7) ===
-        "mx_disposable+no_dkim": 8,                      # Disposable MX + no DKIM
-        "mx_disposable+dmarc_p_none": 6,                 # Disposable MX + permissive DMARC
-        "mx_disposable+hosting_budget_shared": 8,        # Disposable MX + budget host
-        "mx_selfhosted+no_dkim": 6,                      # Self-hosted MX + no DKIM
-        "mx_selfhosted+hosting_budget_shared": 6,        # Self-hosted MX + budget host
-        
-        # === PHISHING MAIL TEMPLATE COMBOS (v5.1 - from Swedish invoice phish analysis) ===
-        # Cookie-cutter phishing infrastructure: mail.{domain} + no DKIM + DMARC p=none + no PTR
-        "mx_mail_prefix+no_dkim": 5,                     # mail.{domain} template + no DKIM
-        "mx_mail_prefix+no_ptr": 4,                      # mail.{domain} template + no reverse DNS
-        "mx_mail_prefix+no_dkim+dmarc_p_none": 8,        # Triple: phishing mail server template
-        "mx_mail_prefix+no_dkim+dmarc_p_none+no_ptr": 10,  # FULL phishing template fingerprint
-        "spf_no_external_includes+mx_selfhosted": 5,     # No real email provider anywhere
-        "spf_no_external_includes+mx_mail_prefix": 5,    # Self-only SPF + mail.{domain} template
-        
-        # === PLATFORM HOSTING COMBOS (v5.1) ===
-        # Dev platforms (Render, Netlify, Vercel) with self-hosted email = phishing setup
-        "hosting_platform+mx_selfhosted": 6,             # Platform hosting + self-hosted MX
-        "hosting_platform+mx_mail_prefix": 8,            # Platform hosting + mail.{domain} template
-        "hosting_platform+no_dkim": 5,                   # Platform hosting + no DKIM
-        "hosting_platform+mx_selfhosted+no_dkim": 10,   # Platform + self MX + no DKIM
-    },
-    
-    # Combos in this list are disabled and will not fire during analysis.
-    # Managed via the Admin Config UI — toggle combos on/off.
-    "disabled_combos": [],
-    
     # ==========================================================================
-    # CUSTOM RULES ENGINE
+    # UNIFIED RULES ENGINE
     # ==========================================================================
-    # Rules provide if/then logic beyond simple combos. Each rule can use:
-    #
-    #   if_all:  ALL signals must be present (AND logic)
-    #   if_any:  AT LEAST ONE signal must be present (OR logic)
-    #   if_not:  NONE of these signals may be present (exclusion)
-    #   score:   points to add (positive = riskier, negative = safer)
-    #   name:    unique identifier (shown in output)
-    #   label:   human-readable description (shown in ISSUES when triggered)
-    #
-    # HOW IT WORKS:
-    #   1. if_all is checked first — ALL must match (skip rule if any missing)
-    #   2. if_any is checked next — AT LEAST ONE must match (skip if none match)
-    #   3. if_not is checked last — NONE may be present (skip if any found)
-    #   4. If all conditions pass, the rule fires and score is applied
-    #
-    # AVAILABLE SIGNALS (use in if_all, if_any, if_not):
-    #   Email auth:     no_spf, no_dkim, no_dmarc, spf_pass_all, spf_softfail_all,
-    #                   spf_neutral_all, dmarc_p_none, dmarc_no_rua,
-    #                   spf_no_external_includes
-    #   MX:             no_mx, null_mx, mx_enterprise, mx_disposable, mx_selfhosted,
-    #                   mx_mail_prefix
-    #   DNS:            no_ptr, ptr_mismatch
-    #   Trust:          has_bimi, has_mta_sts
-    #   App store:      app_store_high, app_store_medium, app_store_low,
-    #                   app_store_platform_false_positive
-    #   Blacklists:     domain_blacklisted, ip_blacklisted
-    #   Domain age:     domain_lt_7d, domain_lt_30d, domain_lt_90d, domain_gt_1yr
-    #   Domain type:    suspicious_tld, free_email_domain, disposable_email,
-    #                   typosquat_detected, free_hosting
-    #   Hosting:        hosting_budget_shared, hosting_free, hosting_suspect,
-    #                   hosting_platform
-    #   Domain name:    suspicious_prefix, suspicious_suffix, is_tech_support_tld,
-    #                   domain_brand_impersonation, brand_spoofing_keyword
-    #   TLD variant:    tld_variant_spoofing
-    #   Web:            no_https, tls_handshake_failed, tls_connection_failed,
-    #                   cert_expired, cert_self_signed
-    #   Redirects:      redirect_chain_2plus, redirect_cross_domain, redirect_temp_302_307
-    #   Status codes:   status_401_unauthorized, status_403_cloaking,
-    #                   status_429_throttling, status_503_disposable
-    #   Content:        minimal_shell, js_redirect, meta_refresh, has_external_js,
-    #                   missing_trust_signals, access_restricted, opaque_entity
-    #   Scam patterns:  hijack_path_pattern, doc_sharing_lure, phishing_js_behavior,
-    #                   phishing_infra_redirect, email_tracking_url
-    #   E-commerce:     retail_scam_tld, cross_domain_brand_link, ecommerce_no_identity
-    #
-    # EXAMPLES:
-    #
-    #   "Phishing mail template but NOT on a known enterprise MX"
-    #   {
-    #       "name": "phish_mail_no_enterprise",
-    #       "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none"],
-    #       "if_not": ["mx_enterprise", "has_bimi"],
-    #       "score": 15,
-    #       "label": "Phishing mail server template without enterprise email"
-    #   }
-    #
-    #   "New domain on ANY cheap/free hosting"
-    #   {
-    #       "name": "new_domain_cheap_host",
-    #       "if_all": ["domain_lt_30d"],
-    #       "if_any": ["hosting_budget_shared", "hosting_free", "hosting_platform"],
-    #       "score": 12,
-    #       "label": "New domain on cheap/free hosting"
-    #   }
-    #
-    #   "Established domain with good auth gets a bonus"
-    #   {
-    #       "name": "established_good_auth",
-    #       "if_all": ["domain_gt_1yr", "has_bimi"],
-    #       "if_not": ["no_dkim", "no_dmarc", "no_spf"],
-    #       "score": -10,
-    #       "label": "Established domain with full email authentication"
-    #   }
-    #
+    # All scoring beyond base weights. Former "combos" are rules with categories.
+    # Each rule: name, score, label, category, enabled, if_all, if_any, if_not
     "rules": [
-        # --- Built-in rules (demonstrating the engine) ---
-        {
-            "name": "phish_factory_template",
-            "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none", "no_ptr"],
-            "if_not": ["mx_enterprise", "has_bimi", "domain_gt_1yr"],
-            "score": 10,
-            "label": "Phishing factory template: mail.{domain} + no DKIM + weak DMARC + no PTR"
-        },
-        {
-            "name": "platform_phish_setup",
-            "if_all": ["mx_selfhosted", "no_dkim"],
-            "if_any": ["hosting_platform", "hosting_free"],
-            "if_not": ["mx_enterprise", "app_store_high"],
-            "score": 8,
-            "label": "Free/platform hosting with self-hosted email and no DKIM"
-        },
-        {
-            "name": "zero_email_auth",
-            "if_all": ["no_spf", "no_dkim", "no_dmarc"],
-            "if_not": ["domain_gt_1yr"],
-            "score": 10,
-            "label": "No email authentication at all on non-established domain"
-        },
-        {
-            "name": "brand_keyword_phish",
-            "if_all": ["brand_spoofing_keyword", "domain_brand_impersonation"],
-            "if_not": ["domain_gt_1yr", "app_store_high", "mx_enterprise"],
-            "score": 10,
-            "label": "Brand + spoofing keyword domain without established legitimacy signals"
-        },
+        # --- Brand Impersonation (27 rules) ---
+        {"name": "combo_brand_domain_cred_form", "score": 30, "label": "domain brand impersonation + credential form", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_domain_new_30d", "score": 25, "label": "domain brand impersonation + domain <30d", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_domain_no_https", "score": 18, "label": "domain brand impersonation + no https", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "no_https"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_domain_sus_prefix", "score": 20, "label": "domain brand impersonation + suspicious prefix", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "suspicious_prefix"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_domain_sus_suffix", "score": 20, "label": "domain brand impersonation + suspicious suffix", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "suspicious_suffix"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_domain_techsupport_tld", "score": 25, "label": "domain brand impersonation + tech support tld", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "tech_support_tld"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_imp_cred_form", "score": 35, "label": "brand impersonation + credential form", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_impersonation", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_imp_new_30d", "score": 22, "label": "brand impersonation + domain <30d", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_impersonation", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_imp_no_https", "score": 20, "label": "brand impersonation + no https", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_impersonation", "no_https"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_budget_host", "score": 12, "label": "brand spoofing keyword + hosting budget shared", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "hosting_budget_shared"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_cred_form", "score": 25, "label": "brand spoofing keyword + credential form", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_disposable_mx", "score": 12, "label": "brand spoofing keyword + mx disposable", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "mx_disposable"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_free_host", "score": 15, "label": "brand spoofing keyword + hosting free", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "hosting_free"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_new_30d", "score": 20, "label": "brand spoofing keyword + domain <30d", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_new_7d", "score": 25, "label": "brand spoofing keyword + domain <7d", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_no_dkim", "score": 12, "label": "brand spoofing keyword + no dkim", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_no_dmarc", "score": 10, "label": "brand spoofing keyword + no dmarc", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_no_https", "score": 15, "label": "brand spoofing keyword + no https", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_https"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_no_trust", "score": 12, "label": "brand spoofing keyword + missing trust signals", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "missing_trust_signals"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_parked", "score": 15, "label": "brand spoofing keyword + parking page", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "parking_page"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_platform_host", "score": 12, "label": "brand spoofing keyword + hosting platform", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "hosting_platform"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_self_mx", "score": 12, "label": "brand spoofing keyword + mx selfhosted", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "mx_selfhosted"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_shell_site", "score": 18, "label": "brand spoofing keyword + minimal shell", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "minimal_shell"], "if_any": [], "if_not": []},
+        {"name": "combo_budget_host_brand_imp", "score": 18, "label": "hosting budget shared + brand impersonation", "category": "Brand Impersonation", "enabled": True, "if_all": ["hosting_budget_shared", "brand_impersonation"], "if_any": [], "if_not": []},
+        {"name": "combo_free_host_brand_imp", "score": 22, "label": "hosting free + brand impersonation", "category": "Brand Impersonation", "enabled": True, "if_all": ["hosting_free", "brand_impersonation"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_brand_imp", "score": 25, "label": "status 403 cloaking + brand impersonation", "category": "Brand Impersonation", "enabled": True, "if_all": ["status_403_cloaking", "brand_impersonation"], "if_any": [], "if_not": []},
+        {"name": "combo_suspect_host_brand_imp", "score": 28, "label": "hosting suspect + brand impersonation", "category": "Brand Impersonation", "enabled": True, "if_all": ["hosting_suspect", "brand_impersonation"], "if_any": [], "if_not": []},
+
+        # --- Email Auth Weakness (14 rules) ---
+        {"name": "combo_disposable_no_spf", "score": 8, "label": "disposable email + no spf", "category": "Email Auth Weakness", "enabled": True, "if_all": ["disposable_email", "no_spf"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_new_30d", "score": 4, "label": "no dkim + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_no_dmarc", "score": 3, "label": "no dkim + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_weak_dmarc", "score": 8, "label": "no dkim + dmarc p none", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_weak_dmarc_spf_soft", "score": 6, "label": "no dkim + dmarc p none + spf softfail all", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none", "spf_softfail_all"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dmarc_new_30d", "score": 5, "label": "no dmarc + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dmarc_new_7d", "score": 10, "label": "no dmarc + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_spf_new_30d", "score": 5, "label": "no spf + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_spf_new_7d", "score": 10, "label": "no spf + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_spf_no_dkim", "score": 3, "label": "no spf + no dkim", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_no_spf_no_dmarc", "score": 4, "label": "no spf + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "combo_spf_no_ext_mail_prefix_mx", "score": 5, "label": "spf no external includes + mx mail prefix", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_no_external_includes", "mx_mail_prefix"], "if_any": [], "if_not": []},
+        {"name": "combo_spf_no_ext_self_mx", "score": 5, "label": "spf no external includes + mx selfhosted", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_no_external_includes", "mx_selfhosted"], "if_any": [], "if_not": []},
+        {"name": "combo_spf_open_no_dmarc", "score": 15, "label": "spf pass all + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_pass_all", "no_dmarc"], "if_any": [], "if_not": []},
+
+        # --- Fraud / Blacklist (5 rules) ---
+        {"name": "combo_blacklisted_new_30d", "score": 30, "label": "domain blacklisted + domain <30d", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["domain_blacklisted", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_ptr_bad_blacklisted", "score": 10, "label": "ptr mismatch + domain blacklisted", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["ptr_mismatch", "domain_blacklisted"], "if_any": [], "if_not": []},
+        {"name": "combo_typosquat_cred_form", "score": 35, "label": "typosquat detected + credential form", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["typosquat_detected", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_typosquat_new_30d", "score": 28, "label": "typosquat detected + domain <30d", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["typosquat_detected", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_typosquat_redir_chain", "score": 25, "label": "typosquat detected + redirect chain 2plus", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["typosquat_detected", "redirect_chain_2plus"], "if_any": [], "if_not": []},
+
+        # --- General Risk (19 rules) ---
+        {"name": "combo_cred_form_no_https", "score": 12, "label": "credential form + no https", "category": "General Risk", "enabled": True, "if_all": ["credential_form", "no_https"], "if_any": [], "if_not": []},
+        {"name": "combo_cross_redir_new_30d", "score": 12, "label": "redirect cross domain + domain <30d", "category": "General Risk", "enabled": True, "if_all": ["redirect_cross_domain", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_cross_redir_new_7d", "score": 18, "label": "redirect cross domain + domain <7d", "category": "General Risk", "enabled": True, "if_all": ["redirect_cross_domain", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_disposable_new_30d", "score": 18, "label": "disposable email + domain <30d", "category": "General Risk", "enabled": True, "if_all": ["disposable_email", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_free_email_cred_form", "score": 10, "label": "free email domain + credential form", "category": "General Risk", "enabled": True, "if_all": ["free_email_domain", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_new_30d_redir_chain", "score": 12, "label": "domain <30d + redirect chain 2plus", "category": "General Risk", "enabled": True, "if_all": ["domain_lt_30d", "redirect_chain_2plus"], "if_any": [], "if_not": []},
+        {"name": "combo_new_30d_temp_redir", "score": 10, "label": "domain <30d + redirect temp 302 307", "category": "General Risk", "enabled": True, "if_all": ["domain_lt_30d", "redirect_temp_302_307"], "if_any": [], "if_not": []},
+        {"name": "combo_new_7d_redir_chain", "score": 20, "label": "domain <7d + redirect chain 2plus", "category": "General Risk", "enabled": True, "if_all": ["domain_lt_7d", "redirect_chain_2plus"], "if_any": [], "if_not": []},
+        {"name": "combo_new_7d_temp_redir", "score": 18, "label": "domain <7d + redirect temp 302 307", "category": "General Risk", "enabled": True, "if_all": ["domain_lt_7d", "redirect_temp_302_307"], "if_any": [], "if_not": []},
+        {"name": "combo_no_https_cross_redir", "score": 15, "label": "no https + redirect cross domain", "category": "General Risk", "enabled": True, "if_all": ["no_https", "redirect_cross_domain"], "if_any": [], "if_not": []},
+        {"name": "combo_no_https_redir_chain", "score": 18, "label": "no https + redirect chain 2plus", "category": "General Risk", "enabled": True, "if_all": ["no_https", "redirect_chain_2plus"], "if_any": [], "if_not": []},
+        {"name": "combo_no_https_temp_redir", "score": 15, "label": "no https + redirect temp 302 307", "category": "General Risk", "enabled": True, "if_all": ["no_https", "redirect_temp_302_307"], "if_any": [], "if_not": []},
+        {"name": "combo_no_mx_new_30d", "score": 6, "label": "no mx + domain <30d", "category": "General Risk", "enabled": True, "if_all": ["no_mx", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_ptr_new_30d", "score": 4, "label": "no ptr + domain <30d", "category": "General Risk", "enabled": True, "if_all": ["no_ptr", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_shell_site_cred_form", "score": 15, "label": "minimal shell + credential form", "category": "General Risk", "enabled": True, "if_all": ["minimal_shell", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_shell_site_js_redir", "score": 18, "label": "minimal shell + js redirect", "category": "General Risk", "enabled": True, "if_all": ["minimal_shell", "js_redirect"], "if_any": [], "if_not": []},
+        {"name": "combo_shell_site_new_30d", "score": 12, "label": "minimal shell + domain <30d", "category": "General Risk", "enabled": True, "if_all": ["minimal_shell", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_tld_new_30d", "score": 10, "label": "suspicious tld + domain <30d", "category": "General Risk", "enabled": True, "if_all": ["suspicious_tld", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_tld_redir_chain", "score": 10, "label": "suspicious tld + redirect chain 2plus", "category": "General Risk", "enabled": True, "if_all": ["suspicious_tld", "redirect_chain_2plus"], "if_any": [], "if_not": []},
+
+        # --- HTTP Status Evasion (43 rules) ---
+        {"name": "combo_http_401_cred_form", "score": 18, "label": "status 401 unauthorized + credential form", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_http_401_http_403", "score": 18, "label": "status 401 unauthorized + status 403 cloaking", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "status_403_cloaking"], "if_any": [], "if_not": []},
+        {"name": "combo_http_401_http_503", "score": 15, "label": "status 401 unauthorized + status 503 disposable", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "status_503_disposable"], "if_any": [], "if_not": []},
+        {"name": "combo_http_401_new_30d", "score": 12, "label": "status 401 unauthorized + domain <30d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_http_401_new_7d", "score": 18, "label": "status 401 unauthorized + domain <7d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_http_401_no_https", "score": 15, "label": "status 401 unauthorized + no https", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "no_https"], "if_any": [], "if_not": []},
+        {"name": "combo_http_401_redir_chain", "score": 15, "label": "status 401 unauthorized + redirect chain 2plus", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "redirect_chain_2plus"], "if_any": [], "if_not": []},
+        {"name": "combo_http_401_shell_site", "score": 15, "label": "status 401 unauthorized + minimal shell", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "minimal_shell"], "if_any": [], "if_not": []},
+        {"name": "combo_http_401_temp_redir", "score": 12, "label": "status 401 unauthorized + redirect temp 302 307", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "redirect_temp_302_307"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_cred_form", "score": 20, "label": "status 403 cloaking + credential form", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_cross_redir", "score": 20, "label": "status 403 cloaking + redirect cross domain", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "redirect_cross_domain"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_doc_lure", "score": 20, "label": "status 403 cloaking + doc sharing lure", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "doc_sharing_lure"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_hijack_path", "score": 22, "label": "status 403 cloaking + hijack path pattern", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "hijack_path_pattern"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_http_429", "score": 15, "label": "status 403 cloaking + status 429 throttling", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "status_429_throttling"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_http_503", "score": 18, "label": "status 403 cloaking + status 503 disposable", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "status_503_disposable"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_js_redir", "score": 20, "label": "status 403 cloaking + js redirect", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "js_redirect"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_new_30d", "score": 15, "label": "status 403 cloaking + domain <30d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_new_7d", "score": 25, "label": "status 403 cloaking + domain <7d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_no_https", "score": 18, "label": "status 403 cloaking + no https", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "no_https"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_phish_infra", "score": 28, "label": "status 403 cloaking + phishing infra redirect", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "phishing_infra_redirect"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_phish_js", "score": 22, "label": "status 403 cloaking + phishing js behavior", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "phishing_js_behavior"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_phish_paths", "score": 22, "label": "status 403 cloaking + phishing paths", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "phishing_paths"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_redir_chain", "score": 22, "label": "status 403 cloaking + redirect chain 2plus", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "redirect_chain_2plus"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_shell_site", "score": 22, "label": "status 403 cloaking + minimal shell", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "minimal_shell"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_temp_redir", "score": 22, "label": "status 403 cloaking + redirect temp 302 307", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "redirect_temp_302_307"], "if_any": [], "if_not": []},
+        {"name": "combo_http_429_cred_form", "score": 15, "label": "status 429 throttling + credential form", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_429_throttling", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_http_429_http_503", "score": 12, "label": "status 429 throttling + status 503 disposable", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_429_throttling", "status_503_disposable"], "if_any": [], "if_not": []},
+        {"name": "combo_http_429_new_30d", "score": 10, "label": "status 429 throttling + domain <30d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_429_throttling", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_http_429_new_7d", "score": 15, "label": "status 429 throttling + domain <7d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_429_throttling", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_http_429_no_https", "score": 12, "label": "status 429 throttling + no https", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_429_throttling", "no_https"], "if_any": [], "if_not": []},
+        {"name": "combo_http_429_redir_chain", "score": 12, "label": "status 429 throttling + redirect chain 2plus", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_429_throttling", "redirect_chain_2plus"], "if_any": [], "if_not": []},
+        {"name": "combo_http_429_shell_site", "score": 15, "label": "status 429 throttling + minimal shell", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_429_throttling", "minimal_shell"], "if_any": [], "if_not": []},
+        {"name": "combo_http_429_temp_redir", "score": 12, "label": "status 429 throttling + redirect temp 302 307", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_429_throttling", "redirect_temp_302_307"], "if_any": [], "if_not": []},
+        {"name": "combo_http_503_cred_form", "score": 18, "label": "status 503 disposable + credential form", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_503_disposable", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_http_503_cross_redir", "score": 15, "label": "status 503 disposable + redirect cross domain", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_503_disposable", "redirect_cross_domain"], "if_any": [], "if_not": []},
+        {"name": "combo_http_503_hijack_path", "score": 15, "label": "status 503 disposable + hijack path pattern", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_503_disposable", "hijack_path_pattern"], "if_any": [], "if_not": []},
+        {"name": "combo_http_503_new_30d", "score": 12, "label": "status 503 disposable + domain <30d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_503_disposable", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_http_503_new_7d", "score": 18, "label": "status 503 disposable + domain <7d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_503_disposable", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_http_503_no_https", "score": 15, "label": "status 503 disposable + no https", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_503_disposable", "no_https"], "if_any": [], "if_not": []},
+        {"name": "combo_http_503_phish_infra", "score": 22, "label": "status 503 disposable + phishing infra redirect", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_503_disposable", "phishing_infra_redirect"], "if_any": [], "if_not": []},
+        {"name": "combo_http_503_redir_chain", "score": 15, "label": "status 503 disposable + redirect chain 2plus", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_503_disposable", "redirect_chain_2plus"], "if_any": [], "if_not": []},
+        {"name": "combo_http_503_shell_site", "score": 15, "label": "status 503 disposable + minimal shell", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_503_disposable", "minimal_shell"], "if_any": [], "if_not": []},
+        {"name": "combo_http_503_temp_redir", "score": 15, "label": "status 503 disposable + redirect temp 302 307", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_503_disposable", "redirect_temp_302_307"], "if_any": [], "if_not": []},
+
+        # --- Hosting Risk (16 rules) ---
+        {"name": "combo_budget_host_cred_form", "score": 15, "label": "hosting budget shared + credential form", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_budget_host_new_30d", "score": 12, "label": "hosting budget shared + domain <30d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_budget_host_new_7d", "score": 18, "label": "hosting budget shared + domain <7d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_budget_host_no_dkim", "score": 6, "label": "hosting budget shared + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_budget_host_no_dmarc", "score": 6, "label": "hosting budget shared + no dmarc", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "combo_budget_host_no_spf", "score": 6, "label": "hosting budget shared + no spf", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_spf"], "if_any": [], "if_not": []},
+        {"name": "combo_free_host_cred_form", "score": 18, "label": "hosting free + credential form", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_free", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_free_host_new_30d", "score": 15, "label": "hosting free + domain <30d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_free", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_platform_host_mail_prefix_mx", "score": 8, "label": "hosting platform + mx mail prefix", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_platform", "mx_mail_prefix"], "if_any": [], "if_not": []},
+        {"name": "combo_platform_host_no_dkim", "score": 5, "label": "hosting platform + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_platform", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_platform_host_self_mx", "score": 6, "label": "hosting platform + mx selfhosted", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_platform", "mx_selfhosted"], "if_any": [], "if_not": []},
+        {"name": "combo_platform_host_self_mx_no_dkim", "score": 10, "label": "hosting platform + mx selfhosted + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_platform", "mx_selfhosted", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_suspect_host_cred_form", "score": 25, "label": "hosting suspect + credential form", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_suspect_host_new_30d", "score": 22, "label": "hosting suspect + domain <30d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_suspect_host_new_7d", "score": 28, "label": "hosting suspect + domain <7d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_suspect_host_no_https", "score": 18, "label": "hosting suspect + no https", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "no_https"], "if_any": [], "if_not": []},
+
+        # --- MX Provider Risk (9 rules) ---
+        {"name": "combo_disposable_mx_budget_host", "score": 8, "label": "mx disposable + hosting budget shared", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_disposable", "hosting_budget_shared"], "if_any": [], "if_not": []},
+        {"name": "combo_disposable_mx_no_dkim", "score": 8, "label": "mx disposable + no dkim", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_disposable", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_disposable_mx_weak_dmarc", "score": 6, "label": "mx disposable + dmarc p none", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_disposable", "dmarc_p_none"], "if_any": [], "if_not": []},
+        {"name": "combo_mail_prefix_mx_no_dkim", "score": 5, "label": "mx mail prefix + no dkim", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_mail_prefix_mx_no_dkim_weak_dmarc", "score": 8, "label": "mx mail prefix + no dkim + dmarc p none", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
+        {"name": "combo_mail_prefix_mx_no_dkim_weak_dmarc_no_ptr", "score": 10, "label": "mx mail prefix + no dkim + dmarc p none + no ptr", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none", "no_ptr"], "if_any": [], "if_not": []},
+        {"name": "combo_mail_prefix_mx_no_ptr", "score": 4, "label": "mx mail prefix + no ptr", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_ptr"], "if_any": [], "if_not": []},
+        {"name": "combo_self_mx_budget_host", "score": 6, "label": "mx selfhosted + hosting budget shared", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_selfhosted", "hosting_budget_shared"], "if_any": [], "if_not": []},
+        {"name": "combo_self_mx_no_dkim", "score": 6, "label": "mx selfhosted + no dkim", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_selfhosted", "no_dkim"], "if_any": [], "if_not": []},
+
+        # --- Opaque Entity (5 rules) ---
+        {"name": "combo_no_trust_new_30d", "score": 12, "label": "missing trust signals + domain <30d", "category": "Opaque Entity", "enabled": True, "if_all": ["missing_trust_signals", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_opaque_new_30d", "score": 25, "label": "opaque entity + domain <30d", "category": "Opaque Entity", "enabled": True, "if_all": ["opaque_entity", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_opaque_new_90d", "score": 18, "label": "opaque entity + domain <90d", "category": "Opaque Entity", "enabled": True, "if_all": ["opaque_entity", "domain_lt_90d"], "if_any": [], "if_not": []},
+        {"name": "combo_restricted_new_30d", "score": 15, "label": "access restricted + domain <30d", "category": "Opaque Entity", "enabled": True, "if_all": ["access_restricted", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_restricted_no_trust", "score": 15, "label": "access restricted + missing trust signals", "category": "Opaque Entity", "enabled": True, "if_all": ["access_restricted", "missing_trust_signals"], "if_any": [], "if_not": []},
+
+        # --- Phishing Infrastructure (13 rules) ---
+        {"name": "combo_doc_lure_hijack_path", "score": 22, "label": "doc sharing lure + hijack path pattern", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["doc_sharing_lure", "hijack_path_pattern"], "if_any": [], "if_not": []},
+        {"name": "combo_doc_lure_phish_js", "score": 25, "label": "doc sharing lure + phishing js behavior", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["doc_sharing_lure", "phishing_js_behavior"], "if_any": [], "if_not": []},
+        {"name": "combo_email_track_phish_js", "score": 25, "label": "email tracking url + phishing js behavior", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["email_tracking_url", "phishing_js_behavior"], "if_any": [], "if_not": []},
+        {"name": "combo_hijack_path_cred_form", "score": 20, "label": "hijack path pattern + credential form", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["hijack_path_pattern", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_hijack_path_established", "score": 18, "label": "hijack path pattern + domain >1yr", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["hijack_path_pattern", "domain_gt_1yr"], "if_any": [], "if_not": []},
+        {"name": "combo_phish_infra_cred_form", "score": 30, "label": "phishing infra redirect + credential form", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["phishing_infra_redirect", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_phish_infra_doc_lure", "score": 25, "label": "phishing infra redirect + doc sharing lure", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["phishing_infra_redirect", "doc_sharing_lure"], "if_any": [], "if_not": []},
+        {"name": "combo_phish_infra_established", "score": 28, "label": "phishing infra redirect + domain >1yr", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["phishing_infra_redirect", "domain_gt_1yr"], "if_any": [], "if_not": []},
+        {"name": "combo_phish_js_cred_form", "score": 25, "label": "phishing js behavior + credential form", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["phishing_js_behavior", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_phish_js_hijack_path", "score": 20, "label": "phishing js behavior + hijack path pattern", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["phishing_js_behavior", "hijack_path_pattern"], "if_any": [], "if_not": []},
+        {"name": "combo_phish_js_shell_site", "score": 22, "label": "phishing js behavior + minimal shell", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["phishing_js_behavior", "minimal_shell"], "if_any": [], "if_not": []},
+        {"name": "combo_phish_paths_cred_form", "score": 15, "label": "phishing paths + credential form", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["phishing_paths", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_phish_paths_new_30d", "score": 12, "label": "phishing paths + domain <30d", "category": "Phishing Infrastructure", "enabled": True, "if_all": ["phishing_paths", "domain_lt_30d"], "if_any": [], "if_not": []},
+
+        # --- Phishing Lures (4 rules) ---
+        {"name": "combo_doc_lure_cred_form", "score": 25, "label": "doc sharing lure + credential form", "category": "Phishing Lures", "enabled": True, "if_all": ["doc_sharing_lure", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_doc_lure_email_track", "score": 22, "label": "doc sharing lure + email tracking url", "category": "Phishing Lures", "enabled": True, "if_all": ["doc_sharing_lure", "email_tracking_url"], "if_any": [], "if_not": []},
+        {"name": "combo_email_track_cred_form", "score": 28, "label": "email tracking url + credential form", "category": "Phishing Lures", "enabled": True, "if_all": ["email_tracking_url", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_email_track_doc_lure", "score": 22, "label": "email tracking url + doc sharing lure", "category": "Phishing Lures", "enabled": True, "if_all": ["email_tracking_url", "doc_sharing_lure"], "if_any": [], "if_not": []},
+
+        # --- Phishing Templates (4 rules) ---
+        {"name": "brand_keyword_phish", "score": 10, "label": "Brand + spoofing keyword domain without established legitimacy signals", "category": "Phishing Templates", "enabled": True, "if_all": ["brand_spoofing_keyword", "domain_brand_impersonation"], "if_any": [], "if_not": ["domain_gt_1yr", "app_store_high", "mx_enterprise"]},
+        {"name": "phish_factory_template", "score": 10, "label": "Phishing factory template: mail.{domain} + no DKIM + weak DMARC + no PTR", "category": "Phishing Templates", "enabled": True, "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none", "no_ptr"], "if_any": [], "if_not": ["mx_enterprise", "has_bimi", "domain_gt_1yr"]},
+        {"name": "platform_phish_setup", "score": 8, "label": "Free/platform hosting with self-hosted email and no DKIM", "category": "Phishing Templates", "enabled": True, "if_all": ["mx_selfhosted", "no_dkim"], "if_any": ["hosting_platform", "hosting_free"], "if_not": ["mx_enterprise", "app_store_high"]},
+        {"name": "zero_email_auth", "score": 10, "label": "No email authentication at all on non-established domain", "category": "Phishing Templates", "enabled": True, "if_all": ["no_spf", "no_dkim", "no_dmarc"], "if_any": [], "if_not": ["domain_gt_1yr"]},
+
+        # --- Positive Signals (3 rules) ---
+        {"name": "combo_appstore_hi_bimi", "score": -8, "label": "app store high + has bimi", "category": "Positive Signals", "enabled": True, "if_all": ["app_store_high", "has_bimi"], "if_any": [], "if_not": []},
+        {"name": "combo_appstore_hi_mta_sts", "score": -5, "label": "app store high + has mta sts", "category": "Positive Signals", "enabled": True, "if_all": ["app_store_high", "has_mta_sts"], "if_any": [], "if_not": []},
+        {"name": "combo_appstore_med_bimi", "score": -5, "label": "app store medium + has bimi", "category": "Positive Signals", "enabled": True, "if_all": ["app_store_medium", "has_bimi"], "if_any": [], "if_not": []},
+
+        # --- TLD Variant Spoofing (8 rules) ---
+        {"name": "combo_tld_spoof_budget_host", "score": 12, "label": "tld variant spoofing + hosting budget shared", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "hosting_budget_shared"], "if_any": [], "if_not": []},
+        {"name": "combo_tld_spoof_new_30d", "score": 25, "label": "tld variant spoofing + domain <30d", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_tld_spoof_new_7d", "score": 30, "label": "tld variant spoofing + domain <7d", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_tld_spoof_no_dkim", "score": 15, "label": "tld variant spoofing + no dkim", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_tld_spoof_no_trust", "score": 15, "label": "tld variant spoofing + missing trust signals", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "missing_trust_signals"], "if_any": [], "if_not": []},
+        {"name": "combo_tld_spoof_parked", "score": 18, "label": "tld variant spoofing + parking page", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "parking_page"], "if_any": [], "if_not": []},
+        {"name": "combo_tld_spoof_self_mx", "score": 15, "label": "tld variant spoofing + mx selfhosted", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "mx_selfhosted"], "if_any": [], "if_not": []},
+        {"name": "combo_tld_spoof_shell_site", "score": 20, "label": "tld variant spoofing + minimal shell", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "minimal_shell"], "if_any": [], "if_not": []},
+
+        # --- Tech Support Scam (10 rules) ---
+        {"name": "combo_sus_prefix_cred_form", "score": 20, "label": "suspicious prefix + credential form", "category": "Tech Support Scam", "enabled": True, "if_all": ["suspicious_prefix", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_prefix_new_30d", "score": 18, "label": "suspicious prefix + domain <30d", "category": "Tech Support Scam", "enabled": True, "if_all": ["suspicious_prefix", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_prefix_sus_suffix", "score": 18, "label": "suspicious prefix + suspicious suffix", "category": "Tech Support Scam", "enabled": True, "if_all": ["suspicious_prefix", "suspicious_suffix"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_prefix_techsupport_tld", "score": 22, "label": "suspicious prefix + tech support tld", "category": "Tech Support Scam", "enabled": True, "if_all": ["suspicious_prefix", "tech_support_tld"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_suffix_cred_form", "score": 18, "label": "suspicious suffix + credential form", "category": "Tech Support Scam", "enabled": True, "if_all": ["suspicious_suffix", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_suffix_new_30d", "score": 15, "label": "suspicious suffix + domain <30d", "category": "Tech Support Scam", "enabled": True, "if_all": ["suspicious_suffix", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_suffix_techsupport_tld", "score": 20, "label": "suspicious suffix + tech support tld", "category": "Tech Support Scam", "enabled": True, "if_all": ["suspicious_suffix", "tech_support_tld"], "if_any": [], "if_not": []},
+        {"name": "combo_techsupport_tld_cred_form", "score": 22, "label": "tech support tld + credential form", "category": "Tech Support Scam", "enabled": True, "if_all": ["tech_support_tld", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_techsupport_tld_new_30d", "score": 18, "label": "tech support tld + domain <30d", "category": "Tech Support Scam", "enabled": True, "if_all": ["tech_support_tld", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_techsupport_tld_no_https", "score": 15, "label": "tech support tld + no https", "category": "Tech Support Scam", "enabled": True, "if_all": ["tech_support_tld", "no_https"], "if_any": [], "if_not": []},
+
     ],
     
     "suspicious_tlds": [
@@ -891,12 +714,9 @@ def load_config() -> dict:
                 # Ensure nested dicts are merged properly
                 if 'weights' in loaded:
                     merged['weights'] = {**DEFAULT_CONFIG['weights'], **loaded['weights']}
-                if 'combos' in loaded:
-                    merged['combos'] = {**DEFAULT_CONFIG['combos'], **loaded['combos']}
-                if 'disabled_combos' in loaded:
-                    merged['disabled_combos'] = loaded['disabled_combos']
-                else:
-                    merged['disabled_combos'] = []
+                # Legacy: if old config has combos, ignore them (now in rules)
+                loaded.pop('combos', None)
+                loaded.pop('disabled_combos', None)
                 # Rules: merge by name (user rules override defaults with same name,
                 # new user rules are added). Set "rules_replace": true in config.json
                 # to completely replace defaults instead of merging.
@@ -940,6 +760,5 @@ def get_weight(config: dict, signal: str) -> int:
 
 
 def get_combo_weight(config: dict, signal1: str, signal2: str) -> int:
-    """Get combo weight for two signals from config."""
-    key = f"{signal1}+{signal2}"
-    return config.get('combos', {}).get(key, DEFAULT_CONFIG['combos'].get(key, 0))
+    """DEPRECATED: Combos are now unified rules. Returns 0."""
+    return 0
