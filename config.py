@@ -426,6 +426,42 @@ DEFAULT_CONFIG = {
     ],
     "blocked_asn_org_score": 100,  # Score to apply when matched
     
+    # ──────────────────────────────────────────────────────────────────
+    # ALLOW LISTS — Domains cleared by admin review
+    # ──────────────────────────────────────────────────────────────────
+    # These lists suppress specific detection signals for domains that
+    # have been manually reviewed and confirmed as legitimate.
+    #
+    # IMPORTANT: Adding a domain here does NOT reduce its score from
+    # other signals — it only suppresses the specific signal category.
+    # A domain on the spoofing allowlist still gets scored for email
+    # auth gaps, blacklist hits, hosting risk, etc.
+    #
+    # Matching: exact domain match OR subdomain match (e.g., adding
+    # "example.com" also covers "mail.example.com").
+    # ──────────────────────────────────────────────────────────────────
+    
+    # Suppress TLD variant spoofing detection for these domains.
+    # Use when a legitimate business operates on a non-.com TLD and
+    # keeps triggering the variant check against the .com owner.
+    # Example: terravision.eu is a real Italian transport company,
+    # not spoofing terravision.com.
+    "tld_variant_allowlist": [
+        # "terravision.eu",
+        # "facts.ae",
+    ],
+    
+    # Suppress typosquat, brand impersonation, brand+keyword,
+    # suspicious prefix, and suspicious suffix detection for these
+    # domains. Use when a legitimate domain name pattern matches
+    # a brand or keyword rule.
+    # Example: cabonline.com triggers "suspicious suffix: online"
+    # but is a legitimate Swedish taxi company.
+    "spoofing_allowlist": [
+        # "cabonline.com",
+        # "gratuitpentrupc.com",
+    ],
+    
     "hosting_providers": {
         # =============================================================
         # BUDGET SHARED HOSTS (type: "budget_shared")
