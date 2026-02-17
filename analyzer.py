@@ -1138,7 +1138,7 @@ def is_disposable_email(domain: str, disposable_list: List[str]) -> bool:
     return False
 
 
-def check_domain_name_patterns(domain: str) -> Dict:
+def check_domain_name_patterns(domain: str, config: dict = None) -> Dict:
     """
     Detect tech support scam / brand impersonation patterns in domain name.
     
@@ -1245,12 +1245,24 @@ def check_domain_name_patterns(domain: str) -> Dict:
     
     # === CHECK 4: Brand impersonation in domain name ===
     # This catches domains like "app-spectrum.com", "nortonaccount.com"
+    # 
+    # v5.x improvements:
+    #   - Word-boundary matching for short brands (avoids "first" → "irs")
+    #   - Minimum brand-to-domain ratio (avoids tiny brand in long domain)
+    #   - Allowlist of common English words that contain brand substrings
     matched_brand = ""
     matched_brand_normalized = ""
+    
+    # Load brand impersonation tuning from config (with sensible defaults)
+    brand_config = config.get("brand_impersonation", {}) if config else {}
+    short_brand_max_len = brand_config.get("short_brand_max_len", 5)
+    brand_min_domain_ratio = brand_config.get("brand_min_domain_ratio", 0.25)
+    brand_allowlist_words = [w.lower() for w in brand_config.get("brand_allowlist_words", [])]
+    
     for brand in IMPERSONATED_BRANDS:
         brand_normalized = brand.replace(' ', '').lower()
         
-        # Skip very short brands that cause false positives
+        # Skip very short brands that cause false positives (2-char: hp, bt, ee, o2)
         if len(brand_normalized) < 3:
             continue
             
@@ -1266,6 +1278,66 @@ def check_domain_name_patterns(domain: str) -> Dict:
                 # Make sure the domain isn't just a longer legit name
                 # e.g., "spectrum.net" vs "spectrumaccount.com"
                 if normalized != brand_normalized:
+                    
+                    brand_pos = normalized.find(brand_normalized)
+                    brand_end = brand_pos + len(brand_normalized)
+                    at_start = (brand_pos == 0)
+                    at_end = (brand_end == len(normalized))
+                    
+                    # Check if brand appears at a hyphen boundary in the original domain
+                    at_hyphen_boundary = False
+                    segments = main_part.split('-')
+                    for seg in segments:
+                        seg_clean = seg.replace('_', '')
+                        if seg_clean == brand_normalized:
+                            at_hyphen_boundary = True
+                            break
+                        if seg_clean.startswith(brand_normalized) or seg_clean.endswith(brand_normalized):
+                            if len(seg_clean) == len(brand_normalized):
+                                at_hyphen_boundary = True
+                                break
+                    
+                    is_at_boundary = at_start or at_end or at_hyphen_boundary
+                    
+                    # --- NEW: Word-boundary check for short brands ---
+                    # Short brands (≤ short_brand_max_len chars) must appear at a
+                    # word boundary: start/end of domain part, or adjacent to a
+                    # hyphen in the original (un-normalized) domain.
+                    # This prevents "first" → "irs", "birdsong" → "irs", etc.
+                    if len(brand_normalized) <= short_brand_max_len:
+                        if not is_at_boundary:
+                            continue
+                    
+                    # --- NEW: Percentage/ratio check ---
+                    # Only applied when brand is NOT at a clear boundary.
+                    # If the brand is embedded in the middle of a long domain
+                    # and is a tiny fraction of it, it's likely coincidental.
+                    # e.g., "sage" (4 chars) in "massagetherapy" (14 chars) = 29% → skip
+                    # But "sage" at start of "sageconsulting" → skip ratio (at boundary)
+                    if not is_at_boundary and brand_min_domain_ratio > 0 and len(normalized) > 0:
+                        ratio = len(brand_normalized) / len(normalized)
+                        if ratio < brand_min_domain_ratio:
+                            continue
+                    
+                    # --- NEW: Allowlist check ---
+                    # If any allowlisted word appears in the normalized domain and
+                    # spans the position where the brand was found, suppress the match.
+                    # e.g., "first" is allowlisted, and "irs" is found inside "first"
+                    #        within "godfirstdigital" → suppress
+                    allowlisted = False
+                    for allowed_word in brand_allowlist_words:
+                        if allowed_word in normalized:
+                            # Check if the allowed word overlaps with the brand match
+                            aw_pos = normalized.find(allowed_word)
+                            aw_end = aw_pos + len(allowed_word)
+                            # Overlap check: brand is within or overlaps the allowed word
+                            if aw_pos <= brand_pos and aw_end >= brand_end:
+                                allowlisted = True
+                                break
+                    
+                    if allowlisted:
+                        continue
+                    
                     matched_brand = brand
                     matched_brand_normalized = brand_normalized
                     result["domain_impersonates_brand"] = brand
@@ -3212,7 +3284,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.typosquat_target, res.typosquat_similarity = check_typosquatting(domain, config['protected_brands'])
     
     # Check domain name for tech support scam / brand impersonation patterns
-    domain_patterns = check_domain_name_patterns(domain)
+    domain_patterns = check_domain_name_patterns(domain, config)
     res.has_suspicious_prefix = domain_patterns["has_suspicious_prefix"]
     res.suspicious_prefix_found = domain_patterns["suspicious_prefix"]
     res.has_suspicious_suffix = domain_patterns["has_suspicious_suffix"]
