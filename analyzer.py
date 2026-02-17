@@ -3072,8 +3072,11 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     
     # Combos
     combos = config.get('combos', DEFAULT_CONFIG['combos'])
+    disabled_combos = set(config.get('disabled_combos', []))
     combos_hit = []
     for combo_key, bonus in combos.items():
+        if combo_key in disabled_combos:
+            continue  # Skip disabled combos
         parts = combo_key.split('+')
         if all(p in signals for p in parts):
             score += bonus
