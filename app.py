@@ -119,7 +119,8 @@ def results_to_dataframe(results: list) -> pd.DataFrame:
         return pd.DataFrame()
     
     # Primary columns first
-    primary_cols = ['domain', 'risk_score', 'recommendation', 'summary']
+    primary_cols = ['domain', 'risk_score', 'recommendation', 'high_risk_phish_infra', 
+                    'asn_display', 'rules_triggered', 'summary']
     
     # Convert to list of dicts if needed
     if hasattr(results[0], '__dict__'):
@@ -258,6 +259,23 @@ def display_results(results: list):
         # Summary table with color coding
         summary_df = df[['domain', 'risk_score', 'recommendation', 'summary']].copy()
         
+        # Add high-risk phishing infra indicator column
+        if 'high_risk_phish_infra' in df.columns:
+            summary_df.insert(2, 'phish_infra', df['high_risk_phish_infra'].apply(
+                lambda x: '🚨 HIGH RISK' if x else ''
+            ))
+        
+        # Add ASN display column
+        if 'asn_display' in df.columns:
+            summary_df.insert(3 if 'phish_infra' in summary_df.columns else 2, 
+                            'asn', df['asn_display'].fillna(''))
+        
+        # Add rules triggered column
+        if 'rules_triggered' in df.columns:
+            summary_df['rules_fired'] = df['rules_triggered'].apply(
+                lambda x: x.replace(';', ' | ') if pd.notna(x) and x else ''
+            )
+        
         def color_recommendation(val):
             if val == 'APPROVE':
                 return 'background-color: #d4edda; color: #155724'
@@ -282,7 +300,10 @@ def display_results(results: list):
         column_config = {
             "domain": st.column_config.TextColumn("Domain", width="medium"),
             "risk_score": st.column_config.NumberColumn("Score", width="small"),
+            "phish_infra": st.column_config.TextColumn("⚠️ Phish Infra", width="small"),
+            "asn": st.column_config.TextColumn("ASN", width="medium"),
             "recommendation": st.column_config.TextColumn("Result", width="small"),
+            "rules_fired": st.column_config.TextColumn("Rules Fired", width="medium"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
         }
         
@@ -301,6 +322,9 @@ def display_results(results: list):
             "domain": st.column_config.TextColumn("Domain", width="medium"),
             "risk_score": st.column_config.NumberColumn("Score", width="small"),
             "recommendation": st.column_config.TextColumn("Result", width="small"),
+            "high_risk_phish_infra": st.column_config.CheckboxColumn("🚨 Phish Infra", width="small"),
+            "asn_display": st.column_config.TextColumn("ASN", width="medium"),
+            "rules_triggered": st.column_config.TextColumn("Rules Fired", width="medium"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
             "signals_triggered": st.column_config.TextColumn("Signals", width="medium"),
             "combos_triggered": st.column_config.TextColumn("Combos", width="medium"),
@@ -313,7 +337,8 @@ def display_results(results: list):
             selected_cols = st.multiselect(
                 "Columns",
                 all_cols,
-                default=['domain', 'risk_score', 'recommendation', 'summary', 
+                default=['domain', 'risk_score', 'recommendation', 'high_risk_phish_infra',
+                        'asn_display', 'rules_triggered', 'summary', 
                         'combos_triggered', 'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
             )
             if selected_cols:
@@ -341,7 +366,11 @@ def display_results(results: list):
         with col2:
             # Summary CSV (just key columns)
             summary_csv = BytesIO()
-            df[['domain', 'risk_score', 'recommendation', 'summary']].to_csv(summary_csv, index=False)
+            summary_cols = ['domain', 'risk_score', 'recommendation', 'high_risk_phish_infra',
+                           'asn_display', 'rules_triggered', 'summary']
+            # Only include columns that exist in the dataframe
+            summary_cols = [c for c in summary_cols if c in df.columns]
+            df[summary_cols].to_csv(summary_csv, index=False)
             summary_csv.seek(0)
             st.download_button(
                 label="📥 Download Summary CSV",
@@ -378,6 +407,20 @@ def display_results(results: list):
             
             if 'risk_level' in domain_data:
                 st.metric("Risk Level", domain_data.get('risk_level', 'N/A'))
+            
+            # High-risk phishing infrastructure indicator
+            if domain_data.get('high_risk_phish_infra'):
+                st.error(f"### 🚨 HIGH-RISK PHISHING INFRA")
+                st.caption(domain_data.get('high_risk_phish_infra_reason', ''))
+            
+            # ASN display
+            asn_display = domain_data.get('asn_display', '')
+            if asn_display:
+                is_render = 'render' in asn_display.lower()
+                if is_render:
+                    st.warning(f"**ASN:** 🔴 {asn_display}")
+                else:
+                    st.markdown(f"**ASN:** {asn_display}")
         
         with col2:
             st.markdown("**Summary:**")
@@ -444,6 +487,21 @@ def display_results(results: list):
                 st.markdown(f"**🔗 Combo Scoring:** +{total_combo_pts} points from {len(combos_list)} combo(s)")
                 with st.expander("View triggered combos"):
                     st.markdown("\n".join(combo_details))
+            
+            # Rules triggered display
+            rules_str = domain_data.get('rules_triggered', '')
+            if rules_str:
+                rules_list = rules_str.split(';')
+                st.markdown(f"**📐 Rules Fired:** {len(rules_list)} rule(s)")
+                for r in rules_list:
+                    st.markdown(f"  • `{r}`")
+                # Show labels too
+                rules_labels_str = domain_data.get('rules_labels', '')
+                if rules_labels_str:
+                    with st.expander("View rule details"):
+                        for label in rules_labels_str.split(';'):
+                            if label.strip():
+                                st.markdown(f"  ⚡ {label.strip()}")
 
 
 def admin_view():
@@ -478,7 +536,7 @@ def admin_view():
     config = st.session_state.config
     
     # Tabs for different config sections
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["⚖️ Scoring Weights", "🔗 Signal Combos", "🎯 Thresholds", "📋 Lists", "💾 Import/Export"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["⚖️ Scoring Weights", "🔗 Signal Combos", "📐 Custom Rules", "🎯 Thresholds", "📋 Lists", "💾 Import/Export"])
     
     with tab1:
         st.header("⚖️ Scoring Weights")
@@ -588,6 +646,178 @@ def admin_view():
         config['combos'] = {**combos, **new_combos}
     
     with tab3:
+        st.header("📐 Custom Rules")
+        st.markdown("""
+        Rules provide **if/then logic** beyond simple signal combos. Each rule checks conditions 
+        against triggered signals and adds (or subtracts) points when all conditions are met.
+        
+        **How rules work:**
+        - `if_all` — ALL listed signals must be present (AND logic)
+        - `if_any` — AT LEAST ONE signal must be present (OR logic)  
+        - `if_not` — NONE of these signals may be present (exclusion)
+        - `score` — Points to add when rule fires (positive = riskier)
+        """)
+        
+        rules = config.get('rules', DEFAULT_CONFIG.get('rules', []))
+        
+        # Available signals reference (collapsible)
+        with st.expander("📖 Available signals reference"):
+            st.markdown("""
+            **Email auth:** `no_spf`, `no_dkim`, `no_dmarc`, `spf_pass_all`, `spf_softfail_all`, `spf_neutral_all`, `dmarc_p_none`, `dmarc_no_rua`, `spf_no_external_includes`
+            
+            **MX:** `no_mx`, `null_mx`, `mx_enterprise`, `mx_disposable`, `mx_selfhosted`, `mx_mail_prefix`
+            
+            **DNS:** `no_ptr`, `ptr_mismatch`
+            
+            **Trust/Auth:** `has_bimi`, `has_mta_sts`
+            
+            **App store:** `app_store_high`, `app_store_medium`, `app_store_low`, `app_store_platform_false_positive`
+            
+            **Blacklists:** `domain_blacklisted`, `ip_blacklisted`
+            
+            **Domain age:** `domain_lt_7d`, `domain_lt_30d`, `domain_lt_90d`, `domain_gt_1yr`
+            
+            **Domain type:** `suspicious_tld`, `free_email_domain`, `disposable_email`, `typosquat_detected`, `free_hosting`
+            
+            **Hosting:** `hosting_budget_shared`, `hosting_free`, `hosting_suspect`, `hosting_platform`
+            
+            **Domain name:** `suspicious_prefix`, `suspicious_suffix`, `is_tech_support_tld`, `domain_brand_impersonation`
+            
+            **TLD variant:** `tld_variant_spoofing`
+            
+            **Web:** `no_https`, `tls_handshake_failed`, `tls_connection_failed`, `cert_expired`, `cert_self_signed`
+            
+            **Redirects:** `redirect_chain_2plus`, `redirect_cross_domain`, `redirect_temp_302_307`
+            
+            **Status codes:** `status_401_unauthorized`, `status_403_cloaking`, `status_429_throttling`, `status_503_disposable`
+            
+            **Content:** `minimal_shell`, `js_redirect`, `meta_refresh`, `has_external_js`, `missing_trust_signals`, `access_restricted`, `opaque_entity`
+            
+            **Scam patterns:** `hijack_path_pattern`, `doc_sharing_lure`, `phishing_js_behavior`, `phishing_infra_redirect`, `email_tracking_url`
+            
+            **E-commerce:** `retail_scam_tld`, `cross_domain_brand_link`, `ecommerce_no_identity`
+            """)
+        
+        updated_rules = []
+        
+        for idx, rule in enumerate(rules):
+            rule_name = rule.get('name', f'rule_{idx}')
+            rule_label = rule.get('label', '')
+            rule_score = rule.get('score', 0)
+            rule_enabled = rule.get('enabled', True)
+            
+            # Highlight the two key phishing rules
+            is_key_rule = rule_name in ('phish_factory_template', 'platform_phish_setup')
+            header_prefix = "🎯 " if is_key_rule else ""
+            
+            with st.expander(f"{header_prefix}**{rule_name}** (score: {rule_score:+d}){' — ⚡ KEY PHISH RULE' if is_key_rule else ''}", expanded=is_key_rule):
+                
+                col_enable, col_score = st.columns([1, 1])
+                
+                with col_enable:
+                    new_enabled = st.checkbox(
+                        "Enabled",
+                        value=rule_enabled,
+                        key=f"rule_enabled_{idx}",
+                    )
+                
+                with col_score:
+                    new_score = st.number_input(
+                        "Score (points added when rule fires)",
+                        min_value=-50,
+                        max_value=100,
+                        value=rule_score,
+                        step=1,
+                        key=f"rule_score_{idx}",
+                    )
+                
+                new_label = st.text_input(
+                    "Label (shown in results when rule fires)",
+                    value=rule_label,
+                    key=f"rule_label_{idx}",
+                )
+                
+                st.markdown("**Conditions:**")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    if_all_str = st.text_area(
+                        "if_all (ALL must match, one per line)",
+                        value='\n'.join(rule.get('if_all', [])),
+                        height=100,
+                        key=f"rule_if_all_{idx}",
+                        help="ALL of these signals must be present for the rule to fire"
+                    )
+                
+                with col2:
+                    if_any_str = st.text_area(
+                        "if_any (AT LEAST ONE must match, one per line)",
+                        value='\n'.join(rule.get('if_any', [])),
+                        height=100,
+                        key=f"rule_if_any_{idx}",
+                        help="At least ONE of these signals must be present"
+                    )
+                
+                with col3:
+                    if_not_str = st.text_area(
+                        "if_not (NONE may be present, one per line)",
+                        value='\n'.join(rule.get('if_not', [])),
+                        height=100,
+                        key=f"rule_if_not_{idx}",
+                        help="If ANY of these signals are present, the rule will NOT fire"
+                    )
+                
+                updated_rule = {
+                    'name': rule_name,
+                    'score': new_score,
+                    'label': new_label,
+                    'enabled': new_enabled,
+                    'if_all': [s.strip() for s in if_all_str.splitlines() if s.strip()],
+                    'if_any': [s.strip() for s in if_any_str.splitlines() if s.strip()],
+                    'if_not': [s.strip() for s in if_not_str.splitlines() if s.strip()],
+                }
+                updated_rules.append(updated_rule)
+        
+        # Add new rule button
+        st.markdown("---")
+        st.subheader("➕ Add New Rule")
+        
+        with st.form("new_rule_form"):
+            new_name = st.text_input("Rule name (unique identifier, no spaces)", placeholder="my_new_rule")
+            new_rule_label = st.text_input("Label (human-readable description)", placeholder="Description of what this rule catches")
+            new_rule_score = st.number_input("Score", min_value=-50, max_value=100, value=10, step=1)
+            
+            nr_col1, nr_col2, nr_col3 = st.columns(3)
+            with nr_col1:
+                new_if_all = st.text_area("if_all (one per line)", height=80, key="new_rule_if_all")
+            with nr_col2:
+                new_if_any = st.text_area("if_any (one per line)", height=80, key="new_rule_if_any")
+            with nr_col3:
+                new_if_not = st.text_area("if_not (one per line)", height=80, key="new_rule_if_not")
+            
+            submitted = st.form_submit_button("Add Rule")
+            if submitted and new_name:
+                # Check for duplicate names
+                existing_names = [r.get('name', '') for r in updated_rules]
+                if new_name in existing_names:
+                    st.error(f"Rule name '{new_name}' already exists. Use a unique name.")
+                else:
+                    new_rule = {
+                        'name': new_name.strip().replace(' ', '_'),
+                        'score': new_rule_score,
+                        'label': new_rule_label,
+                        'enabled': True,
+                        'if_all': [s.strip() for s in new_if_all.splitlines() if s.strip()],
+                        'if_any': [s.strip() for s in new_if_any.splitlines() if s.strip()],
+                        'if_not': [s.strip() for s in new_if_not.splitlines() if s.strip()],
+                    }
+                    updated_rules.append(new_rule)
+                    st.success(f"Rule '{new_name}' added! Click **Save Configuration** to persist.")
+        
+        config['rules'] = updated_rules
+    
+    with tab4:
         st.header("🎯 Thresholds & Settings")
         
         col1, col2 = st.columns(2)
@@ -623,7 +853,7 @@ def admin_view():
             if new_password:
                 config['admin_password'] = new_password
     
-    with tab4:
+    with tab5:
         st.header("📋 Pattern Lists")
         
         st.subheader("Suspicious TLDs")
@@ -642,7 +872,7 @@ def admin_view():
         )
         config['protected_brands'] = [b.strip().lower() for b in protected_brands.splitlines() if b.strip()]
     
-    with tab5:
+    with tab6:
         st.header("💾 Import/Export Configuration")
         
         col1, col2 = st.columns(2)
