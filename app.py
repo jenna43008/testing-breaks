@@ -119,8 +119,7 @@ def results_to_dataframe(results: list) -> pd.DataFrame:
         return pd.DataFrame()
     
     # Primary columns first
-    primary_cols = ['domain', 'risk_score', 'recommendation', 'high_risk_phish_infra', 
-                    'asn_display', 'rules_triggered', 'summary']
+    primary_cols = ['domain', 'risk_score', 'recommendation', 'summary']
     
     # Convert to list of dicts if needed
     if hasattr(results[0], '__dict__'):
@@ -256,25 +255,8 @@ def display_results(results: list):
     tab1, tab2, tab3 = st.tabs(["📋 Summary View", "📊 Full Details", "⬇️ Download"])
     
     with tab1:
-        # Summary table with color coding
+        # Summary table with color coding — clean view: just domain, score, result, summary
         summary_df = df[['domain', 'risk_score', 'recommendation', 'summary']].copy()
-        
-        # Add high-risk phishing infra indicator column
-        if 'high_risk_phish_infra' in df.columns:
-            summary_df.insert(2, 'phish_infra', df['high_risk_phish_infra'].apply(
-                lambda x: '🚨 HIGH RISK' if x else ''
-            ))
-        
-        # Add ASN display column
-        if 'asn_display' in df.columns:
-            summary_df.insert(3 if 'phish_infra' in summary_df.columns else 2, 
-                            'asn', df['asn_display'].fillna(''))
-        
-        # Add rules triggered column
-        if 'rules_triggered' in df.columns:
-            summary_df['rules_fired'] = df['rules_triggered'].apply(
-                lambda x: x.replace(';', ' | ') if pd.notna(x) and x else ''
-            )
         
         def color_recommendation(val):
             if val == 'APPROVE':
@@ -300,10 +282,7 @@ def display_results(results: list):
         column_config = {
             "domain": st.column_config.TextColumn("Domain", width="medium"),
             "risk_score": st.column_config.NumberColumn("Score", width="small"),
-            "phish_infra": st.column_config.TextColumn("⚠️ Phish Infra", width="small"),
-            "asn": st.column_config.TextColumn("ASN", width="medium"),
             "recommendation": st.column_config.TextColumn("Result", width="small"),
-            "rules_fired": st.column_config.TextColumn("Rules Fired", width="medium"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
         }
         
@@ -337,9 +316,9 @@ def display_results(results: list):
             selected_cols = st.multiselect(
                 "Columns",
                 all_cols,
-                default=['domain', 'risk_score', 'recommendation', 'high_risk_phish_infra',
-                        'asn_display', 'rules_triggered', 'summary', 
-                        'combos_triggered', 'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
+                default=['domain', 'risk_score', 'recommendation', 'summary', 
+                        'asn_display', 'rules_triggered', 'combos_triggered',
+                        'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
             )
             if selected_cols:
                 st.dataframe(df[selected_cols], use_container_width=True)
@@ -366,9 +345,7 @@ def display_results(results: list):
         with col2:
             # Summary CSV (just key columns)
             summary_csv = BytesIO()
-            summary_cols = ['domain', 'risk_score', 'recommendation', 'high_risk_phish_infra',
-                           'asn_display', 'rules_triggered', 'summary']
-            # Only include columns that exist in the dataframe
+            summary_cols = ['domain', 'risk_score', 'recommendation', 'summary']
             summary_cols = [c for c in summary_cols if c in df.columns]
             df[summary_cols].to_csv(summary_csv, index=False)
             summary_csv.seek(0)
@@ -1087,7 +1064,7 @@ def main():
     
     # Footer
     st.sidebar.markdown("---")
-    st.sidebar.caption(f"Domain Sender Approval v2.2 | Analyzer v{ANALYZER_VERSION}")
+    st.sidebar.caption(f"Domain Sender Approval v2.3 | Analyzer v{ANALYZER_VERSION}")
     st.sidebar.caption(f"Threshold: {st.session_state.config.get('approve_threshold', 50)}")
 
 
