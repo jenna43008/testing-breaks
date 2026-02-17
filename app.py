@@ -647,18 +647,98 @@ def admin_view():
     
     with tab3:
         st.header("📐 Custom Rules")
-        st.markdown("""
-        Rules provide **if/then logic** beyond simple signal combos. Each rule checks conditions 
-        against triggered signals and adds (or subtracts) points when all conditions are met.
-        
-        **How rules work:**
-        - `if_all` — ALL listed signals must be present (AND logic)
-        - `if_any` — AT LEAST ONE signal must be present (OR logic)  
-        - `if_not` — NONE of these signals may be present (exclusion)
-        - `score` — Points to add when rule fires (positive = riskier)
-        """)
         
         rules = config.get('rules', DEFAULT_CONFIG.get('rules', []))
+        
+        # ==============================================================
+        # KEY PHISHING RULES — prominent section at top
+        # ==============================================================
+        st.subheader("🎯 Key Phishing Detection Rules")
+        st.caption("These two rules are the primary detectors for the Swedish invoice phishing pattern. "
+                   "Toggle on/off and adjust scoring here.")
+        
+        key_rule_names = ['phish_factory_template', 'platform_phish_setup']
+        key_rules_indices = []
+        
+        for idx, rule in enumerate(rules):
+            if rule.get('name') in key_rule_names:
+                key_rules_indices.append(idx)
+                rule_name = rule.get('name')
+                rule_score = rule.get('score', 0)
+                rule_enabled = rule.get('enabled', True)
+                rule_label = rule.get('label', '')
+                
+                # Colored container for visibility
+                st.markdown(f"---")
+                st.markdown(f"#### ⚡ `{rule_name}`")
+                st.caption(rule_label)
+                
+                # Toggle + Score on same row — highly visible
+                toggle_col, score_col, spacer = st.columns([1, 1, 2])
+                
+                with toggle_col:
+                    rule['enabled'] = st.toggle(
+                        "Rule Enabled",
+                        value=rule_enabled,
+                        key=f"key_toggle_{rule_name}",
+                    )
+                
+                with score_col:
+                    rule['score'] = st.number_input(
+                        "Score (points)",
+                        min_value=-50,
+                        max_value=100,
+                        value=rule_score,
+                        step=1,
+                        key=f"key_score_{rule_name}",
+                    )
+                
+                # Editable conditions inside expander (advanced)
+                with st.expander(f"Edit conditions for {rule_name}"):
+                    rule['label'] = st.text_input(
+                        "Label (shown in results)",
+                        value=rule_label,
+                        key=f"key_label_{rule_name}",
+                    )
+                    
+                    cond_col1, cond_col2, cond_col3 = st.columns(3)
+                    
+                    with cond_col1:
+                        if_all_str = st.text_area(
+                            "if_all (ALL must match)",
+                            value='\n'.join(rule.get('if_all', [])),
+                            height=100,
+                            key=f"key_if_all_{rule_name}",
+                            help="ALL of these signals must be present for the rule to fire"
+                        )
+                        rule['if_all'] = [s.strip() for s in if_all_str.splitlines() if s.strip()]
+                    
+                    with cond_col2:
+                        if_any_str = st.text_area(
+                            "if_any (AT LEAST ONE must match)",
+                            value='\n'.join(rule.get('if_any', [])),
+                            height=100,
+                            key=f"key_if_any_{rule_name}",
+                            help="At least ONE of these signals must be present"
+                        )
+                        rule['if_any'] = [s.strip() for s in if_any_str.splitlines() if s.strip()]
+                    
+                    with cond_col3:
+                        if_not_str = st.text_area(
+                            "if_not (NONE may be present)",
+                            value='\n'.join(rule.get('if_not', [])),
+                            height=100,
+                            key=f"key_if_not_{rule_name}",
+                            help="If ANY of these signals are present, the rule will NOT fire"
+                        )
+                        rule['if_not'] = [s.strip() for s in if_not_str.splitlines() if s.strip()]
+        
+        # ==============================================================
+        # OTHER RULES
+        # ==============================================================
+        st.markdown("---")
+        st.subheader("📋 All Other Rules")
+        st.caption("Additional custom rules. Toggle on/off and adjust scoring.")
         
         # Available signals reference (collapsible)
         with st.expander("📖 Available signals reference"):
@@ -698,88 +778,83 @@ def admin_view():
             **E-commerce:** `retail_scam_tld`, `cross_domain_brand_link`, `ecommerce_no_identity`
             """)
         
-        updated_rules = []
-        
         for idx, rule in enumerate(rules):
+            if idx in key_rules_indices:
+                continue  # Already rendered above
+            
             rule_name = rule.get('name', f'rule_{idx}')
             rule_label = rule.get('label', '')
             rule_score = rule.get('score', 0)
             rule_enabled = rule.get('enabled', True)
             
-            # Highlight the two key phishing rules
-            is_key_rule = rule_name in ('phish_factory_template', 'platform_phish_setup')
-            header_prefix = "🎯 " if is_key_rule else ""
+            st.markdown(f"---")
             
-            with st.expander(f"{header_prefix}**{rule_name}** (score: {rule_score:+d}){' — ⚡ KEY PHISH RULE' if is_key_rule else ''}", expanded=is_key_rule):
-                
-                col_enable, col_score = st.columns([1, 1])
-                
-                with col_enable:
-                    new_enabled = st.checkbox(
-                        "Enabled",
-                        value=rule_enabled,
-                        key=f"rule_enabled_{idx}",
-                    )
-                
-                with col_score:
-                    new_score = st.number_input(
-                        "Score (points added when rule fires)",
-                        min_value=-50,
-                        max_value=100,
-                        value=rule_score,
-                        step=1,
-                        key=f"rule_score_{idx}",
-                    )
-                
-                new_label = st.text_input(
-                    "Label (shown in results when rule fires)",
+            # Toggle + Name + Score on one visible row
+            toggle_col, name_col, score_col = st.columns([0.5, 2, 1])
+            
+            with toggle_col:
+                rule['enabled'] = st.toggle(
+                    "On",
+                    value=rule_enabled,
+                    key=f"rule_toggle_{idx}",
+                    label_visibility="collapsed",
+                )
+            
+            with name_col:
+                status = "✅" if rule.get('enabled', True) else "⛔"
+                st.markdown(f"**{status} `{rule_name}`** — {rule_label}")
+            
+            with score_col:
+                rule['score'] = st.number_input(
+                    "Score",
+                    min_value=-50,
+                    max_value=100,
+                    value=rule_score,
+                    step=1,
+                    key=f"rule_score_{idx}",
+                    label_visibility="collapsed",
+                )
+            
+            # Conditions inside expander (advanced editing)
+            with st.expander(f"Edit conditions for {rule_name}"):
+                rule['label'] = st.text_input(
+                    "Label (shown in results)",
                     value=rule_label,
                     key=f"rule_label_{idx}",
                 )
-                
-                st.markdown("**Conditions:**")
                 
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
                     if_all_str = st.text_area(
-                        "if_all (ALL must match, one per line)",
+                        "if_all (ALL must match)",
                         value='\n'.join(rule.get('if_all', [])),
                         height=100,
                         key=f"rule_if_all_{idx}",
-                        help="ALL of these signals must be present for the rule to fire"
                     )
+                    rule['if_all'] = [s.strip() for s in if_all_str.splitlines() if s.strip()]
                 
                 with col2:
                     if_any_str = st.text_area(
-                        "if_any (AT LEAST ONE must match, one per line)",
+                        "if_any (AT LEAST ONE must match)",
                         value='\n'.join(rule.get('if_any', [])),
                         height=100,
                         key=f"rule_if_any_{idx}",
-                        help="At least ONE of these signals must be present"
                     )
+                    rule['if_any'] = [s.strip() for s in if_any_str.splitlines() if s.strip()]
                 
                 with col3:
                     if_not_str = st.text_area(
-                        "if_not (NONE may be present, one per line)",
+                        "if_not (NONE may be present)",
                         value='\n'.join(rule.get('if_not', [])),
                         height=100,
                         key=f"rule_if_not_{idx}",
-                        help="If ANY of these signals are present, the rule will NOT fire"
                     )
-                
-                updated_rule = {
-                    'name': rule_name,
-                    'score': new_score,
-                    'label': new_label,
-                    'enabled': new_enabled,
-                    'if_all': [s.strip() for s in if_all_str.splitlines() if s.strip()],
-                    'if_any': [s.strip() for s in if_any_str.splitlines() if s.strip()],
-                    'if_not': [s.strip() for s in if_not_str.splitlines() if s.strip()],
-                }
-                updated_rules.append(updated_rule)
+                    rule['if_not'] = [s.strip() for s in if_not_str.splitlines() if s.strip()]
         
-        # Add new rule button
+        # ==============================================================
+        # ADD NEW RULE
+        # ==============================================================
         st.markdown("---")
         st.subheader("➕ Add New Rule")
         
@@ -798,12 +873,11 @@ def admin_view():
             
             submitted = st.form_submit_button("Add Rule")
             if submitted and new_name:
-                # Check for duplicate names
-                existing_names = [r.get('name', '') for r in updated_rules]
+                existing_names = [r.get('name', '') for r in rules]
                 if new_name in existing_names:
                     st.error(f"Rule name '{new_name}' already exists. Use a unique name.")
                 else:
-                    new_rule = {
+                    rules.append({
                         'name': new_name.strip().replace(' ', '_'),
                         'score': new_rule_score,
                         'label': new_rule_label,
@@ -811,11 +885,10 @@ def admin_view():
                         'if_all': [s.strip() for s in new_if_all.splitlines() if s.strip()],
                         'if_any': [s.strip() for s in new_if_any.splitlines() if s.strip()],
                         'if_not': [s.strip() for s in new_if_not.splitlines() if s.strip()],
-                    }
-                    updated_rules.append(new_rule)
+                    })
                     st.success(f"Rule '{new_name}' added! Click **Save Configuration** to persist.")
         
-        config['rules'] = updated_rules
+        config['rules'] = rules
     
     with tab4:
         st.header("🎯 Thresholds & Settings")
