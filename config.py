@@ -391,6 +391,96 @@ DEFAULT_CONFIG = {
         'fakeinbox.com', 'trashmail.com', 'tempinbox.com',
     ],
     
+    # ==========================================================================
+    # BRAND IMPERSONATION TUNING (v5.x)
+    # ==========================================================================
+    # Controls how brand names are matched in domain names.
+    #
+    # short_brand_max_len: Brands with this many chars or fewer require word-
+    #   boundary matching (hyphens, dots, start/end of domain part) to avoid
+    #   substring false positives like "first" triggering "irs".
+    #
+    # brand_min_domain_ratio: Minimum ratio of brand length to domain-name
+    #   length (excluding TLD). If the brand is too small a fraction of the
+    #   domain, the match is ignored.  0.0 = disabled, 0.3 = brand must be
+    #   at least 30% of the domain name.
+    #
+    # brand_allowlist_words: Common English words or legitimate business terms
+    #   that happen to contain a short brand substring. If the domain name
+    #   (normalized, without TLD) matches any of these, brand impersonation
+    #   is NOT flagged. Checked via substring: if any allowlisted word is
+    #   found spanning the brand match position, the match is suppressed.
+    # ==========================================================================
+    "brand_impersonation": {
+        "short_brand_max_len": 5,
+        "brand_min_domain_ratio": 0.25,
+        "brand_allowlist_words": [
+            # Words containing "irs" 
+            "first", "stairs", "thirds", "birdsong", "hairspray", "thirst",
+            "birthday", "affirm", "confirm", "firmware", "airshow", "fairshare",
+            "chairside", "repairshop", "staircase",
+            # Words containing "ups"
+            "cups", "pups", "groups", "startups", "setups", "pickups", "lineups",
+            "signups", "popups", "meetups", "roundups", "checkups", "backups",
+            "mixups", "tups", "syrup", "disruption", "upscale", "upstream",
+            "upset", "upside", "upsell",
+            # Words containing "dhl" — rare in English but cover edge cases
+            # Words containing "sky"
+            "skyline", "skyscraper", "skylight", "whisky", "husky",
+            # Words containing "cox"
+            "coxswain",
+            # Words containing "att"
+            "attorney", "attic", "attitude", "attract", "attach", "attack",
+            "attempt", "attend", "attention", "attribute", "matter", "battery",
+            "pattern", "shatter", "scatter", "chatter", "flatter", "latter",
+            "rattan", "cattle", "battle", "tatter", "hatter", "fatter",
+            "batter", "chattel", "tattoo", "latte", "matte",
+            # Words containing "avg" — rare naturally
+            # Words containing "aol" — rare naturally
+            # Words containing "hp" / "bt" / "ee" / "o2" — 2-char, skipped by len<3
+            # Words containing "delta"
+            "deltaforce",
+            # Words containing "chase"
+            "purchase", "purchaser",
+            # Words containing "sage"
+            "massage", "passage", "sagebrush", "message", "dosage", "usage",
+            "visage", "corsage", "sausage",
+            # Words containing "epic"
+            "recipe", "epidem",
+            # Words containing "canon"
+            "canonical",
+            # Words containing "steam"
+            "downstream", "upstream", "mainstream", "steamboat",
+            # Words containing "wise"
+            "otherwise", "likewise", "clockwise", "stepwise", "enterprise",
+            # Words containing "wish"
+            "swish",
+            # Words containing "zelle"
+            "gazelle", "gazelles",
+            # Words containing "three"
+            # Words containing "apple"
+            "pineapple", "appleseed", "grapple", "dapple", "snapple",
+            # Words containing "venmo" — rare naturally
+            # Words containing "ebay" — rare naturally
+            # Words containing "etsy" — rare naturally
+            # Words containing "dell"
+            "model", "modell", "dwell", "dellay",
+            # Words containing "klm" — rare naturally
+            # Words containing "tsb" — rare naturally
+            # Words containing "amex"
+            "games", "gamer", "examex",
+            # Words containing "evri" — rare naturally
+            # Words containing "spirit"
+            # "spirit" is 6 chars so covered by word boundary matching threshold
+            # Generic safe patterns
+            "digital", "solutions", "consulting", "services", "technology",
+            "creative", "international", "professional", "management",
+            "development", "foundation", "community", "education",
+            "financial", "industrial", "commercial", "residential",
+            "construction", "engineering", "healthcare", "marketing",
+        ],
+    },
+    
     "domain_blacklists": [
         "dbl.spamhaus.org",
         "multi.surbl.org", 
