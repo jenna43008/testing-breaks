@@ -37,7 +37,7 @@ VERSION: 4.4 (Feb 2026)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "5.3"
+ANALYZER_VERSION = "6.0"
 
 import re
 import socket
@@ -64,7 +64,7 @@ try:
 except ImportError:
     DNS_AVAILABLE = False
 
-from config import DEFAULT_CONFIG, get_weight, get_combo_weight
+from config import DEFAULT_CONFIG, get_weight
 
 try:
     from app_store_detection import check_app_store_presence
@@ -2863,9 +2863,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         elif res.domain_age_days < 90:
             score += weights.get('domain_lt_90d', 5)
             signals.add("domain_lt_90d")
-        # Track established domains (for hijack detection combos)
+        # Track established domains (for rule detection)
         if res.domain_age_days >= 365:
-            signals.add("domain_gt_1yr")  # No score penalty - just for combo detection
+            signals.add("domain_gt_1yr")  # No score penalty - just for rule detection
     
     # Domain type
     if res.is_suspicious_tld:
@@ -3061,26 +3061,13 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         score += weights.get('email_tracking_url', 20)
         signals.add("email_tracking_url")
     
-    # Combos
-    combos = config.get('combos', DEFAULT_CONFIG['combos'])
-    disabled_combos = set(config.get('disabled_combos', []))
-    combos_hit = []
-    for combo_key, bonus in combos.items():
-        if combo_key in disabled_combos:
-            continue  # Skip disabled combos
-        parts = combo_key.split('+')
-        if all(p in signals for p in parts):
-            score += bonus
-            combos_hit.append(combo_key)
-    
-    # === CUSTOM RULES ENGINE ===
-    # Rules support if/then/else logic beyond simple combos:
+    # === UNIFIED RULES ENGINE ===
+    # All scoring logic beyond base weights (former combos + custom rules)
+    # Rules support if/then/else logic:
     #   if_all:  ALL listed signals must be present (AND)
     #   if_any:  AT LEAST ONE listed signal must be present (OR)
     #   if_not:  NONE of these signals may be present (exclusion)
     #   score:   points to add (positive = riskier, negative = safer)
-    #   name:    identifier for the rule
-    #   label:   human-readable description shown in output
     rules = config.get('rules', DEFAULT_CONFIG.get('rules', []))
     rules_hit = []
     rules_labels = []
@@ -3121,7 +3108,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     
     res.recommendation = "APPROVE" if res.risk_score <= threshold else "DENY"
     res.signals_triggered = ";".join(sorted(signals))
-    res.combos_triggered = ";".join(combos_hit)
+    res.combos_triggered = ""  # Deprecated: combos are now unified rules
     res.rules_triggered = ";".join(rules_hit)
     res.rules_labels = ";".join(rules_labels)
     
