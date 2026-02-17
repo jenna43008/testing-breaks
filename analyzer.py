@@ -37,7 +37,7 @@ VERSION: 4.4 (Feb 2026)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "5.2"
+ANALYZER_VERSION = "5.3"
 
 import re
 import socket
