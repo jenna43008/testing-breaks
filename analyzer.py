@@ -37,7 +37,7 @@ VERSION: 4.4 (Feb 2026)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "6.0"
+ANALYZER_VERSION = "6.1"
 
 import re
 import socket
@@ -1349,38 +1349,42 @@ def _extract_base_and_tld(domain: str) -> Tuple[str, str]:
     """
     Extract the registrable base name and its effective TLD.
     
+    Uses dynamic detection: any two-letter SLD indicator (com, co, org, net, 
+    ac, gov, edu, etc.) followed by a two-letter ccTLD is treated as a compound
+    TLD. This handles .com.pk, .co.id, .org.za, etc. without hardcoding.
+    
     Examples:
         gordondown.uk       → ("gordondown", ".uk")
         gordondown.co.uk    → ("gordondown", ".co.uk")
         example.com         → ("example", ".com")
         mysite.org.uk       → ("mysite", ".org.uk")
+        taleem.com.pk       → ("taleem", ".com.pk")
+        web.gr8asia.in      → ("gr8asia", ".in")
     """
     domain = domain.lower().strip().rstrip('.')
     
-    # Check compound TLDs first (order: longest first)
-    compound_tlds = [
-        '.co.uk', '.org.uk', '.ac.uk', '.gov.uk', '.net.uk', '.me.uk',
-        '.co.nz', '.co.za', '.co.in', '.co.jp', '.co.kr',
-        '.com.au', '.com.br', '.com.mx', '.com.ar',
-        '.org.au', '.net.au',
-    ]
-    for ctld in compound_tlds:
-        if domain.endswith(ctld):
-            base = domain[:-len(ctld)]
-            if base and '.' not in base:  # Only handle second-level domains
-                return base, ctld
-            elif '.' in base:
-                # Subdomain case — take last label before the compound TLD
-                return base.rsplit('.', 1)[-1], ctld
+    # Known SLD indicators that form compound TLDs when followed by a ccTLD
+    # e.g., "com" in .com.pk, "co" in .co.uk, "org" in .org.za
+    SLD_INDICATORS = {'com', 'co', 'org', 'net', 'ac', 'gov', 'edu', 'me', 'gen', 'mil'}
     
-    # Simple TLD
-    parts = domain.rsplit('.', 1)
-    if len(parts) == 2:
-        base = parts[0]
-        tld = '.' + parts[1]
-        # Handle subdomain case
-        if '.' in base:
-            base = base.rsplit('.', 1)[-1]
+    parts = domain.split('.')
+    
+    if len(parts) >= 3:
+        # Check if last two labels form a compound TLD
+        # e.g., parts = ['taleem', 'com', 'pk'] → sld='com', cctld='pk'
+        sld = parts[-2]   # e.g., 'com'
+        cctld = parts[-1] # e.g., 'pk'
+        
+        # Compound TLD: SLD indicator + 2-3 letter ccTLD
+        if sld in SLD_INDICATORS and len(cctld) <= 3:
+            compound = f'.{sld}.{cctld}'
+            base = parts[-3]  # The registrable name
+            return base, compound
+    
+    if len(parts) >= 2:
+        # Simple TLD: example.com, gordondown.uk
+        base = parts[-2]
+        tld = '.' + parts[-1]
         return base, tld
     
     return domain, ""
@@ -3219,6 +3223,21 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.brand_plus_keyword_domain = domain_patterns["brand_plus_keyword"]
     res.domain_pattern_risk = ";".join(domain_patterns["patterns_found"])
     
+    # Spoofing allowlist: suppress typosquat, brand impersonation, prefix/suffix
+    # signals for domains explicitly cleared by admin review
+    spoofing_allowlist = [d.lower().strip() for d in config.get('spoofing_allowlist', [])]
+    if domain_lower in spoofing_allowlist or any(domain_lower.endswith('.' + a) for a in spoofing_allowlist):
+        res.typosquat_target = ""
+        res.typosquat_similarity = 0.0
+        res.has_suspicious_prefix = False
+        res.suspicious_prefix_found = ""
+        res.has_suspicious_suffix = False
+        res.suspicious_suffix_found = ""
+        res.domain_impersonates_brand = ""
+        res.brand_spoofing_keyword = ""
+        res.brand_plus_keyword_domain = False
+        res.domain_pattern_risk = ""
+    
     # SPF
     spf_record, spf_exists, spf_parsed = get_spf(domain)
     res.spf_record = spf_record[:500]
@@ -3445,6 +3464,13 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.tld_variant_content_words = tld_variant["variant_content_words"]
         res.tld_variant_signup_content_words = tld_variant["signup_content_words"]
         res.tld_variant_summary = tld_variant["summary"]
+        
+        # TLD variant allowlist: suppress for domains explicitly cleared by admin review
+        tld_variant_allowlist = [d.lower().strip() for d in config.get('tld_variant_allowlist', [])]
+        if res.tld_variant_detected:
+            if domain_lower in tld_variant_allowlist or any(domain_lower.endswith('.' + a) for a in tld_variant_allowlist):
+                res.tld_variant_detected = False
+                res.tld_variant_summary = f"ALLOWLISTED — {res.tld_variant_domain} variant suppressed by admin"
     except Exception as e:
         # Surface error in results so it's visible during debugging
         res.tld_variant_summary = f"CHECK ERROR: {type(e).__name__}: {str(e)[:200]}"
