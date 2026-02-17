@@ -306,7 +306,6 @@ def display_results(results: list):
             "rules_triggered": st.column_config.TextColumn("Rules Fired", width="medium"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
             "signals_triggered": st.column_config.TextColumn("Signals", width="medium"),
-            "combos_triggered": st.column_config.TextColumn("Combos", width="medium"),
         }
         st.dataframe(df, use_container_width=True, height=400, column_config=full_column_config)
         
@@ -317,7 +316,7 @@ def display_results(results: list):
                 "Columns",
                 all_cols,
                 default=['domain', 'risk_score', 'recommendation', 'summary', 
-                        'asn_display', 'rules_triggered', 'combos_triggered',
+                        'asn_display', 'rules_triggered',
                         'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
             )
             if selected_cols:
@@ -449,36 +448,21 @@ def display_results(results: list):
                 mx_icon = mx_icons.get(mx_ptype, 'ℹ️')
                 st.markdown(f"**MX Provider:** {mx_icon} {mx_ptype} ({mx_primary})")
             
-            # Combos triggered display
-            combos_str = domain_data.get('combos_triggered', '')
-            if combos_str:
-                combos_list = combos_str.split(';')
-                config = st.session_state.config
-                combos_cfg = config.get('combos', DEFAULT_CONFIG.get('combos', {}))
-                combo_details = []
-                total_combo_pts = 0
-                for c in combos_list:
-                    pts = combos_cfg.get(c, 0)
-                    total_combo_pts += pts
-                    combo_details.append(f"  • `{c}` → +{pts}")
-                st.markdown(f"**🔗 Combo Scoring:** +{total_combo_pts} points from {len(combos_list)} combo(s)")
-                with st.expander("View triggered combos"):
-                    st.markdown("\n".join(combo_details))
-            
             # Rules triggered display
             rules_str = domain_data.get('rules_triggered', '')
             if rules_str:
                 rules_list = rules_str.split(';')
-                st.markdown(f"**📐 Rules Fired:** {len(rules_list)} rule(s)")
-                for r in rules_list:
-                    st.markdown(f"  • `{r}`")
-                # Show labels too
                 rules_labels_str = domain_data.get('rules_labels', '')
-                if rules_labels_str:
-                    with st.expander("View rule details"):
-                        for label in rules_labels_str.split(';'):
-                            if label.strip():
-                                st.markdown(f"  ⚡ {label.strip()}")
+                labels = rules_labels_str.split(';') if rules_labels_str else []
+                
+                st.markdown(f"**📐 Rules Fired:** {len(rules_list)} rule(s)")
+                with st.expander("View fired rules"):
+                    for i, r in enumerate(rules_list):
+                        label = labels[i].strip() if i < len(labels) and labels[i].strip() else ''
+                        if label:
+                            st.markdown(f"• **`{r}`** — {label}")
+                        else:
+                            st.markdown(f"• `{r}`")
 
 
 def admin_view():
@@ -513,7 +497,7 @@ def admin_view():
     config = st.session_state.config
     
     # Tabs for different config sections
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["⚖️ Scoring Weights", "🔗 Signal Combos", "📐 Custom Rules", "🎯 Thresholds", "📋 Lists", "💾 Import/Export"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["⚖️ Scoring Weights", "📖 Signal Reference", "📐 Rules Engine", "🎯 Thresholds", "📋 Lists", "💾 Import/Export"])
     
     with tab1:
         st.header("⚖️ Scoring Weights")
@@ -564,376 +548,306 @@ def admin_view():
         config['weights'] = {**weights, **new_weights}
     
     with tab2:
-        st.header("🔗 Signal Combination Weights")
-        st.caption("Bonus points when two signals occur together. These amplify the base weights above. "
-                   "Disabled combos are greyed out and will not fire during analysis.")
+        st.header("📖 Signal Reference")
+        st.caption("Read-only reference of all signals the analyzer can detect. "
+                   "Use these signal names when creating or editing rules in the Rules Engine tab.")
         
-        combos = config.get('combos', DEFAULT_CONFIG.get('combos', {}))
-        disabled_combos = set(config.get('disabled_combos', []))
+        signal_groups = {
+            "Email Authentication": {
+                "no_spf": "No SPF record found — cannot verify authorized senders",
+                "no_dkim": "No DKIM record — missing cryptographic email signature",
+                "no_dmarc": "No DMARC policy — no spoofing protection framework",
+                "spf_pass_all": "SPF +all — allows anyone to send as this domain (spoofable)",
+                "spf_softfail_all": "SPF ~all — soft enforcement, common but weak",
+                "spf_neutral_all": "SPF ?all — provides zero protection",
+                "dmarc_p_none": "DMARC policy=none — monitoring only, no enforcement",
+                "dmarc_no_rua": "DMARC has no rua= tag — cannot monitor authentication failures",
+                "spf_no_external_includes": "SPF has no external includes — no third-party email service configured",
+            },
+            "MX / Mail Server": {
+                "no_mx": "No MX records — domain cannot receive email",
+                "null_mx": "Null MX record — domain explicitly refuses email",
+                "mx_enterprise": "Enterprise MX provider (Google, Microsoft, etc.) — trusted",
+                "mx_disposable": "Disposable/temporary MX provider — commonly used for spam",
+                "mx_selfhosted": "Self-hosted MX — mail server on own domain, no external oversight",
+                "mx_mail_prefix": "MX is mail.{domain} — common phishing infrastructure template pattern",
+            },
+            "DNS": {
+                "no_ptr": "No PTR (reverse DNS) record — enterprise filters may reject",
+                "ptr_mismatch": "PTR doesn't match forward DNS — triggers spam filters",
+            },
+            "Trust & Authentication": {
+                "has_bimi": "BIMI record present — brand logo authentication (high trust)",
+                "has_mta_sts": "MTA-STS configured — enforces encrypted email transport",
+            },
+            "App Store Presence": {
+                "app_store_high": "Found in major app store with high confidence — strong legitimacy signal",
+                "app_store_medium": "Found in app store with medium confidence",
+                "app_store_low": "Found in app store with low confidence",
+                "app_store_platform_false_positive": "App store match is likely a platform false positive",
+            },
+            "Blacklists": {
+                "domain_blacklisted": "Domain appears on email/DNS blacklists",
+                "ip_blacklisted": "IP address appears on blacklists",
+            },
+            "Domain Age": {
+                "domain_lt_7d": "Domain registered less than 7 days ago",
+                "domain_lt_30d": "Domain registered less than 30 days ago",
+                "domain_lt_90d": "Domain registered less than 90 days ago",
+                "domain_gt_1yr": "Domain registered more than 1 year ago — established",
+            },
+            "Domain Type": {
+                "suspicious_tld": "High-abuse TLD (.xyz, .top, .click, etc.)",
+                "free_email_domain": "Free consumer email provider domain (gmail.com, etc.)",
+                "disposable_email": "Disposable/temporary email domain",
+                "typosquat_detected": "Domain appears to be a typosquat of a known brand",
+                "free_hosting": "Domain on a free hosting provider",
+            },
+            "Hosting Provider": {
+                "hosting_budget_shared": "Budget shared hosting — commonly used for spam/phishing",
+                "hosting_free": "Free hosting — associated with throwaway sites",
+                "hosting_suspect": "Suspect/bulletproof hosting — abuse-tolerant provider",
+                "hosting_platform": "Developer platform hosting (Render, Vercel, etc.) — free tier abuse risk",
+            },
+            "Domain Name Patterns": {
+                "suspicious_prefix": "Domain starts with suspicious prefix (secure-, login-, verify-, etc.)",
+                "suspicious_suffix": "Domain ends with suspicious suffix (-support, -account, etc.)",
+                "is_tech_support_tld": "Tech support scam TLD (.support, .tech, .help)",
+                "domain_brand_impersonation": "Domain name impersonates a known brand",
+                "brand_spoofing_keyword": "Brand spoofing keyword detected in domain",
+                "brand_impersonation": "Brand impersonation detected via content analysis",
+            },
+            "TLD Variant": {
+                "tld_variant_spoofing": "Established business exists at a variant TLD — potential impersonation",
+            },
+            "Web / TLS": {
+                "no_https": "No valid HTTPS — may indicate abandoned or suspicious domain",
+                "tls_handshake_failed": "TLS handshake failed — broken SSL config or evasion",
+                "tls_connection_failed": "Cannot reach port 443 — no HTTPS service running",
+                "cert_expired": "TLS certificate has expired",
+                "cert_self_signed": "Self-signed TLS certificate",
+            },
+            "Redirects": {
+                "redirect_chain_2plus": "Redirect chain with 2+ hops — may trigger phishing detection",
+                "redirect_cross_domain": "Redirects to a different domain — suspicious pattern",
+                "redirect_temp_302_307": "Uses temporary redirects (302/307) — suggests URL cloaking",
+            },
+            "HTTP Status Codes": {
+                "status_401_unauthorized": "Returns 401 — public domain requires authentication",
+                "status_403_cloaking": "Returns 403 — may be blocking scanners (cloaking)",
+                "status_429_throttling": "Returns 429 — throttling automated checks",
+                "status_503_disposable": "Returns 503 — disposable/intermittent infrastructure",
+            },
+            "Content Analysis": {
+                "minimal_shell": "Minimal/shell website — common phishing indicator",
+                "js_redirect": "JavaScript redirect — suspicious redirect technique",
+                "meta_refresh": "Meta refresh redirect — often used for cloaking",
+                "has_external_js": "External JavaScript loader — content from external source",
+                "missing_trust_signals": "No corporate pages (/about, /contact, /privacy)",
+                "access_restricted": "Access blocked — cannot fully analyze site content",
+                "opaque_entity": "Access blocked AND no corporate pages — high B2B fraud risk",
+                "parking_page": "Domain shows a parking/placeholder page — not actively used",
+                "credential_form": "Login/credential form detected on landing page",
+            },
+            "Scam / Phishing Patterns": {
+                "hijack_path_pattern": "Suspicious URL path pattern common in hijacked domains",
+                "doc_sharing_lure": "Document sharing lure (fake OneDrive, Google Docs, etc.)",
+                "phishing_js_behavior": "Suspicious JavaScript patterns matching phishing kits",
+                "phishing_infra_redirect": "Redirects to known phishing infrastructure",
+                "email_tracking_url": "Email/victim tracking URL parameters detected",
+                "phishing_paths": "Known phishing URL paths detected",
+            },
+            "E-commerce": {
+                "retail_scam_tld": ".shop/.store TLD — heavily abused for fake stores",
+                "cross_domain_brand_link": "Links to same brand on different TLD — clone store pattern",
+                "ecommerce_no_identity": "E-commerce site without business identity information",
+            },
+        }
         
-        # Group combos by first signal prefix
-        combo_groups = {}
-        for combo_key, combo_val in sorted(combos.items()):
-            prefix = combo_key.split('+')[0] if '+' in combo_key else combo_key
-            # Map to friendly category names
-            if 'tld_variant' in prefix:
-                category = "TLD Variant Spoofing"
-            elif 'domain_brand' in prefix or 'brand_impersonation' in combo_key or 'brand_spoofing' in prefix:
-                category = "Brand Impersonation"
-            elif 'suspicious_prefix' in prefix or 'suspicious_suffix' in prefix or 'tech_support' in prefix:
-                category = "Tech Support Scam Patterns"
-            elif 'status_' in prefix:
-                category = "HTTP Status Code"
-            elif 'hijack' in combo_key or 'phishing_infra' in prefix or 'doc_sharing' in prefix or 'phishing_js' in prefix:
-                category = "Hijacked Domain / Phishing"
-            elif 'hosting_' in prefix:
-                category = "Hosting Provider"
-            elif 'mx_' in prefix:
-                category = "MX Provider"
-            elif 'opaque' in prefix or 'access_restricted' in prefix or 'missing_trust' in prefix:
-                category = "Opaque Entity"
-            elif 'no_spf' in prefix or 'no_dkim' in prefix or 'no_dmarc' in prefix or 'spf_' in prefix or 'no_mx' in prefix:
-                category = "Email Auth"
-            elif 'typosquat' in prefix or 'domain_blacklisted' in prefix:
-                category = "Fraud / Blacklist"
-            elif 'app_store' in prefix:
-                category = "App Store (Legitimacy)"
-            else:
-                category = "Other"
+        for group_name, signals in signal_groups.items():
+            with st.expander(f"**{group_name}** ({len(signals)} signals)"):
+                for signal_name, description in sorted(signals.items()):
+                    st.markdown(f"**`{signal_name}`** — {description}")
+    
+    with tab3:
+        st.header("📐 Rules Engine")
+        st.caption("All scoring rules grouped by category. Each rule fires when its signal conditions are met, "
+                   "adding (or subtracting) its score. Toggle rules on/off, adjust scores, or create new rules.")
+        
+        rules = config.get('rules', DEFAULT_CONFIG.get('rules', []))
+        
+        # Group rules by category
+        rule_categories = {}
+        for idx, rule in enumerate(rules):
+            cat = rule.get('category', 'Uncategorized')
+            rule_categories.setdefault(cat, []).append((idx, rule))
+        
+        # Define category display order and icons
+        cat_icons = {
+            'Positive Signals': '✅',
+            'Phishing Templates': '🎯',
+            'Email Auth Weakness': '📧',
+            'MX Provider Risk': '📬',
+            'Brand Impersonation': '🛡️',
+            'TLD Variant Spoofing': '🔀',
+            'Fraud / Blacklist': '🚫',
+            'Tech Support Scam': '☎️',
+            'Hosting Risk': '🖥️',
+            'HTTP Status Evasion': '🔒',
+            'Phishing Infrastructure': '🕸️',
+            'Phishing Lures': '🪝',
+            'Opaque Entity': '👻',
+            'General Risk': '⚠️',
+        }
+        
+        # Show positive signals first, then phishing templates, then rest alphabetically
+        priority_order = ['Positive Signals', 'Phishing Templates']
+        sorted_cats = priority_order + [c for c in sorted(rule_categories.keys()) if c not in priority_order]
+        
+        for cat_name in sorted_cats:
+            if cat_name not in rule_categories:
+                continue
+            cat_rules = rule_categories[cat_name]
+            icon = cat_icons.get(cat_name, '📋')
             
-            if category not in combo_groups:
-                combo_groups[category] = {}
-            combo_groups[category][combo_key] = combo_val
-        
-        new_combos = {}
-        new_disabled = set()
-        
-        for category in sorted(combo_groups.keys()):
-            group = combo_groups[category]
-            # Count enabled/disabled in this group
-            enabled_count = sum(1 for k in group if k not in disabled_combos)
-            disabled_count = len(group) - enabled_count
-            group_label = f"**{category}** ({enabled_count} active"
+            # Count enabled/disabled
+            enabled_count = sum(1 for _, r in cat_rules if r.get('enabled', True))
+            disabled_count = len(cat_rules) - enabled_count
+            
+            header = f"{icon} **{cat_name}** — {enabled_count} active"
             if disabled_count > 0:
-                group_label += f", {disabled_count} disabled"
-            group_label += ")"
+                header += f", {disabled_count} disabled"
+            header += f" ({len(cat_rules)} total)"
             
-            with st.expander(group_label, expanded=False):
-                # Bulk toggle for entire category
-                bulk_col1, bulk_col2 = st.columns([1, 1])
+            # Phishing Templates expanded by default
+            is_priority = cat_name in priority_order
+            
+            with st.expander(header, expanded=is_priority):
+                # Bulk controls
+                bulk_col1, bulk_col2, bulk_col3 = st.columns([1, 1, 2])
                 with bulk_col1:
-                    if st.button(f"✅ Enable all in {category}", key=f"enable_all_{category}"):
-                        for k in group:
-                            disabled_combos.discard(k)
+                    if st.button(f"✅ Enable all", key=f"enable_all_{cat_name}"):
+                        for _, r in cat_rules:
+                            r['enabled'] = True
                         st.rerun()
                 with bulk_col2:
-                    if st.button(f"⛔ Disable all in {category}", key=f"disable_all_{category}"):
-                        for k in group:
-                            disabled_combos.add(k)
+                    if st.button(f"⛔ Disable all", key=f"disable_all_{cat_name}"):
+                        for _, r in cat_rules:
+                            r['enabled'] = False
                         st.rerun()
                 
                 st.markdown("---")
                 
-                for combo_key, combo_val in sorted(group.items()):
-                    is_disabled = combo_key in disabled_combos
+                for idx, rule in cat_rules:
+                    rule_name = rule.get('name', f'rule_{idx}')
+                    rule_score = rule.get('score', 0)
+                    rule_enabled = rule.get('enabled', True)
+                    rule_label = rule.get('label', '')
                     
+                    # Main row: toggle + name + score
                     toggle_col, name_col, score_col = st.columns([0.4, 2.5, 1])
                     
                     with toggle_col:
-                        combo_enabled = st.toggle(
+                        new_enabled = st.toggle(
                             "on",
-                            value=not is_disabled,
-                            key=f"combo_toggle_{combo_key}",
+                            value=rule_enabled,
+                            key=f"rule_toggle_{idx}",
                             label_visibility="collapsed",
                         )
-                        if not combo_enabled:
-                            new_disabled.add(combo_key)
+                        rule['enabled'] = new_enabled
                     
                     with name_col:
-                        if combo_enabled:
-                            st.markdown(f"`{combo_key}`")
+                        status = "✅" if new_enabled else "⛔"
+                        if new_enabled:
+                            st.markdown(f"{status} **`{rule_name}`**")
                         else:
-                            st.markdown(f"~~`{combo_key}`~~ *(disabled)*")
+                            st.markdown(f"{status} ~~`{rule_name}`~~ *(disabled)*")
+                        if rule_label:
+                            st.caption(rule_label)
                     
                     with score_col:
-                        new_val = st.number_input(
+                        new_score = st.number_input(
                             "pts",
                             min_value=-50,
                             max_value=100,
-                            value=combo_val,
+                            value=rule_score,
                             step=1,
-                            key=f"combo_{combo_key}",
+                            key=f"rule_score_{idx}",
                             label_visibility="collapsed",
-                            disabled=not combo_enabled,
+                            disabled=not new_enabled,
                         )
-                        new_combos[combo_key] = new_val
-        
-        # ==============================================================
-        # ADD NEW COMBO
-        # ==============================================================
-        st.markdown("---")
-        st.subheader("➕ Add New Combo")
-        st.caption("Create a new signal combination. Enter two or more signal names separated by `+`.")
-        
-        with st.form("new_combo_form"):
-            new_combo_key = st.text_input(
-                "Combo key (signal1+signal2)", 
-                placeholder="e.g. mx_selfhosted+hosting_platform+no_dkim",
-                help="Use signal names from the Scoring Weights tab, joined with +"
-            )
-            new_combo_score = st.number_input("Score (bonus points when both signals fire)", 
-                                              min_value=-50, max_value=100, value=10, step=1,
-                                              key="new_combo_score")
-            combo_submitted = st.form_submit_button("Add Combo")
-            if combo_submitted and new_combo_key:
-                clean_key = new_combo_key.strip().replace(' ', '')
-                if '+' not in clean_key:
-                    st.error("Combo must contain at least two signals joined by `+`")
-                elif clean_key in combos:
-                    st.error(f"Combo `{clean_key}` already exists. Edit its score above.")
-                else:
-                    new_combos[clean_key] = new_combo_score
-                    st.success(f"Combo `{clean_key}` (+{new_combo_score}) added! Click **Save Configuration** to persist.")
-        
-        config['combos'] = {**combos, **new_combos}
-        config['disabled_combos'] = sorted(new_disabled)
-    
-    with tab3:
-        st.header("📐 Custom Rules")
-        
-        rules = config.get('rules', DEFAULT_CONFIG.get('rules', []))
-        
-        # ==============================================================
-        # KEY PHISHING RULES — prominent section at top
-        # ==============================================================
-        st.subheader("🎯 Key Phishing Detection Rules")
-        st.caption("These two rules are the primary detectors for the Swedish invoice phishing pattern. "
-                   "Toggle on/off and adjust scoring here.")
-        
-        key_rule_names = ['phish_factory_template', 'platform_phish_setup']
-        key_rules_indices = []
-        
-        for idx, rule in enumerate(rules):
-            if rule.get('name') in key_rule_names:
-                key_rules_indices.append(idx)
-                rule_name = rule.get('name')
-                rule_score = rule.get('score', 0)
-                rule_enabled = rule.get('enabled', True)
-                rule_label = rule.get('label', '')
-                
-                # Colored container for visibility
-                st.markdown(f"---")
-                st.markdown(f"#### ⚡ `{rule_name}`")
-                st.caption(rule_label)
-                
-                # Toggle + Score on same row — highly visible
-                toggle_col, score_col, spacer = st.columns([1, 1, 2])
-                
-                with toggle_col:
-                    rule['enabled'] = st.toggle(
-                        "Rule Enabled",
-                        value=rule_enabled,
-                        key=f"key_toggle_{rule_name}",
-                    )
-                
-                with score_col:
-                    rule['score'] = st.number_input(
-                        "Score (points)",
-                        min_value=-50,
-                        max_value=100,
-                        value=rule_score,
-                        step=1,
-                        key=f"key_score_{rule_name}",
-                    )
-                
-                # Editable conditions inside expander (advanced)
-                with st.expander(f"Edit conditions for {rule_name}"):
-                    rule['label'] = st.text_input(
-                        "Label (shown in results)",
-                        value=rule_label,
-                        key=f"key_label_{rule_name}",
-                    )
+                        rule['score'] = new_score
                     
-                    cond_col1, cond_col2, cond_col3 = st.columns(3)
-                    
-                    with cond_col1:
-                        if_all_str = st.text_area(
-                            "if_all (ALL must match)",
-                            value='\n'.join(rule.get('if_all', [])),
-                            height=100,
-                            key=f"key_if_all_{rule_name}",
-                            help="ALL of these signals must be present for the rule to fire"
+                    # Expandable conditions editor
+                    with st.expander(f"Edit conditions: {rule_name}", expanded=False):
+                        rule['label'] = st.text_input(
+                            "Label", value=rule_label, key=f"rule_label_{idx}",
                         )
-                        rule['if_all'] = [s.strip() for s in if_all_str.splitlines() if s.strip()]
-                    
-                    with cond_col2:
-                        if_any_str = st.text_area(
-                            "if_any (AT LEAST ONE must match)",
-                            value='\n'.join(rule.get('if_any', [])),
-                            height=100,
-                            key=f"key_if_any_{rule_name}",
-                            help="At least ONE of these signals must be present"
+                        
+                        new_cat = st.selectbox(
+                            "Category",
+                            options=sorted(cat_icons.keys()),
+                            index=sorted(cat_icons.keys()).index(cat_name) if cat_name in cat_icons else 0,
+                            key=f"rule_cat_{idx}",
                         )
-                        rule['if_any'] = [s.strip() for s in if_any_str.splitlines() if s.strip()]
-                    
-                    with cond_col3:
-                        if_not_str = st.text_area(
-                            "if_not (NONE may be present)",
-                            value='\n'.join(rule.get('if_not', [])),
-                            height=100,
-                            key=f"key_if_not_{rule_name}",
-                            help="If ANY of these signals are present, the rule will NOT fire"
-                        )
-                        rule['if_not'] = [s.strip() for s in if_not_str.splitlines() if s.strip()]
+                        rule['category'] = new_cat
+                        
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            if_all_str = st.text_area(
+                                "if_all (ALL must match)",
+                                value='\n'.join(rule.get('if_all', [])),
+                                height=80, key=f"rule_if_all_{idx}",
+                            )
+                            rule['if_all'] = [s.strip() for s in if_all_str.splitlines() if s.strip()]
+                        with c2:
+                            if_any_str = st.text_area(
+                                "if_any (AT LEAST ONE)",
+                                value='\n'.join(rule.get('if_any', [])),
+                                height=80, key=f"rule_if_any_{idx}",
+                            )
+                            rule['if_any'] = [s.strip() for s in if_any_str.splitlines() if s.strip()]
+                        with c3:
+                            if_not_str = st.text_area(
+                                "if_not (NONE may match)",
+                                value='\n'.join(rule.get('if_not', [])),
+                                height=80, key=f"rule_if_not_{idx}",
+                            )
+                            rule['if_not'] = [s.strip() for s in if_not_str.splitlines() if s.strip()]
         
-        # ==============================================================
-        # OTHER RULES
-        # ==============================================================
-        st.markdown("---")
-        st.subheader("📋 All Other Rules")
-        st.caption("Additional custom rules. Toggle on/off and adjust scoring.")
-        
-        # Available signals reference (collapsible)
-        with st.expander("📖 Available signals reference"):
-            st.markdown("""
-            **Email auth:** `no_spf`, `no_dkim`, `no_dmarc`, `spf_pass_all`, `spf_softfail_all`, `spf_neutral_all`, `dmarc_p_none`, `dmarc_no_rua`, `spf_no_external_includes`
-            
-            **MX:** `no_mx`, `null_mx`, `mx_enterprise`, `mx_disposable`, `mx_selfhosted`, `mx_mail_prefix`
-            
-            **DNS:** `no_ptr`, `ptr_mismatch`
-            
-            **Trust/Auth:** `has_bimi`, `has_mta_sts`
-            
-            **App store:** `app_store_high`, `app_store_medium`, `app_store_low`, `app_store_platform_false_positive`
-            
-            **Blacklists:** `domain_blacklisted`, `ip_blacklisted`
-            
-            **Domain age:** `domain_lt_7d`, `domain_lt_30d`, `domain_lt_90d`, `domain_gt_1yr`
-            
-            **Domain type:** `suspicious_tld`, `free_email_domain`, `disposable_email`, `typosquat_detected`, `free_hosting`
-            
-            **Hosting:** `hosting_budget_shared`, `hosting_free`, `hosting_suspect`, `hosting_platform`
-            
-            **Domain name:** `suspicious_prefix`, `suspicious_suffix`, `is_tech_support_tld`, `domain_brand_impersonation`
-            
-            **TLD variant:** `tld_variant_spoofing`
-            
-            **Web:** `no_https`, `tls_handshake_failed`, `tls_connection_failed`, `cert_expired`, `cert_self_signed`
-            
-            **Redirects:** `redirect_chain_2plus`, `redirect_cross_domain`, `redirect_temp_302_307`
-            
-            **Status codes:** `status_401_unauthorized`, `status_403_cloaking`, `status_429_throttling`, `status_503_disposable`
-            
-            **Content:** `minimal_shell`, `js_redirect`, `meta_refresh`, `has_external_js`, `missing_trust_signals`, `access_restricted`, `opaque_entity`
-            
-            **Scam patterns:** `hijack_path_pattern`, `doc_sharing_lure`, `phishing_js_behavior`, `phishing_infra_redirect`, `email_tracking_url`
-            
-            **E-commerce:** `retail_scam_tld`, `cross_domain_brand_link`, `ecommerce_no_identity`
-            """)
-        
-        for idx, rule in enumerate(rules):
-            if idx in key_rules_indices:
-                continue  # Already rendered above
-            
-            rule_name = rule.get('name', f'rule_{idx}')
-            rule_label = rule.get('label', '')
-            rule_score = rule.get('score', 0)
-            rule_enabled = rule.get('enabled', True)
-            
-            st.markdown(f"---")
-            
-            # Toggle + Name + Score on one visible row
-            toggle_col, name_col, score_col = st.columns([0.5, 2, 1])
-            
-            with toggle_col:
-                rule['enabled'] = st.toggle(
-                    "On",
-                    value=rule_enabled,
-                    key=f"rule_toggle_{idx}",
-                    label_visibility="collapsed",
-                )
-            
-            with name_col:
-                status = "✅" if rule.get('enabled', True) else "⛔"
-                st.markdown(f"**{status} `{rule_name}`** — {rule_label}")
-            
-            with score_col:
-                rule['score'] = st.number_input(
-                    "Score",
-                    min_value=-50,
-                    max_value=100,
-                    value=rule_score,
-                    step=1,
-                    key=f"rule_score_{idx}",
-                    label_visibility="collapsed",
-                )
-            
-            # Conditions inside expander (advanced editing)
-            with st.expander(f"Edit conditions for {rule_name}"):
-                rule['label'] = st.text_input(
-                    "Label (shown in results)",
-                    value=rule_label,
-                    key=f"rule_label_{idx}",
-                )
-                
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    if_all_str = st.text_area(
-                        "if_all (ALL must match)",
-                        value='\n'.join(rule.get('if_all', [])),
-                        height=100,
-                        key=f"rule_if_all_{idx}",
-                    )
-                    rule['if_all'] = [s.strip() for s in if_all_str.splitlines() if s.strip()]
-                
-                with col2:
-                    if_any_str = st.text_area(
-                        "if_any (AT LEAST ONE must match)",
-                        value='\n'.join(rule.get('if_any', [])),
-                        height=100,
-                        key=f"rule_if_any_{idx}",
-                    )
-                    rule['if_any'] = [s.strip() for s in if_any_str.splitlines() if s.strip()]
-                
-                with col3:
-                    if_not_str = st.text_area(
-                        "if_not (NONE may be present)",
-                        value='\n'.join(rule.get('if_not', [])),
-                        height=100,
-                        key=f"rule_if_not_{idx}",
-                    )
-                    rule['if_not'] = [s.strip() for s in if_not_str.splitlines() if s.strip()]
-        
-        # ==============================================================
-        # ADD NEW RULE
-        # ==============================================================
+        # Add new rule
         st.markdown("---")
         st.subheader("➕ Add New Rule")
         
         with st.form("new_rule_form"):
-            new_name = st.text_input("Rule name (unique identifier, no spaces)", placeholder="my_new_rule")
-            new_rule_label = st.text_input("Label (human-readable description)", placeholder="Description of what this rule catches")
-            new_rule_score = st.number_input("Score", min_value=-50, max_value=100, value=10, step=1)
+            new_name = st.text_input("Rule name (unique, no spaces)", placeholder="my_new_rule")
+            new_rule_label = st.text_input("Label", placeholder="What this rule detects")
             
-            nr_col1, nr_col2, nr_col3 = st.columns(3)
+            nr_col1, nr_col2 = st.columns(2)
             with nr_col1:
-                new_if_all = st.text_area("if_all (one per line)", height=80, key="new_rule_if_all")
+                new_rule_score = st.number_input("Score", min_value=-50, max_value=100, value=10, step=1)
             with nr_col2:
+                new_rule_cat = st.selectbox("Category", options=sorted(cat_icons.keys()), index=0, key="new_rule_cat")
+            
+            nr_c1, nr_c2, nr_c3 = st.columns(3)
+            with nr_c1:
+                new_if_all = st.text_area("if_all (one per line)", height=80, key="new_rule_if_all")
+            with nr_c2:
                 new_if_any = st.text_area("if_any (one per line)", height=80, key="new_rule_if_any")
-            with nr_col3:
+            with nr_c3:
                 new_if_not = st.text_area("if_not (one per line)", height=80, key="new_rule_if_not")
             
             submitted = st.form_submit_button("Add Rule")
             if submitted and new_name:
                 existing_names = [r.get('name', '') for r in rules]
                 if new_name in existing_names:
-                    st.error(f"Rule name '{new_name}' already exists. Use a unique name.")
+                    st.error(f"Rule name '{new_name}' already exists.")
                 else:
                     rules.append({
                         'name': new_name.strip().replace(' ', '_'),
                         'score': new_rule_score,
                         'label': new_rule_label,
+                        'category': new_rule_cat,
                         'enabled': True,
                         'if_all': [s.strip() for s in new_if_all.splitlines() if s.strip()],
                         'if_any': [s.strip() for s in new_if_any.splitlines() if s.strip()],
@@ -942,6 +856,7 @@ def admin_view():
                     st.success(f"Rule '{new_name}' added! Click **Save Configuration** to persist.")
         
         config['rules'] = rules
+
     
     with tab4:
         st.header("🎯 Thresholds & Settings")
@@ -1064,7 +979,7 @@ def main():
     
     # Footer
     st.sidebar.markdown("---")
-    st.sidebar.caption(f"Domain Sender Approval v2.3 | Analyzer v{ANALYZER_VERSION}")
+    st.sidebar.caption(f"Domain Sender Approval v3.0 | Analyzer v{ANALYZER_VERSION}")
     st.sidebar.caption(f"Threshold: {st.session_state.config.get('approve_threshold', 50)}")
 
 
