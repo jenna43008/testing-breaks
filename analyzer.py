@@ -277,6 +277,11 @@ class DomainApprovalResult:
     hosting_asn_org: str = ""                   # ASN organization name
     blocked_asn_org_match: str = ""             # Matched blocked ASN org pattern (if any)
     
+    # === HIGH-RISK COMPOSITE INDICATORS ===
+    high_risk_phish_infra: bool = False          # Render ASN + self-hosted MX + both phish rules fired
+    high_risk_phish_infra_reason: str = ""       # Human-readable explanation
+    asn_display: str = ""                        # Formatted "AS{number} ({org})" for results display
+    
     # === SCORING DETAILS ===
     signals_triggered: str = ""
     combos_triggered: str = ""
@@ -2415,6 +2420,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     all_issues = []  # Format: "ISSUE → IMPACT"
     positives = []
     
+    # === HIGH-RISK PHISHING INFRASTRUCTURE (composite indicator) ===
+    if res.high_risk_phish_infra:
+        all_issues.append(f"🚨 HIGH-RISK PHISHING INFRA → {res.high_risk_phish_infra_reason}")
+    
     # === CRITICAL ISSUES ===
     if res.domain_blacklist_count > 0:
         all_issues.append(f"BLACKLISTED DOMAIN ({res.domain_blacklist_count} lists) → Emails BLOCKED by Gmail/Outlook/Yahoo")
@@ -3084,6 +3093,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     for rule in rules:
         rule_name = rule.get('name', 'unnamed_rule')
         
+        # Skip disabled rules
+        if not rule.get('enabled', True):
+            continue
+        
         # Check if_all: every signal in this list must be present
         if_all = rule.get('if_all', [])
         if if_all and not all(s in signals for s in if_all):
@@ -3117,6 +3130,51 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     res.combos_triggered = ";".join(combos_hit)
     res.rules_triggered = ";".join(rules_hit)
     res.rules_labels = ";".join(rules_labels)
+    
+    # === BUILD ASN DISPLAY STRING ===
+    if res.hosting_asn and res.hosting_asn_org:
+        res.asn_display = f"AS{res.hosting_asn} ({res.hosting_asn_org})"
+    elif res.hosting_asn:
+        res.asn_display = f"AS{res.hosting_asn}"
+    elif res.hosting_asn_org:
+        res.asn_display = res.hosting_asn_org
+    
+    # === HIGH-RISK PHISHING INFRASTRUCTURE COMPOSITE CHECK ===
+    # Fires when ALL of these are true:
+    #   1. Render ASN (or blocked ASN match for Render)
+    #   2. Self-hosted MX
+    #   3. phish_factory_template rule fired
+    #   4. platform_phish_setup rule fired
+    # This combination is the exact fingerprint of the Swedish invoice phish population.
+    rules_hit_names = [r.split('(')[0] for r in rules_hit]
+    is_render = (
+        (res.hosting_provider and res.hosting_provider.lower() == "render")
+        or (res.hosting_asn_org and "render" in res.hosting_asn_org.lower())
+        or (res.blocked_asn_org_match and "render" in res.blocked_asn_org_match.lower())
+    )
+    has_selfhosted_mx = "mx_selfhosted" in signals
+    has_phish_factory = "phish_factory_template" in rules_hit_names
+    has_platform_phish = "platform_phish_setup" in rules_hit_names
+    
+    if is_render and has_selfhosted_mx and has_phish_factory and has_platform_phish:
+        res.high_risk_phish_infra = True
+        res.high_risk_phish_infra_reason = (
+            "Render ASN + self-hosted MX + phishing factory template + platform phish setup — "
+            "matches known Swedish invoice phishing infrastructure fingerprint"
+        )
+    elif is_render and has_selfhosted_mx and (has_phish_factory or has_platform_phish):
+        # Partial match — still very suspicious
+        res.high_risk_phish_infra = True
+        matched = []
+        if has_phish_factory:
+            matched.append("phish_factory_template")
+        if has_platform_phish:
+            matched.append("platform_phish_setup")
+        res.high_risk_phish_infra_reason = (
+            f"Render ASN + self-hosted MX + {' + '.join(matched)} — "
+            "partial match on known phishing infrastructure fingerprint"
+        )
+    
     res.summary = generate_summary(res, signals, res.domain_age_days >= 0)
 
 
