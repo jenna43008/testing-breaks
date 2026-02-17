@@ -3110,7 +3110,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         rule_score = rule.get('score', 0)
         rule_label = rule.get('label', '')
         score += rule_score
-        rules_hit.append(f"{rule_name}({rule_score:+d})")
+        rules_hit.append(rule_name)
         if rule_label:
             rules_labels.append(rule_label)
     
@@ -3140,7 +3140,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     #   3. phish_factory_template rule fired
     #   4. platform_phish_setup rule fired
     # This combination is the exact fingerprint of the Swedish invoice phish population.
-    rules_hit_names = [r.split('(')[0] for r in rules_hit]
+    rules_hit_names = rules_hit
     is_render = (
         (res.hosting_provider and res.hosting_provider.lower() == "render")
         or (res.hosting_asn_org and "render" in res.hosting_asn_org.lower())
