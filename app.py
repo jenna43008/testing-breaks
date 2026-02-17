@@ -912,6 +912,34 @@ def admin_view():
             height=150
         )
         config['protected_brands'] = [b.strip().lower() for b in protected_brands.splitlines() if b.strip()]
+        
+        st.markdown("---")
+        st.subheader("🛡️ Allow Lists")
+        st.caption("Domains cleared by admin review. Suppresses the specific signal only — all other scoring still applies.")
+        
+        col_al1, col_al2 = st.columns(2)
+        
+        with col_al1:
+            st.markdown("**TLD Variant Allowlist**")
+            st.caption("Suppress TLD variant spoofing for these domains. Use when a legitimate business operates on a non-.com TLD.")
+            tld_variant_al = st.text_area(
+                "One domain per line",
+                value='\n'.join(config.get('tld_variant_allowlist', DEFAULT_CONFIG.get('tld_variant_allowlist', []))),
+                height=120,
+                key="tld_variant_allowlist_input"
+            )
+            config['tld_variant_allowlist'] = [d.strip().lower() for d in tld_variant_al.splitlines() if d.strip()]
+        
+        with col_al2:
+            st.markdown("**Spoofing Allowlist**")
+            st.caption("Suppress typosquat, brand impersonation, brand+keyword, and suspicious prefix/suffix for these domains.")
+            spoofing_al = st.text_area(
+                "One domain per line",
+                value='\n'.join(config.get('spoofing_allowlist', DEFAULT_CONFIG.get('spoofing_allowlist', []))),
+                height=120,
+                key="spoofing_allowlist_input"
+            )
+            config['spoofing_allowlist'] = [d.strip().lower() for d in spoofing_al.splitlines() if d.strip()]
     
     with tab6:
         st.header("💾 Import/Export Configuration")
@@ -979,7 +1007,7 @@ def main():
     
     # Footer
     st.sidebar.markdown("---")
-    st.sidebar.caption(f"Domain Sender Approval v3.0 | Analyzer v{ANALYZER_VERSION}")
+    st.sidebar.caption(f"Domain Sender Approval v3.1 | Analyzer v{ANALYZER_VERSION}")
     st.sidebar.caption(f"Threshold: {st.session_state.config.get('approve_threshold', 50)}")
 
 
