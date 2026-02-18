@@ -115,8 +115,8 @@ DEFAULT_CONFIG = {
         "parking_page": 6,
         
         # === CORPORATE TRUST SIGNALS (Missing signals indicate opaque entity) ===
-        "missing_trust_signals": 15,       # No about/contact/privacy pages
-        "opaque_entity": 25,              # Access blocked + no trust signals = high risk
+        "missing_trust_signals": 8,       # No about/contact/privacy pages
+        "opaque_entity": 20,              # Access blocked + no trust signals = high risk
         
         # === BONUSES (Reduce score) ===
         "has_bimi": -10,
@@ -494,8 +494,7 @@ DEFAULT_CONFIG = {
     
     "domain_blacklists": [
         "dbl.spamhaus.org",
-        "multi.surbl.org", 
-        "black.uribl.com",
+        "multi.surbl.org",
     ],
     
     "ip_blacklists": [
