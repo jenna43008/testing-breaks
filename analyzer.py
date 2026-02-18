@@ -4,6 +4,15 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 6.2 (Feb 2026)
+- Fixed DNSBL rate limit bug: blacklist checks silently returning "clean" on timeout
+- check_blacklist() now distinguishes NXDOMAIN (clean) from timeout/error (inconclusive)
+- Added retry with backoff for failed DNSBL queries (2 retries, 1.5s delay)
+- Added inter-query delay (0.3s) between consecutive DNSBL lookups to avoid bursts
+- Added in-memory DNSBL result cache (5min TTL) to prevent redundant queries
+- New fields: domain_blacklist_inconclusive, ip_blacklist_inconclusive
+- Inconclusive blacklist checks flagged in summary + add configurable score penalty (default 15)
+
 VERSION: 5.2 (Feb 2026)
 - Added brand + spoofing keyword detection (easyjetconnect, amazonverify, etc.)
 - Expanded IMPERSONATED_BRANDS to include airlines, travel, banks, shipping, telecoms
@@ -37,7 +46,7 @@ VERSION: 4.4 (Feb 2026)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "6.1"
+ANALYZER_VERSION = "6.2"
 
 import re
 import socket
@@ -142,8 +151,10 @@ class DomainApprovalResult:
     # === BLACKLISTS ===
     domain_blacklists_hit: str = ""
     domain_blacklist_count: int = 0
+    domain_blacklist_inconclusive: int = 0    # v6.2: queries that timed out / errored
     ip_blacklists_hit: str = ""
     ip_blacklist_count: int = 0
+    ip_blacklist_inconclusive: int = 0        # v6.2: queries that timed out / errored
     
     # === DOMAIN INFO ===
     rdap_created: str = ""
@@ -296,6 +307,18 @@ class DomainApprovalResult:
 DNS_TIMEOUT = 5.0
 WEB_TIMEOUT = 8.0
 MAX_REDIRECTS = 10
+
+# DNSBL Rate Limit Protection (v6.2)
+DNSBL_TIMEOUT = 5.0            # Timeout per DNSBL query (longer than general DNS)
+DNSBL_RETRIES = 2              # Retries on timeout/SERVFAIL before marking inconclusive
+DNSBL_RETRY_DELAY = 1.5        # Seconds between retries (backoff)
+DNSBL_INTER_QUERY_DELAY = 0.3  # Seconds between consecutive DNSBL queries (rate limit)
+DNSBL_CACHE_TTL = 300          # Cache results for 5 minutes
+
+# In-memory DNSBL result cache: { "query:zone" -> (result, timestamp) }
+# result: True = listed, False = clean, None = inconclusive
+import time as _time
+_dnsbl_cache: Dict[str, tuple] = {}
 
 TEMP_REDIRECT_CODES = {302, 307}
 PERM_REDIRECT_CODES = {301, 308, 303}
@@ -859,30 +882,123 @@ def get_mta_sts(domain: str) -> Tuple[bool, str]:
     return False, ""
 
 
-def check_blacklist(query: str, zone: str) -> bool:
+def check_blacklist(query: str, zone: str) -> Optional[bool]:
+    """
+    Check if query is listed in a DNSBL zone.
+    
+    v6.2: Now distinguishes between "not listed" and "check failed".
+    
+    Returns:
+        True  = listed (DNSBL returned a result)
+        False = NOT listed (NXDOMAIN — definitive clean)
+        None  = INCONCLUSIVE (timeout, SERVFAIL, rate limited — we don't know)
+    """
     if not DNS_AVAILABLE:
-        return False
-    try:
-        resolver = dns.resolver.Resolver()
-        resolver.timeout = 3.0
-        resolver.lifetime = 3.0
-        resolver.resolve(f"{query}.{zone}", 'A')
-        return True
-    except Exception:
-        return False
+        return None  # Can't check = inconclusive, NOT clean
+    
+    cache_key = f"{query}:{zone}"
+    
+    # Check cache first (v6.2)
+    if cache_key in _dnsbl_cache:
+        cached_result, cached_time = _dnsbl_cache[cache_key]
+        if _time.time() - cached_time < DNSBL_CACHE_TTL:
+            return cached_result
+        else:
+            del _dnsbl_cache[cache_key]  # Expired
+    
+    result = None  # Default: inconclusive
+    
+    for attempt in range(1 + DNSBL_RETRIES):
+        if attempt > 0:
+            _time.sleep(DNSBL_RETRY_DELAY)  # Backoff between retries
+        
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.timeout = DNSBL_TIMEOUT
+            resolver.lifetime = DNSBL_TIMEOUT
+            resolver.resolve(f"{query}.{zone}", 'A')
+            result = True  # Listed
+            break
+            
+        except dns.resolver.NXDOMAIN:
+            # Definitive: domain is NOT on this blacklist
+            result = False
+            break
+            
+        except dns.resolver.NoAnswer:
+            # Zone exists but no A record — treat as not listed
+            result = False
+            break
+            
+        except dns.resolver.NoNameservers:
+            # SERVFAIL / all nameservers failed — likely rate limited
+            continue  # Retry
+            
+        except dns.exception.Timeout:
+            # Timeout — likely rate limited or network issue
+            continue  # Retry
+            
+        except Exception:
+            # Other DNS errors — inconclusive
+            continue  # Retry
+    
+    # Cache the result (even inconclusive, to avoid hammering a broken zone)
+    _dnsbl_cache[cache_key] = (result, _time.time())
+    
+    return result
 
 
-def check_domain_blacklists(domain: str, blacklists: List[str]) -> Tuple[List[str], int]:
-    hits = [bl for bl in blacklists if check_blacklist(domain, bl)]
-    return hits, len(hits)
+def check_domain_blacklists(domain: str, blacklists: List[str]) -> Tuple[List[str], int, int]:
+    """
+    Check domain against all configured DNSBL zones.
+    
+    v6.2: Now returns inconclusive count as third element.
+    
+    Returns: (hits, hit_count, inconclusive_count)
+    """
+    hits = []
+    inconclusive = 0
+    
+    for bl in blacklists:
+        result = check_blacklist(domain, bl)
+        if result is True:
+            hits.append(bl)
+        elif result is None:
+            inconclusive += 1
+        # False = clean, nothing to track
+        
+        # Rate limit: pause between queries to avoid triggering DNSBL limits
+        if bl != blacklists[-1]:  # Don't sleep after last query
+            _time.sleep(DNSBL_INTER_QUERY_DELAY)
+    
+    return hits, len(hits), inconclusive
 
 
-def check_ip_blacklists(ip: str, blacklists: List[str]) -> Tuple[List[str], int]:
+def check_ip_blacklists(ip: str, blacklists: List[str]) -> Tuple[List[str], int, int]:
+    """
+    Check IP against all configured RBL zones.
+    
+    v6.2: Now returns inconclusive count as third element.
+    
+    Returns: (hits, hit_count, inconclusive_count)
+    """
     if not ip:
-        return [], 0
+        return [], 0, 0
     reversed_ip = '.'.join(reversed(ip.split('.')))
-    hits = [bl for bl in blacklists if check_blacklist(reversed_ip, bl)]
-    return hits, len(hits)
+    hits = []
+    inconclusive = 0
+    
+    for bl in blacklists:
+        result = check_blacklist(reversed_ip, bl)
+        if result is True:
+            hits.append(bl)
+        elif result is None:
+            inconclusive += 1
+        
+        if bl != blacklists[-1]:
+            _time.sleep(DNSBL_INTER_QUERY_DELAY)
+    
+    return hits, len(hits), inconclusive
 
 
 # ============================================================================
@@ -2507,6 +2623,16 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.ip_blacklist_count > 0:
         all_issues.append(f"BLACKLISTED IP ({res.ip_blacklist_count} lists) → Emails BLOCKED by major providers")
     
+    # v6.2: Warn when blacklist checks were inconclusive (timeout/rate limit)
+    total_inconclusive = res.domain_blacklist_inconclusive + res.ip_blacklist_inconclusive
+    if total_inconclusive > 0:
+        parts = []
+        if res.domain_blacklist_inconclusive > 0:
+            parts.append(f"{res.domain_blacklist_inconclusive} domain")
+        if res.ip_blacklist_inconclusive > 0:
+            parts.append(f"{res.ip_blacklist_inconclusive} IP")
+        all_issues.append(f"⚠️ BLACKLIST CHECK INCONCLUSIVE ({', '.join(parts)} list(s) timed out) → May be rate-limited; result is NOT confirmed clean")
+    
     if res.spf_mechanism == "+all":
         all_issues.append("SPF +all → Domain SPOOFABLE; anyone can forge emails as this sender")
     
@@ -2905,9 +3031,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             if not is_platform_hosted:
                 score += weights.get('app_store_medium', -10)
                 signals.add("app_store_medium")
-    elif res.app_store_confidence == "low":
-        score += weights.get('app_store_low', -3)
-        signals.add("app_store_low")
+        elif res.app_store_confidence == "low":
+            # v6.2: Fixed indentation — was incorrectly attached to outer if
+            score += weights.get('app_store_low', -3)
+            signals.add("app_store_low")
     
     # Blacklists - HIGH weight, these are real fraud signals
     if res.domain_blacklist_count > 0:
@@ -2916,6 +3043,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.ip_blacklist_count > 0:
         score += weights.get('ip_blacklisted', 35) * min(res.ip_blacklist_count, 3)
         signals.add("ip_blacklisted")
+    
+    # v6.2: Inconclusive blacklist checks — "we don't know" ≠ "clean"
+    # Apply a moderate penalty so these don't silently pass
+    if res.domain_blacklist_inconclusive > 0:
+        score += weights.get('blacklist_inconclusive', 15)
+        signals.add("blacklist_inconclusive")
+    if res.ip_blacklist_inconclusive > 0:
+        score += weights.get('blacklist_inconclusive', 15)
+        signals.add("blacklist_inconclusive")
     
     # Blocked ASN organizations - instant high score
     blocked_asn_orgs = config.get('blocked_asn_orgs', [])
@@ -3370,14 +3506,16 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     # MTA-STS
     res.mta_sts_exists, res.mta_sts_record = get_mta_sts(domain)
     
-    # Blacklists
-    bl_hits, bl_count = check_domain_blacklists(domain, config['domain_blacklists'])
+    # Blacklists (v6.2: now tracks inconclusive checks)
+    bl_hits, bl_count, bl_inconclusive = check_domain_blacklists(domain, config['domain_blacklists'])
     res.domain_blacklists_hit = ";".join(bl_hits)
     res.domain_blacklist_count = bl_count
+    res.domain_blacklist_inconclusive = bl_inconclusive
     
-    ip_bl_hits, ip_bl_count = check_ip_blacklists(res.ip_address, config['ip_blacklists'])
+    ip_bl_hits, ip_bl_count, ip_bl_inconclusive = check_ip_blacklists(res.ip_address, config['ip_blacklists'])
     res.ip_blacklists_hit = ";".join(ip_bl_hits)
     res.ip_blacklist_count = ip_bl_count
+    res.ip_blacklist_inconclusive = ip_bl_inconclusive
     
     # Hosting Provider Detection
     ns_records = dns_query(domain, 'NS')
