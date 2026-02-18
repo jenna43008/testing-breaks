@@ -99,7 +99,8 @@ def run_analysis(domains: list, config: dict, progress_callback=None) -> list:
                 timeout=config.get('timeout', 10.0),
                 check_rdap=config.get('check_rdap', True),
                 weights=config.get('weights', {}),
-                threshold=config.get('approve_threshold', 50)
+                threshold=config.get('approve_threshold', 50),
+                full_config=config,
             )
             results.append(result)
         except Exception as e:
