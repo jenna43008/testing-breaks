@@ -9,6 +9,7 @@ Admin view: Configure scoring weights and thresholds
 import streamlit as st
 import pandas as pd
 import json
+import copy
 import os
 from datetime import datetime
 from io import BytesIO
@@ -503,7 +504,7 @@ def admin_view():
         st.header("⚖️ Scoring Weights")
         st.markdown("Adjust the risk points added for each signal. Higher = more risky.")
         
-        weights = config.get('weights', DEFAULT_CONFIG['weights'])
+        weights = config.get('weights', {})
         
         # Group weights by category
         categories = {
@@ -674,7 +675,7 @@ def admin_view():
         st.caption("All scoring rules grouped by category. Each rule fires when its signal conditions are met, "
                    "adding (or subtracting) its score. Toggle rules on/off, adjust scores, or create new rules.")
         
-        rules = config.get('rules', DEFAULT_CONFIG.get('rules', []))
+        rules = config.get('rules', [])
         
         # Group rules by category
         rule_categories = {}
@@ -727,13 +728,19 @@ def admin_view():
                 bulk_col1, bulk_col2, bulk_col3 = st.columns([1, 1, 2])
                 with bulk_col1:
                     if st.button(f"✅ Enable all", key=f"enable_all_{cat_name}"):
-                        for _, r in cat_rules:
+                        for rule_idx, r in cat_rules:
                             r['enabled'] = True
+                            # Sync Streamlit widget state so toggles reflect the change
+                            st.session_state[f"rule_toggle_{rule_idx}"] = True
+                        save_config(config)
                         st.rerun()
                 with bulk_col2:
                     if st.button(f"⛔ Disable all", key=f"disable_all_{cat_name}"):
-                        for _, r in cat_rules:
+                        for rule_idx, r in cat_rules:
                             r['enabled'] = False
+                            # Sync Streamlit widget state so toggles reflect the change
+                            st.session_state[f"rule_toggle_{rule_idx}"] = False
+                        save_config(config)
                         st.rerun()
                 
                 st.markdown("---")
@@ -900,7 +907,7 @@ def admin_view():
         st.subheader("Suspicious TLDs")
         suspicious_tlds = st.text_area(
             "One per line (include the dot)",
-            value='\n'.join(config.get('suspicious_tlds', DEFAULT_CONFIG.get('suspicious_tlds', []))),
+            value='\n'.join(config.get('suspicious_tlds', [])),
             height=150
         )
         config['suspicious_tlds'] = [t.strip() for t in suspicious_tlds.splitlines() if t.strip()]
@@ -908,7 +915,7 @@ def admin_view():
         st.subheader("Protected Brands (for typosquatting)")
         protected_brands = st.text_area(
             "One per line",
-            value='\n'.join(config.get('protected_brands', DEFAULT_CONFIG.get('protected_brands', []))),
+            value='\n'.join(config.get('protected_brands', [])),
             height=150
         )
         config['protected_brands'] = [b.strip().lower() for b in protected_brands.splitlines() if b.strip()]
@@ -924,7 +931,7 @@ def admin_view():
             st.caption("Suppress TLD variant spoofing for these domains. Use when a legitimate business operates on a non-.com TLD.")
             tld_variant_al = st.text_area(
                 "One domain per line",
-                value='\n'.join(config.get('tld_variant_allowlist', DEFAULT_CONFIG.get('tld_variant_allowlist', []))),
+                value='\n'.join(config.get('tld_variant_allowlist', [])),
                 height=120,
                 key="tld_variant_allowlist_input"
             )
@@ -935,7 +942,7 @@ def admin_view():
             st.caption("Suppress typosquat, brand impersonation, brand+keyword, and suspicious prefix/suffix for these domains.")
             spoofing_al = st.text_area(
                 "One domain per line",
-                value='\n'.join(config.get('spoofing_allowlist', DEFAULT_CONFIG.get('spoofing_allowlist', []))),
+                value='\n'.join(config.get('spoofing_allowlist', [])),
                 height=120,
                 key="spoofing_allowlist_input"
             )
@@ -973,8 +980,8 @@ def admin_view():
         st.markdown("---")
         
         if st.button("🔄 Reset to Defaults"):
-            st.session_state.config = DEFAULT_CONFIG.copy()
-            save_config(DEFAULT_CONFIG)
+            st.session_state.config = copy.deepcopy(DEFAULT_CONFIG)
+            save_config(copy.deepcopy(DEFAULT_CONFIG))
             st.success("Reset to defaults!")
             st.rerun()
     
