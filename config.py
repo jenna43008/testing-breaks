@@ -3,6 +3,7 @@ Configuration management for Domain Sender Approval
 """
 
 import json
+import copy
 import os
 from pathlib import Path
 
@@ -845,11 +846,12 @@ def load_config() -> dict:
             with open(CONFIG_FILE, 'r') as f:
                 loaded = json.load(f)
                 # Merge with defaults to ensure all keys exist
-                merged = DEFAULT_CONFIG.copy()
+                merged = copy.deepcopy(DEFAULT_CONFIG)
                 merged.update(loaded)
                 # Ensure nested dicts are merged properly
                 if 'weights' in loaded:
-                    merged['weights'] = {**DEFAULT_CONFIG['weights'], **loaded['weights']}
+                    default_weights = copy.deepcopy(DEFAULT_CONFIG.get('weights', {}))
+                    merged['weights'] = {**default_weights, **loaded['weights']}
                 # Legacy: if old config has combos, ignore them (now in rules)
                 loaded.pop('combos', None)
                 loaded.pop('disabled_combos', None)
@@ -861,8 +863,8 @@ def load_config() -> dict:
                         # Full replacement mode
                         merged['rules'] = loaded['rules']
                     else:
-                        # Merge mode: start with defaults, override by name, add new
-                        default_rules = {r['name']: r for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r}
+                        # Merge mode: start with deep copy of defaults, override by name, add new
+                        default_rules = {r['name']: copy.deepcopy(r) for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r}
                         for user_rule in loaded['rules']:
                             name = user_rule.get('name', '')
                             if name:
@@ -874,7 +876,7 @@ def load_config() -> dict:
         except Exception as e:
             print(f"Error loading config: {e}")
     
-    return DEFAULT_CONFIG.copy()
+    return copy.deepcopy(DEFAULT_CONFIG)
 
 
 def save_config(config: dict) -> bool:
