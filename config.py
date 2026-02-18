@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
         "domain_blacklisted": 45,
         "ip_blacklisted": 40,
+        "blacklist_inconclusive": 15,  # v6.2: DNSBL check timed out — "unknown" ≠ "clean"
         "typosquat_detected": 40,
         "brand_impersonation": 35,
         "malware_links": 50,
@@ -67,6 +68,8 @@ DEFAULT_CONFIG = {
         "no_mx": 8,                   # No MX - can't receive bounces
         "null_mx": 12,
         "mx_free_provider": 6,
+        "mx_mail_prefix": 4,              # v6.2: MX is mail.{domain} — phishing template fingerprint
+        "spf_no_external_includes": 3,    # v6.2: SPF exists but no real provider (Google/M365/etc.)
         
         # === INFRASTRUCTURE CONCERNS (Low weights) ===
         "no_ptr": 4,                  # Missing PTR - minor
@@ -129,6 +132,7 @@ DEFAULT_CONFIG = {
         "hosting_budget_shared": 8,   # Hostinger, GoDaddy shared, Namecheap shared, etc.
         "hosting_free": 12,           # 000webhost, InfinityFree, AwardSpace, etc.
         "hosting_suspect": 18,        # Known bulletproof / abuse-tolerant hosts
+        "hosting_platform": 4,        # v6.2: Dev platforms (Render, Netlify, Vercel) — mild signal
         
         # === MX PROVIDER SCORING (v4.7) ===
         "mx_disposable": 10,          # Disposable/cheap MX (Titan, ImprovMX, Hostinger email, etc.)
@@ -187,12 +191,18 @@ DEFAULT_CONFIG = {
         {"name": "combo_spf_no_ext_self_mx", "score": 5, "label": "spf no external includes + mx selfhosted", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_no_external_includes", "mx_selfhosted"], "if_any": [], "if_not": []},
         {"name": "combo_spf_open_no_dmarc", "score": 15, "label": "spf pass all + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_pass_all", "no_dmarc"], "if_any": [], "if_not": []},
 
-        # --- Fraud / Blacklist (5 rules) ---
+        # --- Fraud / Blacklist (5 + 5 rules) ---
         {"name": "combo_blacklisted_new_30d", "score": 30, "label": "domain blacklisted + domain <30d", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["domain_blacklisted", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_ptr_bad_blacklisted", "score": 10, "label": "ptr mismatch + domain blacklisted", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["ptr_mismatch", "domain_blacklisted"], "if_any": [], "if_not": []},
         {"name": "combo_typosquat_cred_form", "score": 35, "label": "typosquat detected + credential form", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["typosquat_detected", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_typosquat_new_30d", "score": 28, "label": "typosquat detected + domain <30d", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["typosquat_detected", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_typosquat_redir_chain", "score": 25, "label": "typosquat detected + redirect chain 2plus", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["typosquat_detected", "redirect_chain_2plus"], "if_any": [], "if_not": []},
+        # v6.2: Inconclusive blacklist combos — amplify penalty when combined with other red flags
+        {"name": "combo_bl_inconclusive_new_30d", "score": 10, "label": "blacklist inconclusive + domain <30d", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["blacklist_inconclusive", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_bl_inconclusive_no_dkim", "score": 8, "label": "blacklist inconclusive + no dkim", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["blacklist_inconclusive", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_bl_inconclusive_weak_auth", "score": 12, "label": "blacklist inconclusive + no dkim + dmarc p=none", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["blacklist_inconclusive", "no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
+        {"name": "combo_bl_inconclusive_self_mx", "score": 8, "label": "blacklist inconclusive + self-hosted MX", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["blacklist_inconclusive", "mx_selfhosted"], "if_any": [], "if_not": []},
+        {"name": "combo_bl_inconclusive_shell", "score": 10, "label": "blacklist inconclusive + minimal shell site", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["blacklist_inconclusive", "minimal_shell"], "if_any": [], "if_not": []},
 
         # --- General Risk (19 rules) ---
         {"name": "combo_cred_form_no_https", "score": 12, "label": "credential form + no https", "category": "General Risk", "enabled": True, "if_all": ["credential_form", "no_https"], "if_any": [], "if_not": []},
