@@ -346,7 +346,7 @@ def display_results(results: list):
         with col2:
             # Summary CSV (just key columns)
             summary_csv = BytesIO()
-            summary_cols = ['domain', 'risk_score', 'recommendation', 'summary']
+            summary_cols = ['domain', 'risk_score', 'recommendation', 'score_breakdown', 'summary']
             summary_cols = [c for c in summary_cols if c in df.columns]
             df[summary_cols].to_csv(summary_csv, index=False)
             summary_csv.seek(0)
@@ -404,6 +404,64 @@ def display_results(results: list):
             st.markdown("**Summary:**")
             st.info(domain_data['summary'])
             
+            # === SCORE BREAKDOWN ===
+            breakdown_json = domain_data.get('score_breakdown', '')
+            if breakdown_json:
+                try:
+                    breakdown = json.loads(breakdown_json)
+                except (json.JSONDecodeError, TypeError):
+                    breakdown = {}
+            else:
+                breakdown = {}
+            
+            if breakdown:
+                # Split into penalties (>0), bonuses (<0), and neutral (0)
+                penalties = {k: v for k, v in breakdown.items() if v > 0}
+                bonuses = {k: v for k, v in breakdown.items() if v < 0}
+                
+                # Penalties sorted by impact (highest first)
+                sorted_penalties = sorted(penalties.items(), key=lambda x: x[1], reverse=True)
+                # Bonuses sorted by impact (most negative first)
+                sorted_bonuses = sorted(bonuses.items(), key=lambda x: x[1])
+                
+                total_penalty = sum(penalties.values())
+                total_bonus = sum(bonuses.values())
+                
+                # Rules labels lookup for display
+                rules_labels_str = domain_data.get('rules_labels', '')
+                rules_str = domain_data.get('rules_triggered', '')
+                rule_label_map = {}
+                if rules_str and rules_labels_str:
+                    names = rules_str.split(';')
+                    labels = rules_labels_str.split(';')
+                    for i, name in enumerate(names):
+                        if i < len(labels) and labels[i].strip():
+                            rule_label_map[name.strip()] = labels[i].strip()
+                
+                if sorted_penalties:
+                    st.markdown(f"**🔴 Penalties** ({total_penalty} pts)")
+                    for item, pts in sorted_penalties:
+                        is_rule = item.startswith("rule:")
+                        display_name = item[5:] if is_rule else item
+                        label = rule_label_map.get(display_name, '')
+                        prefix = "📐" if is_rule else "⚡"
+                        label_text = f" — {label}" if label else ""
+                        st.markdown(f"&nbsp;&nbsp;{prefix} `{display_name}` **+{pts}**{label_text}")
+                
+                if sorted_bonuses:
+                    st.markdown(f"**🟢 Bonuses** ({total_bonus} pts)")
+                    for item, pts in sorted_bonuses:
+                        is_rule = item.startswith("rule:")
+                        display_name = item[5:] if is_rule else item
+                        label = rule_label_map.get(display_name, '')
+                        prefix = "📐" if is_rule else "⚡"
+                        label_text = f" — {label}" if label else ""
+                        st.markdown(f"&nbsp;&nbsp;{prefix} `{display_name}` **{pts}**{label_text}")
+                
+                st.caption(f"Net score: {total_penalty + total_bonus} → clamped to {domain_data['risk_score']}")
+            
+            st.markdown("---")
+            
             # Key signals
             st.markdown("**Email Authentication:**")
             auth_col1, auth_col2, auth_col3 = st.columns(3)
@@ -449,22 +507,6 @@ def display_results(results: list):
                 }
                 mx_icon = mx_icons.get(mx_ptype, 'ℹ️')
                 st.markdown(f"**MX Provider:** {mx_icon} {mx_ptype} ({mx_primary})")
-            
-            # Rules triggered display
-            rules_str = domain_data.get('rules_triggered', '')
-            if rules_str:
-                rules_list = rules_str.split(';')
-                rules_labels_str = domain_data.get('rules_labels', '')
-                labels = rules_labels_str.split(';') if rules_labels_str else []
-                
-                st.markdown(f"**📐 Rules Fired:** {len(rules_list)} rule(s)")
-                with st.expander("View fired rules"):
-                    for i, r in enumerate(rules_list):
-                        label = labels[i].strip() if i < len(labels) and labels[i].strip() else ''
-                        if label:
-                            st.markdown(f"• **`{r}`** — {label}")
-                        else:
-                            st.markdown(f"• `{r}`")
 
 
 def admin_view():
