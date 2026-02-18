@@ -4,6 +4,13 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 6.3 (Feb 2026)
+- Added WHOIS fallback when RDAP returns no creation date (python-whois)
+- New signal: domain_created_today — fires when domain registered 0-1 days ago
+- Heavy base penalty (50) + combo rules for brand impersonation, blacklist, typosquat, TLD spoof
+- New fields: whois_created, domain_age_source, domain_created_today
+- Summary prominently flags same-day/yesterday registrations
+
 VERSION: 6.2 (Feb 2026)
 - Fixed DNSBL rate limit bug: blacklist checks silently returning "clean" on timeout
 - check_blacklist() now distinguishes NXDOMAIN (clean) from timeout/error (inconclusive)
@@ -46,7 +53,7 @@ VERSION: 4.4 (Feb 2026)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "6.2"
+ANALYZER_VERSION = "6.3"
 
 import re
 import socket
@@ -72,6 +79,12 @@ try:
     DNS_AVAILABLE = True
 except ImportError:
     DNS_AVAILABLE = False
+
+try:
+    import whois as python_whois
+    WHOIS_AVAILABLE = True
+except ImportError:
+    WHOIS_AVAILABLE = False
 
 from config import DEFAULT_CONFIG, get_weight
 
@@ -158,7 +171,10 @@ class DomainApprovalResult:
     
     # === DOMAIN INFO ===
     rdap_created: str = ""
+    whois_created: str = ""
     domain_age_days: int = -1
+    domain_age_source: str = ""                  # "rdap" or "whois"
+    domain_created_today: bool = False            # True if 0-1 days old
     is_suspicious_tld: bool = False
     is_free_email_domain: bool = False
     is_free_hosting: bool = False
@@ -2602,6 +2618,30 @@ def rdap_lookup(domain: str, timeout: float) -> Tuple[str, int]:
         return "", -1
 
 
+def whois_lookup(domain: str) -> Tuple[str, int]:
+    """Fallback domain age lookup via python-whois when RDAP fails."""
+    if not WHOIS_AVAILABLE:
+        return "", -1
+    try:
+        parts = domain.split('.')
+        base = '.'.join(parts[-3:]) if len(parts) > 2 and parts[-2] in ['co', 'com', 'org', 'net'] else '.'.join(parts[-2:])
+        w = python_whois.whois(base)
+        created = w.creation_date
+        if created is None:
+            return "", -1
+        # Some registrars return a list of dates
+        if isinstance(created, list):
+            created = created[0]
+        if isinstance(created, datetime):
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            age_days = (datetime.now(timezone.utc) - created).days
+            return created.isoformat(), age_days
+        return "", -1
+    except Exception:
+        return "", -1
+
+
 # ============================================================================
 # SCORING & SUMMARY
 # ============================================================================
@@ -2638,7 +2678,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.spf_mechanism == "+all":
         all_issues.append("SPF +all → Domain SPOOFABLE; anyone can forge emails as this sender")
     
-    if rdap_enabled and res.domain_age_days >= 0 and res.domain_age_days < 7:
+    if rdap_enabled and res.domain_age_days >= 0 and res.domain_age_days <= 1:
+        src = f" ({res.domain_age_source.upper()})" if res.domain_age_source else ""
+        all_issues.append(f"⚠ DOMAIN CREATED TODAY/YESTERDAY{src} → Registered {res.domain_age_days}d ago; near-certain spam/phishing infrastructure")
+    elif rdap_enabled and res.domain_age_days >= 0 and res.domain_age_days < 7:
         all_issues.append(f"DOMAIN ONLY {res.domain_age_days} DAYS OLD → New domains hit spam folder 90%+ of the time")
     elif rdap_enabled and res.domain_age_days >= 7 and res.domain_age_days < 30:
         all_issues.append(f"DOMAIN {res.domain_age_days} DAYS OLD → Young domains face increased spam filtering")
@@ -3068,6 +3111,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     
     # Domain age
     if res.domain_age_days >= 0:
+        if res.domain_age_days <= 1:
+            res.domain_created_today = True
+            score += weights.get('domain_created_today', 50)
+            signals.add("domain_created_today")
         if res.domain_age_days < 7:
             score += weights.get('domain_lt_7d', 35)
             signals.add("domain_lt_7d")
@@ -3378,20 +3425,28 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
 # ============================================================================
 
 def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
-                   weights: dict = None, threshold: int = 50) -> dict:
+                   weights: dict = None, threshold: int = 50,
+                   full_config: dict = None) -> dict:
     """
     Main entry point for domain analysis.
     Returns dict with all results.
+    
+    If full_config is provided, rules, allowlists, and other settings are
+    taken from it.  Otherwise falls back to DEFAULT_CONFIG (all rules enabled).
     """
+    src = full_config or {}
     config = {
-        'weights': weights or DEFAULT_CONFIG['weights'],
+        'weights': weights or src.get('weights', DEFAULT_CONFIG['weights']),
         'approve_threshold': threshold,
-        'suspicious_tlds': DEFAULT_CONFIG.get('suspicious_tlds', []),
-        'protected_brands': DEFAULT_CONFIG.get('protected_brands', []),
-        'disposable_domains': DEFAULT_CONFIG.get('disposable_domains', []),
-        'domain_blacklists': DEFAULT_CONFIG.get('domain_blacklists', []),
-        'ip_blacklists': DEFAULT_CONFIG.get('ip_blacklists', []),
-        'hosting_providers': DEFAULT_CONFIG.get('hosting_providers', {}),
+        'rules': src.get('rules', DEFAULT_CONFIG.get('rules', [])),
+        'suspicious_tlds': src.get('suspicious_tlds', DEFAULT_CONFIG.get('suspicious_tlds', [])),
+        'protected_brands': src.get('protected_brands', DEFAULT_CONFIG.get('protected_brands', [])),
+        'disposable_domains': src.get('disposable_domains', DEFAULT_CONFIG.get('disposable_domains', [])),
+        'domain_blacklists': src.get('domain_blacklists', DEFAULT_CONFIG.get('domain_blacklists', [])),
+        'ip_blacklists': src.get('ip_blacklists', DEFAULT_CONFIG.get('ip_blacklists', [])),
+        'hosting_providers': src.get('hosting_providers', DEFAULT_CONFIG.get('hosting_providers', {})),
+        'tld_variant_allowlist': src.get('tld_variant_allowlist', DEFAULT_CONFIG.get('tld_variant_allowlist', [])),
+        'spoofing_allowlist': src.get('spoofing_allowlist', DEFAULT_CONFIG.get('spoofing_allowlist', [])),
     }
     
     res = DomainApprovalResult(domain=domain)
@@ -3690,6 +3745,14 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     # RDAP
     if check_rdap:
         res.rdap_created, res.domain_age_days = rdap_lookup(domain, timeout)
+        if res.domain_age_days >= 0:
+            res.domain_age_source = "rdap"
+    
+    # WHOIS fallback if RDAP returned no creation date
+    if check_rdap and res.domain_age_days < 0:
+        res.whois_created, res.domain_age_days = whois_lookup(domain)
+        if res.domain_age_days >= 0:
+            res.domain_age_source = "whois"
     
     # Score
     calculate_score(res, config)
