@@ -2618,10 +2618,12 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     # === CRITICAL ISSUES ===
     if res.domain_blacklist_count > 0:
-        all_issues.append(f"BLACKLISTED DOMAIN ({res.domain_blacklist_count} lists) → Emails BLOCKED by Gmail/Outlook/Yahoo")
+        bl_names = res.domain_blacklists_hit.replace(";", ", ")
+        all_issues.append(f"BLACKLISTED DOMAIN on {bl_names} ({res.domain_blacklist_count} lists) → Emails BLOCKED by Gmail/Outlook/Yahoo")
     
     if res.ip_blacklist_count > 0:
-        all_issues.append(f"BLACKLISTED IP ({res.ip_blacklist_count} lists) → Emails BLOCKED by major providers")
+        ip_bl_names = res.ip_blacklists_hit.replace(";", ", ")
+        all_issues.append(f"BLACKLISTED IP on {ip_bl_names} ({res.ip_blacklist_count} lists) → Emails BLOCKED by major providers")
     
     # v6.2: Warn when blacklist checks were inconclusive (timeout/rate limit)
     total_inconclusive = res.domain_blacklist_inconclusive + res.ip_blacklist_inconclusive
