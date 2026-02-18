@@ -56,6 +56,7 @@ VERSION: 4.4 (Feb 2026)
 ANALYZER_VERSION = "6.3"
 
 import re
+import json
 import socket
 import ssl
 import hashlib
@@ -314,6 +315,7 @@ class DomainApprovalResult:
     combos_triggered: str = ""
     rules_triggered: str = ""                    # Custom rules that fired (name:score pairs)
     rules_labels: str = ""                       # Human-readable labels for triggered rules
+    score_breakdown: str = ""                    # JSON: {signal_or_rule: points} for every scored item
 
 
 # ============================================================================
@@ -2979,84 +2981,73 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
 def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     score = 0
     signals: Set[str] = set()
+    breakdown: dict = {}  # signal_or_rule → points contributed
     weights = config.get('weights', DEFAULT_CONFIG['weights'])
     threshold = config.get('approve_threshold', 50)
+    
+    def add(signal: str, points: int):
+        """Record a signal, its points, and accumulate score."""
+        nonlocal score
+        signals.add(signal)
+        if points != 0:
+            breakdown[signal] = breakdown.get(signal, 0) + points
+            score += points
     
     # Email Auth - these are DELIVERABILITY concerns only, NOT fraud signals
     # A domain missing these should get warnings, not denial
     if not res.spf_exists:
-        score += weights.get('no_spf', 8)
-        signals.add("no_spf")
+        add("no_spf", weights.get('no_spf', 8))
     else:
         if res.spf_mechanism == "+all":
-            score += weights.get('spf_pass_all', 40)  # This IS a security issue - allows spoofing
-            signals.add("spf_pass_all")
+            add("spf_pass_all", weights.get('spf_pass_all', 40))  # This IS a security issue - allows spoofing
         elif res.spf_mechanism == "?all":
-            score += weights.get('spf_neutral_all', 5)
-            signals.add("spf_neutral_all")
+            add("spf_neutral_all", weights.get('spf_neutral_all', 5))
         elif res.spf_mechanism == "~all":
-            score += weights.get('spf_softfail_all', 2)  # Very minor - this is common and acceptable
-            signals.add("spf_softfail_all")
-    
+            add("spf_softfail_all", weights.get('spf_softfail_all', 2))  # Very minor - this is common and acceptable
     if not res.dkim_exists:
-        score += weights.get('no_dkim', 6)
-        signals.add("no_dkim")
+        add("no_dkim", weights.get('no_dkim', 6))
     
     if not res.dmarc_exists:
-        score += weights.get('no_dmarc', 10)
-        signals.add("no_dmarc")
+        add("no_dmarc", weights.get('no_dmarc', 10))
     else:
         if res.dmarc_policy == "none":
-            score += weights.get('dmarc_p_none', 5)
-            signals.add("dmarc_p_none")
+            add("dmarc_p_none", weights.get('dmarc_p_none', 5))
         if not res.dmarc_rua:
-            score += weights.get('dmarc_no_rua', 2)
-            signals.add("dmarc_no_rua")
+            add("dmarc_no_rua", weights.get('dmarc_no_rua', 2))
     
     if not res.mx_exists:
-        score += weights.get('no_mx', 8)
-        signals.add("no_mx")
+        add("no_mx", weights.get('no_mx', 8))
     elif res.mx_is_null:
-        score += weights.get('null_mx', 12)
-        signals.add("null_mx")
+        add("null_mx", weights.get('null_mx', 12))
     
     # MX provider type scoring (v4.7)
     if res.mx_provider_type == "enterprise":
-        score += weights.get('mx_enterprise_bonus', -5)
-        signals.add("mx_enterprise")
+        add("mx_enterprise", weights.get('mx_enterprise_bonus', -5))
     elif res.mx_provider_type == "disposable":
-        score += weights.get('mx_disposable', 10)
-        signals.add("mx_disposable")
+        add("mx_disposable", weights.get('mx_disposable', 10))
     elif res.mx_provider_type == "selfhosted":
-        score += weights.get('mx_selfhosted', 6)
-        signals.add("mx_selfhosted")
+        add("mx_selfhosted", weights.get('mx_selfhosted', 6))
     
     # mail.{domain} template fingerprint — stronger than generic selfhosted
     # This exact pattern is used by phishing infrastructure toolkits
     if res.mx_is_mail_prefix:
-        score += weights.get('mx_mail_prefix', 4)
-        signals.add("mx_mail_prefix")
+        add("mx_mail_prefix", weights.get('mx_mail_prefix', 4))
     
     # SPF exists but has NO external email provider includes
     # Legit businesses almost always include Google/Microsoft/SendGrid/etc.
     # Self-only SPF (just a/mx mechanisms) = no real email provider
     if res.spf_exists and not res.spf_has_external_includes:
-        score += weights.get('spf_no_external_includes', 3)
-        signals.add("spf_no_external_includes")
+        add("spf_no_external_includes", weights.get('spf_no_external_includes', 3))
     
     if not res.ptr_exists:
-        score += weights.get('no_ptr', 4)
-        signals.add("no_ptr")
+        add("no_ptr", weights.get('no_ptr', 4))
     elif not res.ptr_matches_forward:
-        score += weights.get('ptr_mismatch', 5)
-        signals.add("ptr_mismatch")
+        add("ptr_mismatch", weights.get('ptr_mismatch', 5))
     
     if res.bimi_exists:
-        score += weights.get('has_bimi', -8)
-        signals.add("has_bimi")
+        add("has_bimi", weights.get('has_bimi', -8))
     if res.mta_sts_exists:
-        score += weights.get('has_mta_sts', -5)
-        signals.add("has_mta_sts")
+        add("has_mta_sts", weights.get('has_mta_sts', -5))
     
     # === APP STORE PRESENCE BONUS (Legitimacy Signal) ===
     # Tiered by confidence: high (verified deep links) > medium (page links/API) > low (keyword only)
@@ -3068,35 +3059,28 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         if res.app_store_confidence == "high":
             if is_platform_hosted:
                 # Platform's AASA, not the domain's — don't give bonus
-                signals.add("app_store_platform_false_positive")
+                add("app_store_platform_false_positive", 0)
             else:
-                score += weights.get('app_store_high', -15)
-                signals.add("app_store_high")
+                add("app_store_high", weights.get('app_store_high', -15))
         elif res.app_store_confidence == "medium":
             if not is_platform_hosted:
-                score += weights.get('app_store_medium', -10)
-                signals.add("app_store_medium")
+                add("app_store_medium", weights.get('app_store_medium', -10))
         elif res.app_store_confidence == "low":
             # v6.2: Fixed indentation — was incorrectly attached to outer if
-            score += weights.get('app_store_low', -3)
-            signals.add("app_store_low")
+            add("app_store_low", weights.get('app_store_low', -3))
     
     # Blacklists - HIGH weight, these are real fraud signals
     if res.domain_blacklist_count > 0:
-        score += weights.get('domain_blacklisted', 40) * min(res.domain_blacklist_count, 3)
-        signals.add("domain_blacklisted")
+        add("domain_blacklisted", weights.get('domain_blacklisted', 40) * min(res.domain_blacklist_count, 3))
     if res.ip_blacklist_count > 0:
-        score += weights.get('ip_blacklisted', 35) * min(res.ip_blacklist_count, 3)
-        signals.add("ip_blacklisted")
+        add("ip_blacklisted", weights.get('ip_blacklisted', 35) * min(res.ip_blacklist_count, 3))
     
     # v6.2: Inconclusive blacklist checks — "we don't know" ≠ "clean"
     # Apply a moderate penalty so these don't silently pass
     if res.domain_blacklist_inconclusive > 0:
-        score += weights.get('blacklist_inconclusive', 15)
-        signals.add("blacklist_inconclusive")
+        add("blacklist_inconclusive", weights.get('blacklist_inconclusive', 15))
     if res.ip_blacklist_inconclusive > 0:
-        score += weights.get('blacklist_inconclusive', 15)
-        signals.add("blacklist_inconclusive")
+        add("blacklist_inconclusive", weights.get('blacklist_inconclusive', 15))
     
     # Blocked ASN organizations - instant high score
     blocked_asn_orgs = config.get('blocked_asn_orgs', [])
@@ -3105,222 +3089,167 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         matched_asn = next((org for org in blocked_asn_orgs if org.lower() in asn_org_lower), None)
         if matched_asn:
             asn_score = config.get('blocked_asn_org_score', 100)
-            score += asn_score
-            signals.add("blocked_asn_org")
+            add("blocked_asn_org", asn_score)
             res.blocked_asn_org_match = matched_asn  # Store for display
     
     # Domain age
     if res.domain_age_days >= 0:
         if res.domain_age_days <= 1:
             res.domain_created_today = True
-            score += weights.get('domain_created_today', 50)
-            signals.add("domain_created_today")
+            add("domain_created_today", weights.get('domain_created_today', 50))
         if res.domain_age_days < 7:
-            score += weights.get('domain_lt_7d', 35)
-            signals.add("domain_lt_7d")
+            add("domain_lt_7d", weights.get('domain_lt_7d', 35))
         if res.domain_age_days < 30:
-            score += weights.get('domain_lt_30d', 12)
-            signals.add("domain_lt_30d")
+            add("domain_lt_30d", weights.get('domain_lt_30d', 12))
         elif res.domain_age_days < 90:
-            score += weights.get('domain_lt_90d', 5)
-            signals.add("domain_lt_90d")
+            add("domain_lt_90d", weights.get('domain_lt_90d', 5))
         # Track established domains (for rule detection)
         if res.domain_age_days >= 365:
-            signals.add("domain_gt_1yr")  # No score penalty - just for rule detection
+            add("domain_gt_1yr", 0)
     
     # Domain type
     if res.is_suspicious_tld:
-        score += weights.get('suspicious_tld', 12)
-        signals.add("suspicious_tld")
+        add("suspicious_tld", weights.get('suspicious_tld', 12))
     if res.is_free_email_domain:
-        score += weights.get('free_email_domain', 20)
-        signals.add("free_email_domain")
+        add("free_email_domain", weights.get('free_email_domain', 20))
     if res.is_disposable_email:
-        score += weights.get('disposable_email', 30)
-        signals.add("disposable_email")
+        add("disposable_email", weights.get('disposable_email', 30))
     if res.typosquat_target:
-        score += weights.get('typosquat_detected', 25)
-        signals.add("typosquat_detected")
+        add("typosquat_detected", weights.get('typosquat_detected', 25))
     if res.is_free_hosting:
-        score += weights.get('free_hosting', 12)
-        signals.add("free_hosting")
+        add("free_hosting", weights.get('free_hosting', 12))
     
     # === HOSTING PROVIDER DETECTION ===
     if res.hosting_provider_type == "budget_shared":
-        score += weights.get('hosting_budget_shared', 8)
-        signals.add("hosting_budget_shared")
+        add("hosting_budget_shared", weights.get('hosting_budget_shared', 8))
     elif res.hosting_provider_type == "free":
-        score += weights.get('hosting_free', 12)
-        signals.add("hosting_free")
+        add("hosting_free", weights.get('hosting_free', 12))
     elif res.hosting_provider_type == "suspect":
-        score += weights.get('hosting_suspect', 18)
-        signals.add("hosting_suspect")
+        add("hosting_suspect", weights.get('hosting_suspect', 18))
     elif res.hosting_provider_type == "platform":
         # Dev platforms (Render, Netlify, Vercel) aren't inherently bad,
         # but custom domains on free-tier platforms sending email is a red flag
-        score += weights.get('hosting_platform', 4)
-        signals.add("hosting_platform")
+        add("hosting_platform", weights.get('hosting_platform', 4))
     
     # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
     if res.has_suspicious_prefix:
-        score += weights.get('suspicious_prefix', 15)
-        signals.add("suspicious_prefix")
+        add("suspicious_prefix", weights.get('suspicious_prefix', 15))
     if res.has_suspicious_suffix:
-        score += weights.get('suspicious_suffix', 15)
-        signals.add("suspicious_suffix")
+        add("suspicious_suffix", weights.get('suspicious_suffix', 15))
     if res.is_tech_support_tld:
-        score += weights.get('tech_support_tld', 18)
-        signals.add("tech_support_tld")
+        add("tech_support_tld", weights.get('tech_support_tld', 18))
     if res.domain_impersonates_brand:
-        score += weights.get('domain_brand_impersonation', 25)
-        signals.add("domain_brand_impersonation")
+        add("domain_brand_impersonation", weights.get('domain_brand_impersonation', 25))
     
     # Brand + spoofing keyword: easyjetconnect, amazonverify, chaselogin, etc.
     # This is a much stronger signal than brand name alone — it specifically
     # mimics legitimate brand service names/subdomains
     if res.brand_plus_keyword_domain:
-        score += weights.get('brand_spoofing_keyword', 20)
-        signals.add("brand_spoofing_keyword")
+        add("brand_spoofing_keyword", weights.get('brand_spoofing_keyword', 20))
     
     # === TLD VARIANT SPOOFING DETECTION ===
     if res.tld_variant_detected:
-        score += weights.get('tld_variant_spoofing', 30)
-        signals.add("tld_variant_spoofing")
+        add("tld_variant_spoofing", weights.get('tld_variant_spoofing', 30))
     
     # E-commerce / Retail scam indicators
     if res.is_retail_scam_tld:
-        score += weights.get('retail_scam_tld', 12)
-        signals.add("retail_scam_tld")
+        add("retail_scam_tld", weights.get('retail_scam_tld', 12))
     if res.has_cross_domain_brand_link:
-        score += weights.get('cross_domain_brand_link', 18)
-        signals.add("cross_domain_brand_link")
+        add("cross_domain_brand_link", weights.get('cross_domain_brand_link', 18))
     if res.is_ecommerce_site and res.missing_business_identity:
-        score += weights.get('ecommerce_no_identity', 15)
-        signals.add("ecommerce_no_identity")
+        add("ecommerce_no_identity", weights.get('ecommerce_no_identity', 15))
     
     # Web/TLS
     if not res.https_valid:
-        score += weights.get('no_https', 25)
-        signals.add("no_https")
+        add("no_https", weights.get('no_https', 25))
     
     # v4.4: Specific TLS failure scoring (adds ON TOP of no_https)
     if res.tls_handshake_failed:
-        score += weights.get('tls_handshake_failed', 20)
-        signals.add("tls_handshake_failed")
+        add("tls_handshake_failed", weights.get('tls_handshake_failed', 20))
     if res.tls_connection_failed:
-        score += weights.get('tls_connection_failed', 8)
-        signals.add("tls_connection_failed")
+        add("tls_connection_failed", weights.get('tls_connection_failed', 8))
     
     if res.cert_expired:
-        score += weights.get('cert_expired', 15)
-        signals.add("cert_expired")
+        add("cert_expired", weights.get('cert_expired', 15))
     if res.cert_self_signed:
-        score += weights.get('cert_self_signed', 12)
-        signals.add("cert_self_signed")
+        add("cert_self_signed", weights.get('cert_self_signed', 12))
     
     # Redirects
     if res.redirect_count >= 2:
-        score += weights.get('redirect_chain_2plus', 12)
-        signals.add("redirect_chain_2plus")
+        add("redirect_chain_2plus", weights.get('redirect_chain_2plus', 12))
     if res.redirect_cross_domain:
-        score += weights.get('redirect_cross_domain', 12)
-        signals.add("redirect_cross_domain")
+        add("redirect_cross_domain", weights.get('redirect_cross_domain', 12))
     if res.redirect_uses_temp:
-        score += weights.get('redirect_temp_302_307', 10)
-        signals.add("redirect_temp_302_307")
+        add("redirect_temp_302_307", weights.get('redirect_temp_302_307', 10))
     
     # === STATUS CODE SIGNALS (per research: high-value early indicators) ===
     # 401 = unauthorized on public site - unusual
     if res.has_401:
-        score += weights.get('status_401_unauthorized', 12)
-        signals.add("status_401_unauthorized")
+        add("status_401_unauthorized", weights.get('status_401_unauthorized', 12))
     
     # 403 = cloaking/scanner blocking - VERY strong signal
     if res.has_403:
-        score += weights.get('status_403_cloaking', 15)
-        signals.add("status_403_cloaking")
+        add("status_403_cloaking", weights.get('status_403_cloaking', 15))
     
     # 429 = throttling scanners - medium signal
     if res.has_429:
-        score += weights.get('status_429_throttling', 8)
-        signals.add("status_429_throttling")
+        add("status_429_throttling", weights.get('status_429_throttling', 8))
     
     # 503 = disposable infrastructure - medium signal  
     if res.has_503:
-        score += weights.get('status_503_disposable', 8)
-        signals.add("status_503_disposable")
+        add("status_503_disposable", weights.get('status_503_disposable', 8))
     
     # === ACCESS RESTRICTION / CORPORATE TRUST SIGNALS ===
     # Access restricted (401 or 403) on what should be a public domain
     if res.is_access_restricted:
-        score += weights.get('access_restricted', 10)
-        signals.add("access_restricted")
+        add("access_restricted", weights.get('access_restricted', 10))
     
     # Missing trust signals (no about/contact pages)
     if res.missing_trust_signals:
-        score += weights.get('missing_trust_signals', 8)
-        signals.add("missing_trust_signals")
+        add("missing_trust_signals", weights.get('missing_trust_signals', 8))
     
     # Opaque entity - access blocked AND no corporate footprint
     # This is a classic B2B fraud / supplier impersonation pattern
     if res.is_opaque_entity:
-        score += weights.get('opaque_entity', 20)
-        signals.add("opaque_entity")
+        add("opaque_entity", weights.get('opaque_entity', 20))
     
     # Content
     if res.is_minimal_shell:
-        score += weights.get('minimal_shell', 15)
-        signals.add("minimal_shell")
+        add("minimal_shell", weights.get('minimal_shell', 15))
     if res.has_js_redirect:
-        score += weights.get('js_redirect', 12)
-        signals.add("js_redirect")
+        add("js_redirect", weights.get('js_redirect', 12))
     if res.has_meta_refresh:
-        score += weights.get('meta_refresh', 5)
-        signals.add("meta_refresh")
+        add("meta_refresh", weights.get('meta_refresh', 5))
     if res.has_external_js:
-        score += weights.get('external_js_loader', 6)
-        signals.add("external_js_loader")
+        add("external_js_loader", weights.get('external_js_loader', 6))
     if res.has_suspicious_iframe:
-        score += weights.get('suspicious_iframe', 8)
-        signals.add("suspicious_iframe")
+        add("suspicious_iframe", weights.get('suspicious_iframe', 8))
     if res.is_parking_page:
-        score += weights.get('parking_page', 6)
-        signals.add("parking_page")
+        add("parking_page", weights.get('parking_page', 6))
     if res.has_credential_form:
-        score += weights.get('credential_form', 20)
-        signals.add("credential_form")
+        add("credential_form", weights.get('credential_form', 20))
     if res.has_sensitive_fields:
-        score += weights.get('sensitive_fields', 10)
-        signals.add("sensitive_fields")
+        add("sensitive_fields", weights.get('sensitive_fields', 10))
     if res.form_posts_external:
-        score += weights.get('form_posts_external', 10)
-        signals.add("form_posts_external")
+        add("form_posts_external", weights.get('form_posts_external', 10))
     if res.brands_detected:
-        score += weights.get('brand_impersonation', 22)
-        signals.add("brand_impersonation")
+        add("brand_impersonation", weights.get('brand_impersonation', 22))
     if res.phishing_paths_found:
-        score += weights.get('phishing_paths', 20)
-        signals.add("phishing_paths")
+        add("phishing_paths", weights.get('phishing_paths', 20))
     if res.malware_links_found:
-        score += weights.get('malware_links', 25)
-        signals.add("malware_links")
+        add("malware_links", weights.get('malware_links', 25))
     
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     if res.has_hijack_path_pattern:
-        score += weights.get('hijack_path_pattern', 12)
-        signals.add("hijack_path_pattern")
+        add("hijack_path_pattern", weights.get('hijack_path_pattern', 12))
     if res.has_doc_sharing_lure:
-        score += weights.get('doc_sharing_lure', 15)
-        signals.add("doc_sharing_lure")
+        add("doc_sharing_lure", weights.get('doc_sharing_lure', 15))
     if res.has_phishing_js_behavior:
-        score += weights.get('phishing_js_behavior', 18)
-        signals.add("phishing_js_behavior")
+        add("phishing_js_behavior", weights.get('phishing_js_behavior', 18))
     if res.redirects_to_phishing_infra:
-        score += weights.get('phishing_infra_redirect', 25)
-        signals.add("phishing_infra_redirect")
+        add("phishing_infra_redirect", weights.get('phishing_infra_redirect', 25))
     if res.has_email_in_url:
-        score += weights.get('email_tracking_url', 20)
-        signals.add("email_tracking_url")
+        add("email_tracking_url", weights.get('email_tracking_url', 20))
     
     # === UNIFIED RULES ENGINE ===
     # All scoring logic beyond base weights (former combos + custom rules)
@@ -3357,7 +3286,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         # All conditions met — rule fires
         rule_score = rule.get('score', 0)
         rule_label = rule.get('label', '')
-        score += rule_score
+        if rule_score != 0:
+            breakdown[f"rule:{rule_name}"] = rule_score
+            score += rule_score
         rules_hit.append(rule_name)
         if rule_label:
             rules_labels.append(rule_label)
@@ -3372,6 +3303,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     res.combos_triggered = ""  # Deprecated: combos are now unified rules
     res.rules_triggered = ";".join(rules_hit)
     res.rules_labels = ";".join(rules_labels)
+    res.score_breakdown = json.dumps(breakdown)
     
     # === BUILD ASN DISPLAY STRING ===
     if res.hosting_asn and res.hosting_asn_org:
