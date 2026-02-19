@@ -3550,14 +3550,14 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         mal = res.vt_malicious_count
         sus = res.vt_suspicious_count
         if mal >= 5:
-            add("vt_malicious_high", weights.get('vt_malicious_high', 45))
+            add("vt_malicious_high", weights.get('vt_malicious_high', 65))
         elif mal >= 3:
-            add("vt_malicious_medium", weights.get('vt_malicious_medium', 30))
+            add("vt_malicious_medium", weights.get('vt_malicious_medium', 40))
         elif mal >= 1:
-            add("vt_malicious_low", weights.get('vt_malicious_low', 18))
+            add("vt_malicious_low", weights.get('vt_malicious_low', 22))
         
         if sus >= 3:
-            add("vt_suspicious", weights.get('vt_suspicious', 12))
+            add("vt_suspicious", weights.get('vt_suspicious', 15))
         elif sus >= 1:
             add("vt_suspicious_low", weights.get('vt_suspicious_low', 5))
         
@@ -3569,52 +3569,52 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     
     # === HACKLINK / SEO SPAM SCORING ===
     if res.hacklink_detected:
-        add("hacklink_detected", weights.get('hacklink_detected', 35))
+        add("hacklink_detected", weights.get('hacklink_detected', 50))
     
     if res.hacklink_keywords and not res.hacklink_detected:
         # Keywords found but below threshold — still a warning signal
         kw_count = len(res.hacklink_keywords.split(";")) if res.hacklink_keywords else 0
         if kw_count >= 1:
-            add("hacklink_keywords", weights.get('hacklink_keywords', 12))
+            add("hacklink_keywords", weights.get('hacklink_keywords', 15))
     
     if res.hacklink_wp_compromised:
-        add("hacklink_wp_compromised", weights.get('hacklink_wp_compromised', 30))
+        add("hacklink_wp_compromised", weights.get('hacklink_wp_compromised', 45))
     
     if res.hacklink_vulnerable_plugins:
-        add("hacklink_vulnerable_plugins", weights.get('hacklink_vulnerable_plugins', 20))
+        add("hacklink_vulnerable_plugins", weights.get('hacklink_vulnerable_plugins', 25))
     
     if res.hacklink_spam_link_count >= 5:
-        add("hacklink_spam_links", weights.get('hacklink_spam_links', 25))
+        add("hacklink_spam_links", weights.get('hacklink_spam_links', 35))
     
     # === MALICIOUS SCRIPT INJECTION (SocGholish/FakeUpdates/obfuscated) ===
     if res.hacklink_malicious_script:
-        add("malicious_script", weights.get('malicious_script', 40))
+        add("malicious_script", weights.get('malicious_script', 65))
     
     # === HIDDEN CONTENT INJECTION (CSS cloaking: display:none, font-size:0) ===
     if res.hacklink_hidden_injection:
-        add("hidden_injection", weights.get('hidden_injection', 35))
+        add("hidden_injection", weights.get('hidden_injection', 55))
     
     # === CPANEL HOSTING DETECTED ===
     if res.hacklink_is_cpanel:
-        add("cpanel_detected", weights.get('cpanel_detected', 6))
+        add("cpanel_detected", weights.get('cpanel_detected', 8))
     
     # === TRANSFER LOCK / WHOIS ENRICHMENT ===
     if res.domain_transfer_lock_missing:
-        add("transfer_lock_missing", weights.get('transfer_lock_missing', 12))
+        add("transfer_lock_missing", weights.get('transfer_lock_missing', 15))
     
     if res.whois_recently_updated:
-        add("whois_recently_updated", weights.get('whois_recently_updated', 8))
+        add("whois_recently_updated", weights.get('whois_recently_updated', 10))
     
     # === EMPTY PAGE ===
     if res.is_empty_page:
-        add("empty_page", weights.get('empty_page', 15))
+        add("empty_page", weights.get('empty_page', 20))
     
     # === CERTIFICATE TRANSPARENCY ===
     if res.ct_recent_issuance:
-        add("ct_recent_issuance", weights.get('ct_recent_issuance', 8))
+        add("ct_recent_issuance", weights.get('ct_recent_issuance', 10))
     
     if res.ct_log_count == 0:
-        add("ct_no_history", weights.get('ct_no_history', 12))
+        add("ct_no_history", weights.get('ct_no_history', 15))
     
     # === UNIFIED RULES ENGINE ===
     # All scoring logic beyond base weights (former combos + custom rules)
