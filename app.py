@@ -166,6 +166,15 @@ def user_view():
                                   help="Lookup domain registration date - adds ~1s per domain")
         
         st.session_state.config['check_rdap'] = check_rdap
+        
+        # VirusTotal API Key
+        vt_key = st.text_input(
+            "🛡️ VirusTotal API Key",
+            value=st.session_state.config.get('vt_api_key', ''),
+            type="password",
+            help="Free VT API: 4 req/min, 500/day. Get one at virustotal.com/gui/my-apikey"
+        )
+        st.session_state.config['vt_api_key'] = vt_key
     
     # Main input area
     col1, col2 = st.columns([2, 1])
@@ -304,6 +313,13 @@ def display_results(results: list):
             "risk_score": st.column_config.NumberColumn("Score", width="small"),
             "recommendation": st.column_config.TextColumn("Result", width="small"),
             "high_risk_phish_infra": st.column_config.CheckboxColumn("🚨 Phish Infra", width="small"),
+            "vt_malicious_count": st.column_config.NumberColumn("🛡️ VT Mal", width="small"),
+            "hacklink_detected": st.column_config.CheckboxColumn("🕷️ Hacklink", width="small"),
+            "hacklink_malicious_script": st.column_config.CheckboxColumn("💀 Mal Script", width="small"),
+            "hacklink_hidden_injection": st.column_config.CheckboxColumn("💀 Hidden Inj", width="small"),
+            "domain_transfer_lock_missing": st.column_config.CheckboxColumn("🔓 No Lock", width="small"),
+            "is_empty_page": st.column_config.CheckboxColumn("📄 Empty", width="small"),
+            "ct_log_count": st.column_config.NumberColumn("📜 CT Certs", width="small"),
             "asn_display": st.column_config.TextColumn("ASN", width="medium"),
             "rules_triggered": st.column_config.TextColumn("Rules Fired", width="medium"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
@@ -318,6 +334,9 @@ def display_results(results: list):
                 "Columns",
                 all_cols,
                 default=['domain', 'risk_score', 'recommendation', 'summary', 
+                        'vt_malicious_count', 'hacklink_detected',
+                        'hacklink_malicious_script', 'hacklink_hidden_injection',
+                        'domain_transfer_lock_missing',
                         'asn_display', 'rules_triggered',
                         'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
             )
@@ -507,6 +526,177 @@ def display_results(results: list):
                 }
                 mx_icon = mx_icons.get(mx_ptype, 'ℹ️')
                 st.markdown(f"**MX Provider:** {mx_icon} {mx_ptype} ({mx_primary})")
+        
+        # === VIRUSTOTAL REPUTATION ===
+        if domain_data.get('vt_available'):
+            with st.expander("🛡️ VirusTotal Reputation", expanded=domain_data.get('vt_malicious_count', 0) > 0):
+                vt_col1, vt_col2, vt_col3, vt_col4 = st.columns(4)
+                mal = domain_data.get('vt_malicious_count', 0)
+                sus = domain_data.get('vt_suspicious_count', 0)
+                total = domain_data.get('vt_total_vendors', 0)
+                
+                with vt_col1:
+                    color = "🔴" if mal >= 5 else "🟠" if mal >= 1 else "🟢"
+                    st.metric(f"{color} Malicious", f"{mal}/{total}")
+                with vt_col2:
+                    st.metric("⚠️ Suspicious", sus)
+                with vt_col3:
+                    st.metric("Community", domain_data.get('vt_community_score', 0))
+                with vt_col4:
+                    st.metric("Reputation", domain_data.get('vt_reputation', 0))
+                
+                # Threat names
+                threat_names = domain_data.get('vt_threat_names', '')
+                if threat_names:
+                    st.warning(f"**Threat families:** {threat_names.replace(';', ', ')}")
+                
+                # Malicious vendors
+                mal_vendors = domain_data.get('vt_malicious_vendors', '')
+                if mal_vendors:
+                    st.markdown(f"**Flagged by:** {mal_vendors.replace(';', ', ')}")
+                
+                # Categories
+                vt_cats = domain_data.get('vt_categories', '')
+                if vt_cats and vt_cats != '{}':
+                    try:
+                        cats = json.loads(vt_cats)
+                        if cats:
+                            unique_cats = sorted(set(cats.values()))
+                            st.markdown(f"**Categories:** {', '.join(unique_cats)}")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                
+                last_analysis = domain_data.get('vt_last_analysis', '')
+                if last_analysis:
+                    st.caption(f"Last VT analysis: {last_analysis}")
+        
+        # === HACKLINK / SEO SPAM DETECTION ===
+        has_hacklink = (
+            domain_data.get('hacklink_detected') or domain_data.get('hacklink_keywords') or 
+            domain_data.get('hacklink_wp_compromised') or domain_data.get('hacklink_malicious_script') or
+            domain_data.get('hacklink_hidden_injection') or domain_data.get('hacklink_is_cpanel')
+        )
+        if has_hacklink:
+            with st.expander("🕷️ Hacklink / SEO Spam Detection", expanded=domain_data.get('hacklink_detected', False) or domain_data.get('hacklink_malicious_script', False) or domain_data.get('hacklink_hidden_injection', False)):
+                hl_col1, hl_col2, hl_col3 = st.columns(3)
+                
+                with hl_col1:
+                    detected = domain_data.get('hacklink_detected', False)
+                    icon = "🔴" if detected else "🟡"
+                    st.metric(f"{icon} Hacklink Detected", "YES" if detected else "Keywords Found")
+                with hl_col2:
+                    st.metric("Risk Score", f"{domain_data.get('hacklink_score', 0)}/30")
+                with hl_col3:
+                    spam_count = domain_data.get('hacklink_spam_link_count', 0)
+                    if spam_count > 0:
+                        st.metric("🔗 Spam Links", spam_count)
+                    else:
+                        is_wp = domain_data.get('hacklink_is_wordpress', False)
+                        st.metric("WordPress", "✅ Yes" if is_wp else "No")
+                
+                # Keywords found
+                keywords = domain_data.get('hacklink_keywords', '')
+                if keywords:
+                    kw_list = keywords.split(';')
+                    st.markdown(f"**Keywords found ({len(kw_list)}):** {', '.join(kw_list[:15])}")
+                    if len(kw_list) > 15:
+                        st.caption(f"... and {len(kw_list) - 15} more")
+                
+                # Injection patterns
+                patterns = domain_data.get('hacklink_injection_patterns', '')
+                if patterns:
+                    st.warning(f"**Injection patterns:** {patterns.replace(';', ', ')}")
+                
+                # WordPress compromise
+                if domain_data.get('hacklink_wp_compromised'):
+                    st.error("**⚠️ WordPress compromise indicators detected** — WP files show signs of code injection")
+                
+                # Vulnerable plugins
+                vuln_plugins = domain_data.get('hacklink_vulnerable_plugins', '')
+                if vuln_plugins:
+                    st.error(f"**Vulnerable plugins:** {vuln_plugins.replace(';', ', ')}")
+                
+                # === HIGH-VALUE SIGNALS ===
+                if domain_data.get('hacklink_malicious_script'):
+                    st.error("**💀 MALICIOUS SCRIPT INJECTION** — SocGholish/FakeUpdates-style obfuscated script detected; domain is actively compromised")
+                
+                if domain_data.get('hacklink_hidden_injection'):
+                    st.error("**💀 HIDDEN CONTENT INJECTION** — CSS-cloaked content (display:none, font-size:0) with links; classic hacklink SEO spam fingerprint")
+                
+                if domain_data.get('hacklink_is_cpanel'):
+                    st.warning("**cPanel hosting detected** — shared hosting environment frequently targeted in hacklink campaigns")
+                
+                sus_scripts = domain_data.get('hacklink_suspicious_scripts', '')
+                if sus_scripts:
+                    st.warning(f"**Suspicious external scripts:** {sus_scripts.replace(';', ', ')}")
+        
+        # === DOMAIN TAKEOVER / TRANSFER LOCK ===
+        has_takeover_signal = (
+            domain_data.get('domain_transfer_lock_missing') or 
+            domain_data.get('whois_recently_updated') or
+            (domain_data.get('ct_recent_issuance') and domain_data.get('domain_age_days', 0) > 365)
+        )
+        if has_takeover_signal:
+            with st.expander("🔓 Domain Takeover Indicators", expanded=True):
+                tk_col1, tk_col2, tk_col3 = st.columns(3)
+                with tk_col1:
+                    locked = domain_data.get('domain_transfer_locked', True)
+                    icon = "🟢" if locked else "🔴"
+                    st.metric(f"{icon} Transfer Lock", "Locked" if locked else "UNLOCKED")
+                with tk_col2:
+                    days = domain_data.get('whois_recently_updated_days', -1)
+                    if days >= 0:
+                        st.metric("WHOIS Updated", f"{days}d ago")
+                    else:
+                        st.metric("WHOIS Updated", "Unknown")
+                with tk_col3:
+                    registrar = domain_data.get('whois_registrar', '')
+                    if registrar:
+                        st.metric("Registrar", registrar[:30])
+                
+                statuses = domain_data.get('whois_statuses', '')
+                if statuses:
+                    st.caption(f"Domain statuses: {statuses.replace(';', ', ')}")
+                
+                if domain_data.get('domain_transfer_lock_missing'):
+                    age = domain_data.get('domain_age_days', -1)
+                    if age > 365:
+                        st.error(f"**⚠️ UNLOCKED + {age}d OLD** — Established domain without transfer lock is a strong takeover indicator")
+                    else:
+                        st.warning("**Transfer lock missing** — Domain is not protected against unauthorized transfers")
+                
+                if domain_data.get('whois_recently_updated'):
+                    st.warning(f"**WHOIS recently updated** ({domain_data.get('whois_recently_updated_days')}d ago) — Possible ownership change, transfer, or DNS hijack")
+        
+        # === EMPTY PAGE ===
+        if domain_data.get('is_empty_page'):
+            st.warning("📄 **Empty page detected** — Reachable domain returns empty/near-empty content (parked, abandoned, or stripped post-compromise)")
+        
+        # === CERTIFICATE TRANSPARENCY ===
+        ct_count = domain_data.get('ct_log_count', -1)
+        if ct_count >= 0:
+            with st.expander(f"📜 Certificate Transparency ({ct_count} certs)", expanded=ct_count == 0 or domain_data.get('ct_recent_issuance', False)):
+                ct_col1, ct_col2, ct_col3 = st.columns(3)
+                with ct_col1:
+                    icon = "🔴" if ct_count == 0 else "🟢"
+                    st.metric(f"{icon} CT Certs Found", ct_count)
+                with ct_col2:
+                    recent = domain_data.get('ct_recent_issuance', False)
+                    st.metric("Recent Issuance", "⚠️ Yes (7d)" if recent else "No")
+                with ct_col3:
+                    issuers = domain_data.get('ct_issuers', '')
+                    if issuers:
+                        st.metric("Issuers", issuers.split(';')[0][:25])
+                
+                first = domain_data.get('ct_first_seen', '')
+                last = domain_data.get('ct_last_seen', '')
+                if first:
+                    st.caption(f"First cert: {first[:10]}  |  Most recent: {last[:10] if last else 'N/A'}")
+                
+                if ct_count == 0:
+                    st.error("**No CT history** — Zero certificates found; domain may never have been used for HTTPS")
+                elif domain_data.get('ct_recent_issuance') and domain_data.get('domain_age_days', 0) > 365:
+                    st.warning(f"**Recent cert on old domain** — New certificate issued on {domain_data.get('domain_age_days')}d-old domain; possible takeover/reactivation")
 
 
 def admin_view():
@@ -742,6 +932,10 @@ def admin_view():
             'Phishing Lures': '🪝',
             'Opaque Entity': '👻',
             'General Risk': '⚠️',
+            'VirusTotal': '🛡️',
+            'Hacklink / SEO Spam': '🕷️',
+            'Malicious Script': '💀',
+            'Domain Takeover': '🔓',
         }
         
         # Show positive signals first, then phishing templates, then rest alphabetically
@@ -943,6 +1137,17 @@ def admin_view():
             )
             if new_password:
                 config['admin_password'] = new_password
+            
+            st.markdown("---")
+            st.markdown("**🛡️ VirusTotal Integration**")
+            vt_key_admin = st.text_input(
+                "VT API Key",
+                value=config.get('vt_api_key', ''),
+                type="password",
+                help="Free: 4 req/min, 500/day. Get at virustotal.com/gui/my-apikey",
+                key="admin_vt_key"
+            )
+            config['vt_api_key'] = vt_key_admin
     
     with tab5:
         st.header("📋 Pattern Lists")
@@ -1057,7 +1262,7 @@ def main():
     
     # Footer
     st.sidebar.markdown("---")
-    st.sidebar.caption(f"Domain Sender Approval v3.1 | Analyzer v{ANALYZER_VERSION}")
+    st.sidebar.caption(f"Domain Sender Approval v4.0 | Analyzer v{ANALYZER_VERSION}")
     st.sidebar.caption(f"Threshold: {st.session_state.config.get('approve_threshold', 50)}")
 
 
