@@ -54,7 +54,7 @@ DEFAULT_CONFIG = {
         "cpanel_detected": 8,              # cPanel hosting (common hacklink target, not malicious alone)
         
         # === TRANSFER LOCK / DOMAIN TAKEOVER ===
-        "transfer_lock_missing": 15,       # Domain not locked against transfers
+        "transfer_lock_recent": 15,        # Transfer lock recently added (post-compromise lockdown signal)
         "whois_recently_updated": 10,      # WHOIS updated in last 30 days
         
         # === EMPTY PAGE ===
@@ -421,16 +421,16 @@ DEFAULT_CONFIG = {
         {"name": "hidden_injection_budget_host", "score": 20, "label": "hidden injection + budget hosting — mass-exploited shared host", "category": "Malicious Script", "enabled": True, "if_all": ["hidden_injection", "hosting_budget_shared"], "if_any": [], "if_not": []},
 
         # --- cPanel + Transfer Lock Combos (4 rules) ---
-        {"name": "cpanel_transfer_lock_missing", "score": 22, "label": "cPanel + transfer lock missing — hijack-ready infrastructure", "category": "Domain Takeover", "enabled": True, "if_all": ["cpanel_detected", "transfer_lock_missing"], "if_any": [], "if_not": []},
+        {"name": "cpanel_transfer_lock_recent", "score": 22, "label": "cPanel + transfer lock recently added — post-compromise lockdown on shared hosting", "category": "Domain Takeover", "enabled": True, "if_all": ["cpanel_detected", "transfer_lock_recent"], "if_any": [], "if_not": []},
         {"name": "cpanel_whois_recently_updated", "score": 18, "label": "cPanel + WHOIS recently updated — possible recent compromise", "category": "Domain Takeover", "enabled": True, "if_all": ["cpanel_detected", "whois_recently_updated"], "if_any": [], "if_not": []},
         {"name": "cpanel_hacklink", "score": 20, "label": "cPanel + hacklink detected — classic hacklink campaign target", "category": "Domain Takeover", "enabled": True, "if_all": ["cpanel_detected", "hacklink_detected"], "if_any": [], "if_not": []},
         {"name": "cpanel_malicious_script", "score": 25, "label": "cPanel + malicious script — compromised shared hosting", "category": "Domain Takeover", "enabled": True, "if_all": ["cpanel_detected", "malicious_script"], "if_any": [], "if_not": []},
 
-        # --- Transfer Lock + Old Domain / VT Combos (4 rules) ---
-        {"name": "transfer_lock_old_domain", "score": 20, "label": "transfer lock missing + domain >1yr — domain takeover signal", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_missing", "domain_gt_1yr"], "if_any": [], "if_not": []},
-        {"name": "transfer_lock_whois_updated", "score": 22, "label": "transfer lock missing + WHOIS recently updated — active takeover", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_missing", "whois_recently_updated"], "if_any": [], "if_not": []},
-        {"name": "transfer_lock_vt_malicious", "score": 25, "label": "transfer lock missing + VT malicious — compromised domain", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_missing"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
-        {"name": "transfer_lock_hacklink", "score": 20, "label": "transfer lock missing + hacklink — unlocked hijacked domain", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_missing", "hacklink_detected"], "if_any": [], "if_not": []},
+        # --- Transfer Lock Recently Added + Old Domain / VT Combos (4 rules) ---
+        {"name": "transfer_lock_old_domain", "score": 20, "label": "transfer lock recently added + domain >1yr — post-compromise lockdown on established domain", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "domain_gt_1yr"], "if_any": [], "if_not": []},
+        {"name": "transfer_lock_whois_updated", "score": 22, "label": "transfer lock recently added + WHOIS recently updated — active post-compromise response", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "whois_recently_updated"], "if_any": [], "if_not": []},
+        {"name": "transfer_lock_vt_malicious", "score": 25, "label": "transfer lock recently added + VT malicious — locked down after threat intel flagged", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
+        {"name": "transfer_lock_hacklink", "score": 20, "label": "transfer lock recently added + hacklink — locked down after SEO injection found", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "hacklink_detected"], "if_any": [], "if_not": []},
 
         # --- VT Malicious + Hacklink Keywords (cross-intel) ---
         {"name": "vt_malicious_hacklink_keywords", "score": 28, "label": "VT malicious + hacklink keywords — threat intel + content confirms compromise", "category": "VirusTotal", "enabled": True, "if_all": ["hacklink_keywords"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
@@ -438,7 +438,7 @@ DEFAULT_CONFIG = {
         # --- Empty Page Combos (3 rules) ---
         {"name": "empty_page_new_domain", "score": 18, "label": "empty page + domain <30d — parked/staged phishing domain", "category": "General Risk", "enabled": True, "if_all": ["empty_page", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "empty_page_no_auth", "score": 15, "label": "empty page + no email auth — abandoned/fraudulent domain", "category": "General Risk", "enabled": True, "if_all": ["empty_page", "no_spf", "no_dmarc"], "if_any": [], "if_not": []},
-        {"name": "empty_page_transfer_lock_missing", "score": 18, "label": "empty page + transfer lock missing — stripped post-takeover", "category": "Domain Takeover", "enabled": True, "if_all": ["empty_page", "transfer_lock_missing"], "if_any": [], "if_not": []},
+        {"name": "empty_page_transfer_lock_recent", "score": 18, "label": "empty page + transfer lock recently added — site gutted and locked after compromise", "category": "Domain Takeover", "enabled": True, "if_all": ["empty_page", "transfer_lock_recent"], "if_any": [], "if_not": []},
 
         # --- Cert Transparency Combos (3 rules) ---
         {"name": "ct_recent_old_domain", "score": 20, "label": "CT recent issuance + domain >1yr — possible domain takeover/reactivation", "category": "Domain Takeover", "enabled": True, "if_all": ["ct_recent_issuance", "domain_gt_1yr"], "if_any": [], "if_not": []},
@@ -955,7 +955,7 @@ def load_config() -> dict:
                             'vt_malicious_low': (18, 22),
                             'vt_suspicious': (12, 15),
                             'empty_page': (15, 20),
-                            'transfer_lock_missing': (12, 15),
+                            'transfer_lock_recent': (12, 15),
                             'ct_no_history': (12, 15),
                             'whois_recently_updated': (8, 10),
                             'ct_recent_issuance': (8, 10),
