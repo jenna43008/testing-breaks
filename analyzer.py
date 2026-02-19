@@ -4,6 +4,37 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 7.1 (Feb 2026)
+- MALICIOUS SCRIPT detection: SocGholish/FakeUpdates/obfuscated script injection scored as
+  standalone high-weight signal (40 pts) — extracted from hacklink scanner's injection_patterns
+- HIDDEN INJECTION detection: CSS-cloaked content (display:none, font-size:0px, negative
+  text-indent) scored standalone (35 pts) — the #1 indicator of hacklink SEO spam
+- cPanel hosting detection: surfaced from hacklink scanner as cpanel_detected signal
+- WHOIS enrichment: registrar, statuses, updated date, transfer lock status extracted
+  via python-whois for every scanned domain
+- TRANSFER LOCK detection: domains missing clientTransferProhibited flagged (12 pts);
+  combo with old domain age = domain takeover signal
+- WHOIS recently updated: domains with WHOIS changes in last 30 days flagged (8 pts);
+  combo with cPanel = compromise indicator
+- EMPTY PAGE detection: reachable domains returning <50 bytes flagged (15 pts)
+- CERTIFICATE TRANSPARENCY (crt.sh): cert count, issuers, first/last seen, recent
+  issuance (7d); zero CT history = never-used domain (12 pts); recent issuance on
+  old domain = takeover/reactivation signal
+- 10 new combo rules: cpanel+transfer_lock, vt+hacklink_keywords, transfer_lock+old_domain,
+  malicious_script combos, hidden_injection combos, empty_page combos
+
+VERSION: 7.0 (Feb 2026)
+- Integrated VirusTotal domain reputation check (malicious/suspicious vendor counts,
+  threat names, community score, detection rate)
+- Integrated hacklink/SEO spam detection (Turkish hacklink keywords, injection patterns,
+  WordPress compromise indicators, vulnerable plugin detection, spam link counting)
+- Hacklink scanner reuses pre-fetched page content — no duplicate HTTP requests
+- New VT scoring signals: vt_malicious_high/medium/low, vt_suspicious, vt_clean (bonus)
+- New hacklink scoring signals: hacklink_detected, hacklink_keywords, hacklink_wp_compromised,
+  hacklink_vulnerable_plugins, hacklink_spam_links
+- 15 new combo rules for VT + hacklink cross-correlation
+- VT API key configurable via admin UI, sidebar, or VT_API_KEY env var
+
 VERSION: 6.3 (Feb 2026)
 - Added WHOIS fallback when RDAP returns no creation date (python-whois)
 - New signal: domain_created_today — fires when domain registered 0-1 days ago
@@ -53,10 +84,11 @@ VERSION: 4.4 (Feb 2026)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "6.3"
+ANALYZER_VERSION = "7.1"
 
 import re
 import json
+import os
 import socket
 import ssl
 import hashlib
@@ -94,6 +126,18 @@ try:
     APP_STORE_DETECTION_AVAILABLE = True
 except Exception:
     APP_STORE_DETECTION_AVAILABLE = False
+
+try:
+    from virustotal_checker import VirusTotalChecker
+    VT_CHECKER_AVAILABLE = True
+except Exception:
+    VT_CHECKER_AVAILABLE = False
+
+try:
+    from hacklink_keyword_scanner import HacklinkKeywordScanner
+    HACKLINK_SCANNER_AVAILABLE = True
+except Exception:
+    HACKLINK_SCANNER_AVAILABLE = False
 
 
 # ============================================================================
@@ -316,6 +360,52 @@ class DomainApprovalResult:
     rules_triggered: str = ""                    # Custom rules that fired (name:score pairs)
     rules_labels: str = ""                       # Human-readable labels for triggered rules
     score_breakdown: str = ""                    # JSON: {signal_or_rule: points} for every scored item
+    
+    # === VIRUSTOTAL REPUTATION ===
+    vt_available: bool = False                   # True if VT API key was configured and query succeeded
+    vt_malicious_count: int = 0                  # Vendors flagging domain as malicious
+    vt_suspicious_count: int = 0                 # Vendors flagging domain as suspicious
+    vt_total_vendors: int = 0                    # Total vendors that analyzed the domain
+    vt_detection_rate: float = 0.0               # (malicious+suspicious) / total_vendors
+    vt_community_score: int = 0                  # VT community votes (harmless - malicious)
+    vt_reputation: int = 0                       # VT reputation score
+    vt_threat_names: str = ""                    # Semicolon-separated threat family names
+    vt_malicious_vendors: str = ""               # Semicolon-separated vendor names flagging malicious
+    vt_categories: str = ""                      # JSON of vendor->category mappings
+    vt_last_analysis: str = ""                   # Last VT analysis date
+    
+    # === HACKLINK / SEO SPAM DETECTION ===
+    hacklink_detected: bool = False              # True if hacklink SEO spam injection detected
+    hacklink_score: int = 0                      # Hacklink module risk score (0-30)
+    hacklink_keywords: str = ""                  # Semicolon-separated hacklink keywords found
+    hacklink_injection_patterns: str = ""        # Semicolon-separated injection patterns detected
+    hacklink_is_wordpress: bool = False           # WordPress CMS detected
+    hacklink_wp_compromised: bool = False         # WordPress compromise indicators found
+    hacklink_vulnerable_plugins: str = ""         # Semicolon-separated vulnerable WP plugins
+    hacklink_spam_link_count: int = 0            # Number of spam links found in content
+    hacklink_malicious_script: bool = False       # SocGholish/FakeUpdates/obfuscated script injection
+    hacklink_hidden_injection: bool = False       # CSS hidden content injection (display:none, font-size:0)
+    hacklink_is_cpanel: bool = False              # cPanel hosting environment detected
+    hacklink_suspicious_scripts: str = ""         # Semicolon-separated suspicious external script URLs
+    
+    # === WHOIS ENRICHMENT / TRANSFER LOCK ===
+    whois_registrar: str = ""                    # Registrar name from WHOIS
+    whois_updated: str = ""                      # WHOIS last-updated date (ISO)
+    whois_statuses: str = ""                     # Semicolon-separated domain statuses
+    domain_transfer_locked: bool = True          # clientTransferProhibited present (default True = safe)
+    domain_transfer_lock_missing: bool = False   # Explicit: lock is absent (risk signal)
+    whois_recently_updated: bool = False         # WHOIS updated in last 30 days
+    whois_recently_updated_days: int = -1        # Days since last WHOIS update
+    
+    # === EMPTY PAGE DETECTION ===
+    is_empty_page: bool = False                  # Page returns empty or near-empty content (<50 chars)
+    
+    # === CERTIFICATE TRANSPARENCY ===
+    ct_log_count: int = -1                       # Number of certs found in CT logs (-1 = not checked)
+    ct_recent_issuance: bool = False             # Cert issued within last 7 days
+    ct_issuers: str = ""                         # Semicolon-separated unique issuers
+    ct_first_seen: str = ""                      # Earliest cert date in CT logs
+    ct_last_seen: str = ""                       # Most recent cert date in CT logs
 
 
 # ============================================================================
@@ -2644,6 +2734,136 @@ def whois_lookup(domain: str) -> Tuple[str, int]:
         return "", -1
 
 
+def whois_enrich(domain: str) -> dict:
+    """
+    Extract registrar, statuses, and updated date from WHOIS.
+    Used for transfer lock detection and domain takeover signals.
+    """
+    result = {
+        "registrar": "",
+        "statuses": [],
+        "updated_date": "",
+        "updated_days_ago": -1,
+        "transfer_locked": True,  # Default safe — only flag if we confirm lock is missing
+    }
+    if not WHOIS_AVAILABLE:
+        return result
+    try:
+        parts = domain.split('.')
+        base = '.'.join(parts[-3:]) if len(parts) > 2 and parts[-2] in ['co', 'com', 'org', 'net'] else '.'.join(parts[-2:])
+        w = python_whois.whois(base)
+        
+        # Registrar
+        result["registrar"] = (w.registrar or "")[:200]
+        
+        # Statuses
+        raw_status = w.status
+        if raw_status:
+            if isinstance(raw_status, str):
+                raw_status = [raw_status]
+            # Normalize: "clientTransferProhibited https://..." → "clientTransferProhibited"
+            statuses = []
+            for s in raw_status:
+                clean = s.split()[0].strip() if s else ""
+                if clean:
+                    statuses.append(clean)
+            result["statuses"] = statuses
+            
+            # Transfer lock check
+            lock_statuses = {'clienttransferprohibited', 'servertransferprohibited'}
+            has_lock = any(s.lower() in lock_statuses for s in statuses)
+            result["transfer_locked"] = has_lock
+        
+        # Updated date
+        updated = w.updated_date
+        if updated:
+            if isinstance(updated, list):
+                updated = updated[0]
+            if isinstance(updated, datetime):
+                if updated.tzinfo is None:
+                    updated = updated.replace(tzinfo=timezone.utc)
+                result["updated_date"] = updated.isoformat()
+                result["updated_days_ago"] = (datetime.now(timezone.utc) - updated).days
+    except Exception:
+        pass
+    return result
+
+
+def check_cert_transparency(domain: str, timeout: float = 8.0) -> dict:
+    """
+    Query crt.sh (Certificate Transparency logs) for domain certificates.
+    Reveals certificate issuance history — useful for detecting:
+    - Brand-new domains (first cert = recent)
+    - Domain takeovers (new cert on old domain)
+    - Let's Encrypt churn (mass phishing infra)
+    """
+    result = {
+        "ct_count": -1,
+        "recent_issuance": False,
+        "issuers": [],
+        "first_seen": "",
+        "last_seen": "",
+    }
+    if not REQUESTS_AVAILABLE:
+        return result
+    try:
+        r = requests.get(
+            f"https://crt.sh/?q=%.{domain}&output=json",
+            timeout=timeout,
+            headers={"User-Agent": "DomainApproval/7.1"}
+        )
+        if r.status_code != 200:
+            return result
+        
+        entries = r.json()
+        if not isinstance(entries, list):
+            return result
+        
+        result["ct_count"] = len(entries)
+        
+        if not entries:
+            return result
+        
+        # Parse dates and issuers
+        issuers = set()
+        dates = []
+        now = datetime.now(timezone.utc)
+        
+        for entry in entries[:200]:  # Cap processing at 200 certs
+            issuer = entry.get("issuer_name", "")
+            if issuer:
+                # Extract CN or O from issuer DN
+                for part in issuer.split(","):
+                    part = part.strip()
+                    if part.startswith("CN=") or part.startswith("O="):
+                        issuers.add(part.split("=", 1)[1].strip())
+                        break
+            
+            not_before = entry.get("not_before", "")
+            if not_before:
+                try:
+                    dt = datetime.fromisoformat(not_before.replace("Z", "+00:00"))
+                    dates.append(dt)
+                except (ValueError, TypeError):
+                    pass
+        
+        if dates:
+            dates.sort()
+            result["first_seen"] = dates[0].isoformat()
+            result["last_seen"] = dates[-1].isoformat()
+            
+            # Check if most recent cert was issued within 7 days
+            days_since_last = (now - dates[-1]).days
+            if days_since_last <= 7:
+                result["recent_issuance"] = True
+        
+        result["issuers"] = sorted(issuers)[:10]  # Cap at 10 unique issuers
+        
+    except Exception:
+        pass
+    return result
+
+
 # ============================================================================
 # SCORING & SUMMARY
 # ============================================================================
@@ -2742,6 +2962,80 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     if res.has_credential_form and res.brands_detected:
         all_issues.append("CREDENTIAL FORM + BRAND IMPERSONATION → Classic phishing; will be blocked")
+    
+    # === VIRUSTOTAL REPUTATION ===
+    if res.vt_available:
+        if res.vt_malicious_count >= 5:
+            vendors = res.vt_malicious_vendors.replace(";", ", ")[:100]
+            all_issues.append(f"🛡️ VT MALICIOUS ({res.vt_malicious_count}/{res.vt_total_vendors} vendors: {vendors}) → Domain flagged as malicious by security vendors")
+        elif res.vt_malicious_count >= 1:
+            all_issues.append(f"🛡️ VT FLAGGED ({res.vt_malicious_count} malicious + {res.vt_suspicious_count} suspicious) → Some security vendors flag this domain")
+        elif res.vt_suspicious_count >= 1:
+            all_issues.append(f"VT SUSPICIOUS ({res.vt_suspicious_count} vendor(s)) → Domain under suspicion by some vendors")
+        if res.vt_threat_names:
+            names = res.vt_threat_names.replace(";", ", ")
+            all_issues.append(f"VT THREAT NAMES: {names}")
+        if res.vt_malicious_count == 0 and res.vt_suspicious_count == 0 and res.vt_total_vendors >= 50:
+            positives.append(f"VT CLEAN → 0/{res.vt_total_vendors} security vendors flag this domain")
+    
+    # === HACKLINK / SEO SPAM ===
+    if res.hacklink_detected:
+        kw = res.hacklink_keywords.replace(";", ", ")[:80] if res.hacklink_keywords else "various"
+        all_issues.append(f"🕷️ HACKLINK SEO SPAM DETECTED (keywords: {kw}) → Domain compromised with injected gambling/spam content")
+    elif res.hacklink_keywords:
+        kw = res.hacklink_keywords.replace(";", ", ")[:80]
+        all_issues.append(f"HACKLINK KEYWORDS FOUND ({kw}) → Some hacklink-associated keywords present in page content")
+    
+    if res.hacklink_wp_compromised:
+        all_issues.append("WORDPRESS COMPROMISED → WordPress files show signs of code injection/backdoor")
+    
+    if res.hacklink_vulnerable_plugins:
+        plugins = res.hacklink_vulnerable_plugins.replace(";", ", ")[:80]
+        all_issues.append(f"VULNERABLE WP PLUGINS ({plugins}) → Known exploitable plugins detected")
+    
+    if res.hacklink_spam_link_count >= 5:
+        all_issues.append(f"SPAM LINKS ({res.hacklink_spam_link_count} hidden links) → Hidden outbound spam links injected into page")
+    
+    # === MALICIOUS SCRIPT / HIDDEN INJECTION (HIGH-VALUE SIGNALS) ===
+    if res.hacklink_malicious_script:
+        all_issues.append("🚨 MALICIOUS SCRIPT INJECTION → SocGholish/FakeUpdates-style obfuscated script detected in page; domain is actively compromised")
+    
+    if res.hacklink_hidden_injection:
+        all_issues.append("🚨 HIDDEN CONTENT INJECTION → CSS-cloaked content (display:none, font-size:0) with links; classic hacklink/SEO spam technique")
+    
+    if res.hacklink_is_cpanel:
+        all_issues.append("CPANEL HOSTING → cPanel shared hosting detected; frequently targeted in hacklink campaigns")
+    
+    if res.hacklink_suspicious_scripts:
+        scripts = res.hacklink_suspicious_scripts.replace(";", ", ")[:120]
+        all_issues.append(f"SUSPICIOUS EXTERNAL SCRIPTS ({scripts}) → Third-party scripts from known-bad or suspicious domains")
+    
+    # === TRANSFER LOCK / DOMAIN TAKEOVER ===
+    if res.domain_transfer_lock_missing:
+        age_note = ""
+        if res.domain_age_days >= 365:
+            age_note = f" (domain is {res.domain_age_days}d old — unlocked + aged = possible takeover)"
+        all_issues.append(f"TRANSFER LOCK MISSING → Domain not locked against transfers{age_note}")
+    
+    if res.whois_recently_updated:
+        days = res.whois_recently_updated_days
+        all_issues.append(f"WHOIS RECENTLY UPDATED ({days}d ago) → Possible recent transfer, ownership change, or DNS hijack")
+    
+    # === EMPTY PAGE ===
+    if res.is_empty_page:
+        all_issues.append("EMPTY PAGE → Reachable domain returns empty/near-empty content; possibly parked, abandoned, or stripped post-compromise")
+    
+    # === CERTIFICATE TRANSPARENCY ===
+    if res.ct_log_count == 0:
+        all_issues.append("NO CT HISTORY → Zero certificates found in CT logs; domain may never have been used for HTTPS")
+    elif res.ct_recent_issuance and res.domain_age_days > 365:
+        all_issues.append(f"CT RECENT ISSUANCE ON OLD DOMAIN → New cert issued in last 7d on {res.domain_age_days}d-old domain; possible takeover/reactivation")
+    elif res.ct_recent_issuance:
+        all_issues.append("CT RECENT CERT ISSUANCE → Certificate issued within last 7 days")
+    
+    if res.ct_issuers:
+        issuers = res.ct_issuers.replace(";", ", ")
+        positives.append(f"CT issuers: {issuers}")
     
     # === EMAIL AUTHENTICATION ===
     if not res.dmarc_exists:
@@ -3251,6 +3545,77 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_email_in_url:
         add("email_tracking_url", weights.get('email_tracking_url', 20))
     
+    # === VIRUSTOTAL REPUTATION SCORING ===
+    if res.vt_available:
+        mal = res.vt_malicious_count
+        sus = res.vt_suspicious_count
+        if mal >= 5:
+            add("vt_malicious_high", weights.get('vt_malicious_high', 45))
+        elif mal >= 3:
+            add("vt_malicious_medium", weights.get('vt_malicious_medium', 30))
+        elif mal >= 1:
+            add("vt_malicious_low", weights.get('vt_malicious_low', 18))
+        
+        if sus >= 3:
+            add("vt_suspicious", weights.get('vt_suspicious', 12))
+        elif sus >= 1:
+            add("vt_suspicious_low", weights.get('vt_suspicious_low', 5))
+        
+        if res.vt_community_score < -5:
+            add("vt_negative_community", weights.get('vt_negative_community', 10))
+        
+        if mal == 0 and sus == 0 and res.vt_total_vendors >= 50:
+            add("vt_clean", weights.get('vt_clean', -5))
+    
+    # === HACKLINK / SEO SPAM SCORING ===
+    if res.hacklink_detected:
+        add("hacklink_detected", weights.get('hacklink_detected', 35))
+    
+    if res.hacklink_keywords and not res.hacklink_detected:
+        # Keywords found but below threshold — still a warning signal
+        kw_count = len(res.hacklink_keywords.split(";")) if res.hacklink_keywords else 0
+        if kw_count >= 1:
+            add("hacklink_keywords", weights.get('hacklink_keywords', 12))
+    
+    if res.hacklink_wp_compromised:
+        add("hacklink_wp_compromised", weights.get('hacklink_wp_compromised', 30))
+    
+    if res.hacklink_vulnerable_plugins:
+        add("hacklink_vulnerable_plugins", weights.get('hacklink_vulnerable_plugins', 20))
+    
+    if res.hacklink_spam_link_count >= 5:
+        add("hacklink_spam_links", weights.get('hacklink_spam_links', 25))
+    
+    # === MALICIOUS SCRIPT INJECTION (SocGholish/FakeUpdates/obfuscated) ===
+    if res.hacklink_malicious_script:
+        add("malicious_script", weights.get('malicious_script', 40))
+    
+    # === HIDDEN CONTENT INJECTION (CSS cloaking: display:none, font-size:0) ===
+    if res.hacklink_hidden_injection:
+        add("hidden_injection", weights.get('hidden_injection', 35))
+    
+    # === CPANEL HOSTING DETECTED ===
+    if res.hacklink_is_cpanel:
+        add("cpanel_detected", weights.get('cpanel_detected', 6))
+    
+    # === TRANSFER LOCK / WHOIS ENRICHMENT ===
+    if res.domain_transfer_lock_missing:
+        add("transfer_lock_missing", weights.get('transfer_lock_missing', 12))
+    
+    if res.whois_recently_updated:
+        add("whois_recently_updated", weights.get('whois_recently_updated', 8))
+    
+    # === EMPTY PAGE ===
+    if res.is_empty_page:
+        add("empty_page", weights.get('empty_page', 15))
+    
+    # === CERTIFICATE TRANSPARENCY ===
+    if res.ct_recent_issuance:
+        add("ct_recent_issuance", weights.get('ct_recent_issuance', 8))
+    
+    if res.ct_log_count == 0:
+        add("ct_no_history", weights.get('ct_no_history', 12))
+    
     # === UNIFIED RULES ENGINE ===
     # All scoring logic beyond base weights (former combos + custom rules)
     # Rules support if/then/else logic:
@@ -3576,6 +3941,13 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         content = http_result["content"]
         res.content_length = http_result["content_length"]
     
+    # === EMPTY PAGE DETECTION ===
+    # A reachable domain that returns empty/near-empty content is suspicious
+    # (parked, abandoned, or stripped after compromise)
+    if res.https_reachable or res.http_reachable:
+        if not content or len(content.strip()) < 50:
+            res.is_empty_page = True
+    
     if content:
         res.content_hash = hashlib.md5(content).hexdigest()[:12]
         ca = analyze_content(content, res.final_url, domain)
@@ -3674,6 +4046,65 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         # Surface error in results so it's visible during debugging
         res.tld_variant_summary = f"CHECK ERROR: {type(e).__name__}: {str(e)[:200]}"
     
+    # === VIRUSTOTAL REPUTATION CHECK ===
+    # Uses the VT API to check domain reputation across 70+ security vendors
+    vt_api_key = src.get('vt_api_key', '') or os.environ.get('VT_API_KEY', '')
+    if VT_CHECKER_AVAILABLE and vt_api_key:
+        try:
+            vt = VirusTotalChecker(api_key=vt_api_key)
+            vt_result = vt.check_domain(domain)
+            res.vt_available = vt_result.get("vt_available", False)
+            res.vt_malicious_count = vt_result.get("malicious_count", 0)
+            res.vt_suspicious_count = vt_result.get("suspicious_count", 0)
+            res.vt_total_vendors = vt_result.get("total_vendors", 0)
+            res.vt_detection_rate = vt_result.get("detection_rate", 0.0)
+            res.vt_community_score = vt_result.get("community_score", 0)
+            res.vt_reputation = vt_result.get("reputation", 0)
+            res.vt_threat_names = ";".join(vt_result.get("threat_names", []))
+            res.vt_malicious_vendors = ";".join(vt_result.get("malicious_vendors", []))
+            res.vt_categories = json.dumps(vt_result.get("categories", {}))
+            res.vt_last_analysis = vt_result.get("last_analysis_date", "") or ""
+        except Exception:
+            pass  # Non-critical — don't break analysis if VT check fails
+    
+    # === HACKLINK / SEO SPAM DETECTION ===
+    # Scans page content for Turkish hacklink injection, gambling keywords, 
+    # WordPress compromise indicators, and hidden SEO spam
+    if HACKLINK_SCANNER_AVAILABLE:
+        try:
+            hl_scanner = HacklinkKeywordScanner(timeout=int(timeout))
+            # Pass pre-fetched content to avoid double-fetching
+            content_str = content.decode('utf-8', errors='replace') if isinstance(content, bytes) else content
+            hl_result = hl_scanner.scan(domain, content=content_str)
+            res.hacklink_detected = hl_result.get("hacklink_detected", False)
+            res.hacklink_score = hl_result.get("score", 0)
+            res.hacklink_keywords = ";".join(hl_result.get("keywords_found", []))
+            res.hacklink_injection_patterns = ";".join(hl_result.get("injection_patterns", []))
+            res.hacklink_is_wordpress = hl_result.get("is_wordpress", False)
+            res.hacklink_wp_compromised = hl_result.get("wp_compromised", False)
+            vuln_plugins = hl_result.get("vulnerable_plugins", [])
+            if vuln_plugins:
+                res.hacklink_vulnerable_plugins = ";".join(
+                    f"{p.get('plugin','')}({p.get('risk','')})" if isinstance(p, dict) else str(p)
+                    for p in vuln_plugins
+                )
+            res.hacklink_spam_link_count = hl_result.get("spam_link_count", 0)
+            
+            # === Extract sub-signals for individual scoring ===
+            res.hacklink_is_cpanel = hl_result.get("is_cpanel", False)
+            
+            # Parse injection_patterns for malicious_script and hidden_injection flags
+            inj_patterns = hl_result.get("injection_patterns", [])
+            res.hacklink_malicious_script = any("malicious_script" in p for p in inj_patterns)
+            res.hacklink_hidden_injection = any("hidden_content" in p for p in inj_patterns)
+            
+            # Suspicious external scripts
+            sus_scripts = hl_result.get("suspicious_scripts", [])
+            if sus_scripts:
+                res.hacklink_suspicious_scripts = ";".join(sus_scripts[:10])
+        except Exception:
+            pass  # Non-critical — don't break analysis if hacklink check fails
+    
     # RDAP
     if check_rdap:
         res.rdap_created, res.domain_age_days = rdap_lookup(domain, timeout)
@@ -3685,6 +4116,32 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.whois_created, res.domain_age_days = whois_lookup(domain)
         if res.domain_age_days >= 0:
             res.domain_age_source = "whois"
+    
+    # === WHOIS ENRICHMENT (transfer lock, registrar, update recency) ===
+    if check_rdap:
+        try:
+            we = whois_enrich(domain)
+            res.whois_registrar = we["registrar"]
+            res.whois_statuses = ";".join(we["statuses"])
+            res.whois_updated = we["updated_date"]
+            res.whois_recently_updated_days = we["updated_days_ago"]
+            res.domain_transfer_locked = we["transfer_locked"]
+            res.domain_transfer_lock_missing = not we["transfer_locked"]
+            if we["updated_days_ago"] >= 0 and we["updated_days_ago"] <= 30:
+                res.whois_recently_updated = True
+        except Exception:
+            pass
+    
+    # === CERTIFICATE TRANSPARENCY LOG CHECK ===
+    try:
+        ct = check_cert_transparency(domain, timeout=min(timeout, 8.0))
+        res.ct_log_count = ct["ct_count"]
+        res.ct_recent_issuance = ct["recent_issuance"]
+        res.ct_issuers = ";".join(ct["issuers"])
+        res.ct_first_seen = ct["first_seen"]
+        res.ct_last_seen = ct["last_seen"]
+    except Exception:
+        pass
     
     # Score
     calculate_score(res, config)
