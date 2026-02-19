@@ -115,7 +115,7 @@ DEFAULT_CONFIG = {
         "parking_page": 6,
         
         # === CORPORATE TRUST SIGNALS (Missing signals indicate opaque entity) ===
-        "missing_trust_signals": 8,       # No about/contact/privacy pages
+        "missing_trust_signals": 30,       # No about/contact/privacy pages
         "opaque_entity": 20,              # Access blocked + no trust signals = high risk
         
         # === BONUSES (Reduce score) ===
