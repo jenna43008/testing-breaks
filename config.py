@@ -17,7 +17,8 @@ DEFAULT_CONFIG = {
     "timeout": 10.0,
     "check_rdap": True,
     "admin_password": "admin123",  # CHANGE THIS!
-    "vt_api_key": "3b4caf4818ac9630c9fae5226522348ec9d7723c34b4f5a973dd3afdd31f287f",   # VirusTotal API key (hardcoded)
+    "vt_api_key": "YOUR_VT_API_KEY_HERE",   # VirusTotal API key (hardcoded)
+    "config_version": "7.1",              # Used for weight migration between versions
     
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
@@ -34,34 +35,34 @@ DEFAULT_CONFIG = {
         "sensitive_fields": 10,
         
         # === VIRUSTOTAL REPUTATION ===
-        "vt_malicious_high": 45,           # 5+ vendors flag as malicious
-        "vt_malicious_medium": 30,         # 3-4 vendors flag as malicious
-        "vt_malicious_low": 18,            # 1-2 vendors flag as malicious
-        "vt_suspicious": 12,               # 3+ vendors flag as suspicious
+        "vt_malicious_high": 65,           # 5+ vendors flag as malicious — should deny alone
+        "vt_malicious_medium": 40,         # 3-4 vendors flag as malicious
+        "vt_malicious_low": 22,            # 1-2 vendors flag as malicious
+        "vt_suspicious": 15,               # 3+ vendors flag as suspicious
         "vt_suspicious_low": 5,            # 1-2 vendors flag as suspicious
         "vt_negative_community": 10,       # Negative community reputation
         "vt_clean": -5,                    # Clean bill from 50+ vendors (bonus)
         
         # === HACKLINK / SEO SPAM DETECTION ===
-        "hacklink_detected": 35,           # Hacklink SEO spam injection confirmed
-        "hacklink_keywords": 12,           # Hacklink keywords present (below detection threshold)
-        "hacklink_wp_compromised": 30,     # WordPress compromise indicators
-        "hacklink_vulnerable_plugins": 20, # Known exploitable WP plugins
-        "hacklink_spam_links": 25,         # 5+ hidden spam links in content
-        "malicious_script": 40,            # SocGholish/FakeUpdates/obfuscated script injection
-        "hidden_injection": 35,            # CSS-hidden content injection (hacklink fingerprint)
-        "cpanel_detected": 6,             # cPanel hosting (common hacklink target)
+        "hacklink_detected": 50,           # Hacklink SEO spam injection confirmed
+        "hacklink_keywords": 15,           # Hacklink keywords present (below detection threshold)
+        "hacklink_wp_compromised": 45,     # WordPress compromise indicators
+        "hacklink_vulnerable_plugins": 25, # Known exploitable WP plugins
+        "hacklink_spam_links": 35,         # 5+ hidden spam links in content
+        "malicious_script": 65,            # SocGholish/FakeUpdates/obfuscated script injection — INSTANT DENY territory
+        "hidden_injection": 55,            # CSS-hidden content injection (hacklink fingerprint) — confirmed compromise
+        "cpanel_detected": 8,              # cPanel hosting (common hacklink target, not malicious alone)
         
         # === TRANSFER LOCK / DOMAIN TAKEOVER ===
-        "transfer_lock_missing": 12,       # Domain not locked against transfers
-        "whois_recently_updated": 8,       # WHOIS updated in last 30 days
+        "transfer_lock_missing": 15,       # Domain not locked against transfers
+        "whois_recently_updated": 10,      # WHOIS updated in last 30 days
         
         # === EMPTY PAGE ===
-        "empty_page": 15,                  # Reachable domain with empty/near-empty content
+        "empty_page": 20,                  # Reachable domain with empty/near-empty content
         
         # === CERTIFICATE TRANSPARENCY ===
-        "ct_recent_issuance": 8,           # Cert issued within last 7 days
-        "ct_no_history": 12,               # Zero certs in CT logs
+        "ct_recent_issuance": 10,          # Cert issued within last 7 days
+        "ct_no_history": 15,               # Zero certs in CT logs
         
         # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
         "suspicious_prefix": 15,           # app-, my-, support-, login-, etc.
@@ -934,6 +935,37 @@ def load_config() -> dict:
                 if 'weights' in loaded:
                     default_weights = copy.deepcopy(DEFAULT_CONFIG.get('weights', {}))
                     merged['weights'] = {**default_weights, **loaded['weights']}
+                    
+                    # v7.1 weight migration: if saved config has old (lower) weights for
+                    # signals that were bumped in v7.1, upgrade them to new defaults.
+                    # Only applies if user hasn't explicitly customized them above the old defaults.
+                    saved_version = loaded.get('config_version', '0')
+                    if saved_version < '7.1':
+                        v71_bumps = {
+                            # signal: (old_default, new_default) — only upgrade if saved == old
+                            'malicious_script': (40, 65),
+                            'hidden_injection': (35, 55),
+                            'hacklink_detected': (35, 50),
+                            'hacklink_wp_compromised': (30, 45),
+                            'hacklink_spam_links': (25, 35),
+                            'hacklink_vulnerable_plugins': (20, 25),
+                            'hacklink_keywords': (12, 15),
+                            'vt_malicious_high': (45, 65),
+                            'vt_malicious_medium': (30, 40),
+                            'vt_malicious_low': (18, 22),
+                            'vt_suspicious': (12, 15),
+                            'empty_page': (15, 20),
+                            'transfer_lock_missing': (12, 15),
+                            'ct_no_history': (12, 15),
+                            'whois_recently_updated': (8, 10),
+                            'ct_recent_issuance': (8, 10),
+                            'cpanel_detected': (6, 8),
+                        }
+                        for signal, (old_val, new_val) in v71_bumps.items():
+                            saved_val = loaded['weights'].get(signal, old_val)
+                            if saved_val <= old_val:  # User hasn't bumped it above old default
+                                merged['weights'][signal] = new_val
+                        merged['config_version'] = '7.1'
                 # Legacy: if old config has combos, ignore them (now in rules)
                 loaded.pop('combos', None)
                 loaded.pop('disabled_combos', None)
