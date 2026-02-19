@@ -761,7 +761,7 @@ def admin_view():
         new_weights = {}
         
         for category, signals in categories.items():
-            with st.expander(f"**{category}**", expanded=(category == "Email Authentication")):
+            with st.expander(f"**{category}**", expanded=(category in ["Malicious Script / Hidden Injection", "Transfer Lock / Domain Takeover"])):
                 cols = st.columns(2)
                 for i, signal in enumerate(signals):
                     with cols[i % 2]:
@@ -773,11 +773,35 @@ def admin_view():
                             value=current,
                             step=1,
                             key=f"weight_{signal}",
-                            help=f"Current: {current}"
+                            help=f"Default: {DEFAULT_CONFIG['weights'].get(signal, 0)}"
                         )
                         new_weights[signal] = new_val
         
-        config['weights'] = {**weights, **new_weights}
+        # Merge and persist
+        merged_weights = {**weights, **new_weights}
+        config['weights'] = merged_weights
+        
+        # Detect changes and show save button
+        has_changes = any(
+            merged_weights.get(s, 0) != DEFAULT_CONFIG['weights'].get(s, 0)
+            for s in new_weights
+        )
+        
+        st.markdown("---")
+        col_save, col_reset = st.columns(2)
+        with col_save:
+            if st.button("💾 Save Weight Changes", type="primary", key="save_weights"):
+                save_config(config)
+                st.success("✅ Weights saved to disk!")
+        with col_reset:
+            if st.button("🔄 Reset to Defaults", key="reset_weights"):
+                config['weights'] = copy.deepcopy(DEFAULT_CONFIG['weights'])
+                save_config(config)
+                st.success("✅ Weights reset to defaults and saved!")
+                st.rerun()
+        
+        if has_changes:
+            st.info("⚠️ You have unsaved weight changes. Click **Save Weight Changes** to persist.")
     
     with tab2:
         st.header("📖 Signal Reference")
