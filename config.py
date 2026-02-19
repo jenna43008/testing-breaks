@@ -116,10 +116,10 @@ DEFAULT_CONFIG = {
         "cert_wrong_host": 15,
         
         # === DOMAIN AGE (Moderate for very new, low otherwise) ===
-        "domain_lt_30d": 10,          # 7-30 days old - moderate concern
+        "domain_lt_30d": 0,          # 7-30 days old - moderate concern
         "domain_lt_90d": 0,           # 30-90 days old - minor concern
-        "suspicious_tld": 6,          # High-abuse TLD
-        "free_email_domain": 12,      # Sending from gmail.com etc
+        "suspicious_tld": 15,          # High-abuse TLD
+        "free_email_domain": 15,      # Sending from gmail.com etc
         "free_hosting": 6,
         "url_shortener": 20,
         
@@ -180,23 +180,23 @@ DEFAULT_CONFIG = {
     # Each rule: name, score, label, category, enabled, if_all, if_any, if_not
     "rules": [
         # --- Brand Impersonation (27 rules) ---
-        {"name": "combo_brand_domain_cred_form", "score": 30, "label": "domain brand impersonation + credential form", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "credential_form"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_domain_new_30d", "score": 25, "label": "domain brand impersonation + domain <30d", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "domain_lt_30d"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_domain_no_https", "score": 18, "label": "domain brand impersonation + no https", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "no_https"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_domain_sus_prefix", "score": 20, "label": "domain brand impersonation + suspicious prefix", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "suspicious_prefix"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_domain_sus_suffix", "score": 20, "label": "domain brand impersonation + suspicious suffix", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "suspicious_suffix"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_domain_techsupport_tld", "score": 25, "label": "domain brand impersonation + tech support tld", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "tech_support_tld"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_imp_cred_form", "score": 35, "label": "brand impersonation + credential form", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_impersonation", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_domain_cred_form", "score": 0, "label": "domain brand impersonation + credential form", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_domain_new_30d", "score": 0, "label": "domain brand impersonation + domain <30d", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_domain_no_https", "score": 0, "label": "domain brand impersonation + no https", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "no_https"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_domain_sus_prefix", "score": 0, "label": "domain brand impersonation + suspicious prefix", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "suspicious_prefix"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_domain_sus_suffix", "score": 0, "label": "domain brand impersonation + suspicious suffix", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "suspicious_suffix"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_domain_techsupport_tld", "score": 0, "label": "domain brand impersonation + tech support tld", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "tech_support_tld"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_imp_cred_form", "score": 20, "label": "brand impersonation + credential form", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_impersonation", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_brand_imp_new_30d", "score": 22, "label": "brand impersonation + domain <30d", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_impersonation", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_brand_imp_no_https", "score": 20, "label": "brand impersonation + no https", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_impersonation", "no_https"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_keyword_budget_host", "score": 12, "label": "brand spoofing keyword + hosting budget shared", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "hosting_budget_shared"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_keyword_cred_form", "score": 25, "label": "brand spoofing keyword + credential form", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_budget_host", "score": 0, "label": "brand spoofing keyword + hosting budget shared", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "hosting_budget_shared"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_cred_form", "score": 0, "label": "brand spoofing keyword + credential form", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_disposable_mx", "score": 12, "label": "brand spoofing keyword + mx disposable", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "mx_disposable"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_free_host", "score": 15, "label": "brand spoofing keyword + hosting free", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "hosting_free"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_keyword_new_30d", "score": 20, "label": "brand spoofing keyword + domain <30d", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_new_30d", "score": 0, "label": "brand spoofing keyword + domain <30d", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_new_7d", "score": 25, "label": "brand spoofing keyword + domain <7d", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "domain_lt_7d"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_keyword_no_dkim", "score": 12, "label": "brand spoofing keyword + no dkim", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_dkim"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_keyword_no_dmarc", "score": 10, "label": "brand spoofing keyword + no dmarc", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_no_dkim", "score": 0, "label": "brand spoofing keyword + no dkim", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_no_dmarc", "score": 0, "label": "brand spoofing keyword + no dmarc", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_dmarc"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_no_https", "score": 15, "label": "brand spoofing keyword + no https", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_https"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_no_trust", "score": 12, "label": "brand spoofing keyword + missing trust signals", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "missing_trust_signals"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_parked", "score": 15, "label": "brand spoofing keyword + parking page", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "parking_page"], "if_any": [], "if_not": []},
@@ -209,20 +209,20 @@ DEFAULT_CONFIG = {
         {"name": "combo_suspect_host_brand_imp", "score": 28, "label": "hosting suspect + brand impersonation", "category": "Brand Impersonation", "enabled": True, "if_all": ["hosting_suspect", "brand_impersonation"], "if_any": [], "if_not": []},
 
         # --- Email Auth Weakness (14 rules) ---
-        {"name": "combo_disposable_no_spf", "score": 8, "label": "disposable email + no spf", "category": "Email Auth Weakness", "enabled": True, "if_all": ["disposable_email", "no_spf"], "if_any": [], "if_not": []},
-        {"name": "combo_no_dkim_new_30d", "score": 4, "label": "no dkim + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "domain_lt_30d"], "if_any": [], "if_not": []},
-        {"name": "combo_no_dkim_no_dmarc", "score": 3, "label": "no dkim + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "no_dmarc"], "if_any": [], "if_not": []},
-        {"name": "combo_no_dkim_weak_dmarc", "score": 8, "label": "no dkim + dmarc p none", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
-        {"name": "combo_no_dkim_weak_dmarc_spf_soft", "score": 6, "label": "no dkim + dmarc p none + spf softfail all", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none", "spf_softfail_all"], "if_any": [], "if_not": []},
-        {"name": "combo_no_dmarc_new_30d", "score": 5, "label": "no dmarc + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_30d"], "if_any": [], "if_not": []},
-        {"name": "combo_no_dmarc_new_7d", "score": 10, "label": "no dmarc + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_7d"], "if_any": [], "if_not": []},
-        {"name": "combo_no_spf_new_30d", "score": 5, "label": "no spf + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_30d"], "if_any": [], "if_not": []},
-        {"name": "combo_no_spf_new_7d", "score": 10, "label": "no spf + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_7d"], "if_any": [], "if_not": []},
-        {"name": "combo_no_spf_no_dkim", "score": 3, "label": "no spf + no dkim", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "no_dkim"], "if_any": [], "if_not": []},
-        {"name": "combo_no_spf_no_dmarc", "score": 4, "label": "no spf + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "no_dmarc"], "if_any": [], "if_not": []},
-        {"name": "combo_spf_no_ext_mail_prefix_mx", "score": 5, "label": "spf no external includes + mx mail prefix", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_no_external_includes", "mx_mail_prefix"], "if_any": [], "if_not": []},
-        {"name": "combo_spf_no_ext_self_mx", "score": 5, "label": "spf no external includes + mx selfhosted", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_no_external_includes", "mx_selfhosted"], "if_any": [], "if_not": []},
-        {"name": "combo_spf_open_no_dmarc", "score": 15, "label": "spf pass all + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_pass_all", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "combo_disposable_no_spf", "score": 0, "label": "disposable email + no spf", "category": "Email Auth Weakness", "enabled": True, "if_all": ["disposable_email", "no_spf"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_new_30d", "score": 0, "label": "no dkim + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_no_dmarc", "score": 0, "label": "no dkim + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_weak_dmarc", "score": 0, "label": "no dkim + dmarc p none", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_weak_dmarc_spf_soft", "score": 0, "label": "no dkim + dmarc p none + spf softfail all", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none", "spf_softfail_all"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dmarc_new_30d", "score": 0, "label": "no dmarc + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dmarc_new_7d", "score": 0, "label": "no dmarc + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_spf_new_30d", "score": 0, "label": "no spf + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_spf_new_7d", "score": 0, "label": "no spf + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_spf_no_dkim", "score": 0, "label": "no spf + no dkim", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_no_spf_no_dmarc", "score": 0, "label": "no spf + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "combo_spf_no_ext_mail_prefix_mx", "score": 0, "label": "spf no external includes + mx mail prefix", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_no_external_includes", "mx_mail_prefix"], "if_any": [], "if_not": []},
+        {"name": "combo_spf_no_ext_self_mx", "score": 0, "label": "spf no external includes + mx selfhosted", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_no_external_includes", "mx_selfhosted"], "if_any": [], "if_not": []},
+        {"name": "combo_spf_open_no_dmarc", "score": 0, "label": "spf pass all + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_pass_all", "no_dmarc"], "if_any": [], "if_not": []},
 
         # --- Fraud / Blacklist (5 + 5 rules) ---
         {"name": "combo_blacklisted_new_30d", "score": 30, "label": "domain blacklisted + domain <30d", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["domain_blacklisted", "domain_lt_30d"], "if_any": [], "if_not": []},
