@@ -50,14 +50,38 @@ SOCGHOLISH_PATTERNS = [
 ]
 
 HIDDEN_CONTENT_PATTERNS = [
-    r'display\s*:\s*none[^}]*hacklink',
+    # --- Inline style hiding with embedded links (the #1 real-world pattern) ---
+    # <div style="display:none">...<a href="...">casino</a>...</div>
+    r'style\s*=\s*["\'][^"\']*display\s*:\s*none[^"\']*["\'][^>]*>.{0,800}?<a\s+href',
+    # <div style="visibility:hidden">...<a href="...">
+    r'style\s*=\s*["\'][^"\']*visibility\s*:\s*hidden[^"\']*["\'][^>]*>.{0,800}?<a\s+href',
+    # <div style="position:absolute;left:-9999px">...<a href="...">
+    r'style\s*=\s*["\'][^"\']*position\s*:\s*absolute[^"\']*left\s*:\s*-\d{3,}[^"\']*["\'][^>]*>.{0,800}?<a\s+href',
+    # <div style="text-indent:-9999px">...<a href="...">
+    r'style\s*=\s*["\'][^"\']*text-indent\s*:\s*-\d{3,}[^"\']*["\'][^>]*>.{0,800}?<a\s+href',
+    # <div style="overflow:hidden;height:0">...<a href="...">
+    r'style\s*=\s*["\'][^"\']*overflow\s*:\s*hidden[^"\']*height\s*:\s*[01]px[^"\']*["\'][^>]*>.{0,800}?<a\s+href',
+    # <div style="opacity:0">...<a href="...">
+    r'style\s*=\s*["\'][^"\']*opacity\s*:\s*0[;\s"\'"][^"\']*["\'][^>]*>.{0,800}?<a\s+href',
+    # <span style="font-size:0">...<a href="...">
+    r'style\s*=\s*["\'][^"\']*font-size\s*:\s*0[^1-9][^"\']*["\'][^>]*>.{0,800}?<a\s+href',
+    
+    # --- CSS class-based hiding (injected <style> blocks with display:none targeting link containers) ---
+    r'<style[^>]*>[^<]*\{[^}]*display\s*:\s*none[^}]*\}[^<]*</style>',
+    
+    # --- Direct suspicious combinations (broader catchall — no links required) ---
+    # font-size:0 or 1px anywhere (still suspicious even standalone)
     r'font-size\s*:\s*[01]px',
-    r'position\s*:\s*absolute[^}]*left\s*:\s*-\d{3,}',
-    r'text-indent\s*:\s*-\d{3,}',
-    r'overflow\s*:\s*hidden[^}]*height\s*:\s*[01]px',
-    r'visibility\s*:\s*hidden[^}]*<a\s+href',
-    r'opacity\s*:\s*0[^}]*<a\s+href',
-    r'z-index\s*:\s*-\d+[^}]*<a\s+href',
+    # text-indent with large negative value (off-screen text)
+    r'text-indent\s*:\s*-\d{4,}',
+    # position:absolute with large negative left (off-screen positioning)
+    r'position\s*:\s*absolute[^;"\']*left\s*:\s*-\d{4,}',
+    
+    # --- Noscript/comment-based injection ---
+    # Hidden links inside <noscript> (search engines see these, users don't)
+    r'<noscript>.{0,500}?<a\s+href\s*=\s*["\']https?://[^"\']+["\'].{0,500}?</noscript>',
+    # HTML comment-wrapped links
+    r'<!--.{0,300}?<a\s+href\s*=\s*["\']https?://.{0,300}?-->',
 ]
 
 SUSPICIOUS_SCRIPT_DOMAINS = [
