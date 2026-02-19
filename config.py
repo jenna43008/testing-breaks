@@ -151,26 +151,26 @@ DEFAULT_CONFIG = {
         "opaque_entity": 20,              # Access blocked + no trust signals = high risk
         
         # === BONUSES (Reduce score) ===
-        "has_bimi": -10,
-        "has_mta_sts": -6,
+        "has_bimi": -15,
+        "has_mta_sts": -10,
         
         # === APP STORE PRESENCE BONUSES (Legitimacy signal) ===
         # Rare for bad actors to maintain real app store presence
         "app_store_high": -15,    # Verified deep links (AASA/assetlinks) or multiple signals
-        "app_store_medium": -5,   # Page links to app stores or iTunes API match (reduced - easy to fake)
+        "app_store_medium": 0,   # Page links to app stores or iTunes API match (reduced - easy to fake)
         "app_store_low": 0,       # Keyword-only match in iTunes (disabled - too weak, 66% of disabled apps had this)
         
         # === HOSTING PROVIDER PENALTIES ===
         # Budget shared hosts and free hosts have higher spam/phishing rates
-        "hosting_budget_shared": 8,   # Hostinger, GoDaddy shared, Namecheap shared, etc.
+        "hosting_budget_shared": 10,   # Hostinger, GoDaddy shared, Namecheap shared, etc.
         "hosting_free": 12,           # 000webhost, InfinityFree, AwardSpace, etc.
-        "hosting_suspect": 18,        # Known bulletproof / abuse-tolerant hosts
-        "hosting_platform": 4,        # v6.2: Dev platforms (Render, Netlify, Vercel) — mild signal
+        "hosting_suspect": 20,        # Known bulletproof / abuse-tolerant hosts
+        "hosting_platform": 20,        # v6.2: Dev platforms (Render, Netlify, Vercel) — mild signal
         
         # === MX PROVIDER SCORING (v4.7) ===
-        "mx_disposable": 10,          # Disposable/cheap MX (Titan, ImprovMX, Hostinger email, etc.)
-        "mx_selfhosted": 6,           # Self-hosted MX on same domain/IP - no provider oversight
-        "mx_enterprise_bonus": -5,    # Enterprise MX (Google Workspace, M365, Proofpoint) = legitimacy signal
+        "mx_disposable": 20,          # Disposable/cheap MX (Titan, ImprovMX, Hostinger email, etc.)
+        "mx_selfhosted": 20,           # Self-hosted MX on same domain/IP - no provider oversight
+        "mx_enterprise_bonus": -10,    # Enterprise MX (Google Workspace, M365, Proofpoint) = legitimacy signal
     },
     
     # ==========================================================================
