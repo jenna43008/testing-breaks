@@ -2235,11 +2235,15 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
             result["domains"].append(host)
         
         try:
-            # HEAD for redirect-following (cheap), GET only for final content fetch
-            resp = session.head(current, allow_redirects=False, timeout=timeout, verify=True)
+            # Use GET when we need content (captures body on final response),
+            # HEAD when we only care about redirects/status
+            if fetch_content:
+                resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True, stream=True)
+            else:
+                resp = session.head(current, allow_redirects=False, timeout=timeout, verify=True)
             status = resp.status_code
             
-            if status in (405, 501):
+            if status in (405, 501) and not fetch_content:
                 resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True, stream=True)
                 status = resp.status_code
             
@@ -2263,11 +2267,9 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
             result["final_url"] = current
             result["chain"].append(status)
             
-            # Final destination reached — now fetch actual content with GET
             if fetch_content and status == 200:
                 try:
-                    get_resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True, stream=True)
-                    result["content"] = get_resp.content[:50000]
+                    result["content"] = resp.content[:50000]
                     result["content_length"] = len(result["content"])
                 except Exception:
                     pass
