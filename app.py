@@ -758,6 +758,13 @@ def admin_view():
                                      'tld_variant_spoofing'],
             "Hosting Provider": ['hosting_budget_shared', 'hosting_free', 'hosting_suspect'],
             "Bonuses (Reduce Score)": ['has_bimi', 'has_mta_sts'],
+            "VirusTotal": ['vt_malicious_high', 'vt_malicious_medium', 'vt_malicious_low',
+                          'vt_suspicious', 'vt_suspicious_low', 'vt_negative_community', 'vt_clean'],
+            "Hacklink / SEO Spam": ['hacklink_detected', 'hacklink_keywords', 'hacklink_wp_compromised',
+                                    'hacklink_vulnerable_plugins', 'hacklink_spam_links'],
+            "Malicious Script / Hidden Injection": ['malicious_script', 'hidden_injection', 'cpanel_detected'],
+            "Transfer Lock / Domain Takeover": ['transfer_lock_missing', 'whois_recently_updated'],
+            "Empty Page / Cert Transparency": ['empty_page', 'ct_recent_issuance', 'ct_no_history'],
         }
         
         new_weights = {}
@@ -895,6 +902,39 @@ def admin_view():
                 "retail_scam_tld": ".shop/.store TLD — heavily abused for fake stores",
                 "cross_domain_brand_link": "Links to same brand on different TLD — clone store pattern",
                 "ecommerce_no_identity": "E-commerce site without business identity information",
+            },
+            "VirusTotal": {
+                "vt_malicious_high": "5+ VT vendors flagged domain as malicious — high confidence threat",
+                "vt_malicious_medium": "3-4 VT vendors flagged as malicious — medium confidence",
+                "vt_malicious_low": "1-2 VT vendors flagged as malicious — low confidence, may be false positive",
+                "vt_suspicious": "3+ VT vendors flagged as suspicious",
+                "vt_suspicious_low": "1-2 VT vendors flagged as suspicious",
+                "vt_negative_community": "Negative VT community score (<0) — crowdsourced bad reputation",
+                "vt_clean": "50+ VT vendors report clean — bonus that reduces score",
+            },
+            "Hacklink / SEO Spam": {
+                "hacklink_detected": "Hacklink SEO spam injection confirmed — multiple indicators present",
+                "hacklink_keywords": "Hacklink keywords present in page content (casino, viagra, bahis, etc.)",
+                "hacklink_wp_compromised": "WordPress compromise indicators (injected PHP, malicious plugins, backdoors)",
+                "hacklink_vulnerable_plugins": "Known-exploitable WordPress plugins detected on site",
+                "hacklink_spam_links": "5+ hidden outbound spam links injected into page content",
+            },
+            "Malicious Script / Hidden Injection": {
+                "malicious_script": "SocGholish/FakeUpdates-style obfuscated script injection detected — domain is actively compromised and serving malware to visitors",
+                "hidden_injection": "CSS-cloaked hidden content injection (display:none, font-size:0, text-indent:-9999px) with embedded links — the #1 fingerprint of hacklink SEO spam campaigns",
+                "cpanel_detected": "cPanel shared hosting environment detected — cPanel servers are the #1 target for mass hacklink injection campaigns",
+            },
+            "Transfer Lock / Domain Takeover": {
+                "transfer_lock_missing": "Domain missing clientTransferProhibited status — not locked against unauthorized transfers",
+                "whois_recently_updated": "WHOIS record updated within last 30 days — possible ownership change, transfer, or DNS hijack",
+                "domain_gt_1yr": "Domain registered more than 1 year ago — established (used in takeover combos)",
+            },
+            "Empty Page": {
+                "empty_page": "Reachable domain returns empty or near-empty content (<50 chars) — parked, abandoned, or stripped post-compromise",
+            },
+            "Certificate Transparency": {
+                "ct_recent_issuance": "SSL certificate issued within last 7 days in CT logs — new deployment or reactivation",
+                "ct_no_history": "Zero certificates found in Certificate Transparency logs — domain may never have been used for HTTPS",
             },
         }
         
