@@ -2238,13 +2238,13 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
             # Use GET when we need content (captures body on final response),
             # HEAD when we only care about redirects/status
             if fetch_content:
-                resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True, stream=True)
+                resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True)
             else:
                 resp = session.head(current, allow_redirects=False, timeout=timeout, verify=True)
             status = resp.status_code
             
             if status in (405, 501) and not fetch_content:
-                resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True, stream=True)
+                resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True)
                 status = resp.status_code
             
             if i == 0:
