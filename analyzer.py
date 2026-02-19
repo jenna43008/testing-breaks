@@ -2235,11 +2235,11 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
             result["domains"].append(host)
         
         try:
-            method = "GET" if (fetch_content and i == MAX_REDIRECTS) else "HEAD"
-            resp = session.request(method, current, allow_redirects=False, timeout=timeout, verify=True, stream=True)
+            # HEAD for redirect-following (cheap), GET only for final content fetch
+            resp = session.head(current, allow_redirects=False, timeout=timeout, verify=True)
             status = resp.status_code
             
-            if status in (405, 501) and method == "HEAD":
+            if status in (405, 501):
                 resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True, stream=True)
                 status = resp.status_code
             
@@ -2263,9 +2263,11 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
             result["final_url"] = current
             result["chain"].append(status)
             
+            # Final destination reached — now fetch actual content with GET
             if fetch_content and status == 200:
                 try:
-                    result["content"] = resp.content[:50000]
+                    get_resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True, stream=True)
+                    result["content"] = get_resp.content[:50000]
                     result["content_length"] = len(result["content"])
                 except Exception:
                     pass
@@ -3153,13 +3155,15 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append("503 UNAVAILABLE → Disposable/intermittent infrastructure")
     
     # === ACCESS RESTRICTION / TRUST SIGNALS (supplier fraud detection) ===
-    if res.is_opaque_entity:
-        all_issues.append("OPAQUE ENTITY → Access blocked AND no corporate pages found - high B2B fraud risk")
-    elif res.is_access_restricted:
-        all_issues.append(f"ACCESS RESTRICTED → {res.access_restriction_note}")
-    
-    if res.missing_trust_signals and not res.is_opaque_entity:
-        all_issues.append("NO CORPORATE FOOTPRINT → Missing /about, /contact, /privacy pages")
+    # Skip trust/footprint signals if page is empty — redundant with empty page signal
+    if not res.is_empty_page:
+        if res.is_opaque_entity:
+            all_issues.append("OPAQUE ENTITY → Access blocked AND no corporate pages found - high B2B fraud risk")
+        elif res.is_access_restricted:
+            all_issues.append(f"ACCESS RESTRICTED → {res.access_restriction_note}")
+        
+        if res.missing_trust_signals and not res.is_opaque_entity:
+            all_issues.append("NO CORPORATE FOOTPRINT → Missing /about, /contact, /privacy pages")
     
     if res.has_credential_form and not res.brands_detected:
         all_issues.append("CREDENTIAL FORM DETECTED → Login form on landing page")
@@ -3500,16 +3504,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("access_restricted", weights.get('access_restricted', 10))
     
     # Missing trust signals (no about/contact pages)
-    if res.missing_trust_signals:
+    # Skip if page is empty — of course an empty page has no trust pages
+    if res.missing_trust_signals and not res.is_empty_page:
         add("missing_trust_signals", weights.get('missing_trust_signals', 8))
     
     # Opaque entity - access blocked AND no corporate footprint
     # This is a classic B2B fraud / supplier impersonation pattern
-    if res.is_opaque_entity:
+    if res.is_opaque_entity and not res.is_empty_page:
         add("opaque_entity", weights.get('opaque_entity', 20))
     
     # Content
-    if res.is_minimal_shell:
+    if res.is_minimal_shell and not res.is_empty_page:
         add("minimal_shell", weights.get('minimal_shell', 15))
     if res.has_js_redirect:
         add("js_redirect", weights.get('js_redirect', 12))
