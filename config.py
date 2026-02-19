@@ -26,7 +26,7 @@ DEFAULT_CONFIG = {
         "ip_blacklisted": 40,
         "blacklist_inconclusive": 15,  # v6.2: DNSBL check timed out — "unknown" ≠ "clean"
         "typosquat_detected": 15,
-        "brand_impersonation": 35,
+        "brand_impersonation": 0,
         "malware_links": 100,
         "disposable_email": 40,
         "spf_pass_all": 0,           # +all allows anyone to spoof - security risk
@@ -68,7 +68,7 @@ DEFAULT_CONFIG = {
         "suspicious_prefix": 15,           # app-, my-, support-, login-, etc.
         "suspicious_suffix": 15,           # account, setup, cancellation, etc.
         "tech_support_tld": 20,            # .support, .tech, .help, etc.
-        "domain_brand_impersonation": 28,  # Brand name IN domain (app-spectrum.com)
+        "domain_brand_impersonation": 0,  # Brand name IN domain (app-spectrum.com)
         "brand_spoofing_keyword": 20,      # Brand + phishing keyword (easyjetconnect, amazonverify)
         
         # === TLD VARIANT SPOOFING DETECTION ===
@@ -187,7 +187,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_brand_domain_sus_suffix", "score": 0, "label": "domain brand impersonation + suspicious suffix", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "suspicious_suffix"], "if_any": [], "if_not": []},
         {"name": "combo_brand_domain_techsupport_tld", "score": 0, "label": "domain brand impersonation + tech support tld", "category": "Brand Impersonation", "enabled": True, "if_all": ["domain_brand_impersonation", "tech_support_tld"], "if_any": [], "if_not": []},
         {"name": "combo_brand_imp_cred_form", "score": 20, "label": "brand impersonation + credential form", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_impersonation", "credential_form"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_imp_new_30d", "score": 22, "label": "brand impersonation + domain <30d", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_impersonation", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_imp_new_30d", "score": 0, "label": "brand impersonation + domain <30d", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_impersonation", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_brand_imp_no_https", "score": 20, "label": "brand impersonation + no https", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_impersonation", "no_https"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_budget_host", "score": 0, "label": "brand spoofing keyword + hosting budget shared", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "hosting_budget_shared"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_cred_form", "score": 0, "label": "brand spoofing keyword + credential form", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "credential_form"], "if_any": [], "if_not": []},
