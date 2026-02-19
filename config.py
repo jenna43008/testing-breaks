@@ -105,46 +105,46 @@ DEFAULT_CONFIG = {
         "spf_no_external_includes": 0,    # v6.2: SPF exists but no real provider (Google/M365/etc.)
         
         # === INFRASTRUCTURE CONCERNS (Low weights) ===
-        "no_ptr": 4,                  # Missing PTR - minor
-        "ptr_mismatch": 5,
-        "no_https": 8,                # No HTTPS - minor concern
+        "no_ptr": 0,                  # Missing PTR - minor
+        "ptr_mismatch": 15,
+        "no_https": 25,                # No HTTPS - minor concern
         "tls_handshake_failed": 20,   # SSL handshake fails (cipher/protocol mismatch)  # v4.4
-        "tls_connection_failed": 8,   # Can't reach port 443 (no HTTPS service)          # v4.4
-        "http_accessible": 2,
+        "tls_connection_failed": 15,   # Can't reach port 443 (no HTTPS service)          # v4.4
+        "http_accessible": 15,
         "cert_self_signed": 6,
         "cert_expired": 8,
-        "cert_wrong_host": 8,
+        "cert_wrong_host": 15,
         
         # === DOMAIN AGE (Moderate for very new, low otherwise) ===
         "domain_lt_30d": 10,          # 7-30 days old - moderate concern
-        "domain_lt_90d": 4,           # 30-90 days old - minor concern
+        "domain_lt_90d": 0,           # 30-90 days old - minor concern
         "suspicious_tld": 6,          # High-abuse TLD
         "free_email_domain": 12,      # Sending from gmail.com etc
         "free_hosting": 6,
-        "url_shortener": 8,
+        "url_shortener": 20,
         
         # === REDIRECT/CLOAKING CONCERNS ===
-        "redirect_chain_2plus": 6,
-        "redirect_chain_3plus": 4,
-        "redirect_cross_domain": 8,
-        "redirect_temp_302_307": 6,
+        "redirect_chain_2plus": 15,
+        "redirect_chain_3plus": 15,
+        "redirect_cross_domain": 15,
+        "redirect_temp_302_307": 15,
         
         # === SUSPICIOUS BEHAVIOR (Higher weights - actual red flags) ===
-        "status_401_unauthorized": 12,    # 401 on public site - unusual
-        "status_403_cloaking": 15,
-        "status_429_throttling": 8,
-        "status_503_disposable": 8,
-        "status_5xx_errors": 4,
-        "access_restricted": 10,          # 401 or 403 on what should be public domain
-        "minimal_shell": 10,
-        "js_redirect": 8,
+        "status_401_unauthorized": 25,    # 401 on public site - unusual
+        "status_403_cloaking": 25,
+        "status_429_throttling": 15,
+        "status_503_disposable": 25,
+        "status_5xx_errors": 10,
+        "access_restricted": 15,          # 401 or 403 on what should be public domain
+        "minimal_shell": 15,
+        "js_redirect": 10,
         "meta_refresh": 5,
         "external_js_loader": 6,
-        "obfuscated_js": 10,
-        "phishing_paths": 15,
+        "obfuscated_js": 15,
+        "phishing_paths": 25,
         "form_posts_external": 10,
-        "suspicious_iframe": 8,
-        "parking_page": 6,
+        "suspicious_iframe": 15,
+        "parking_page": 20,
         
         # === CORPORATE TRUST SIGNALS (Missing signals indicate opaque entity) ===
         "missing_trust_signals": 20,       # No about/contact/privacy pages
