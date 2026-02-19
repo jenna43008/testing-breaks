@@ -790,9 +790,11 @@ def admin_view():
         merged_weights = {**weights, **new_weights}
         config['weights'] = merged_weights
         
-        # Detect changes and show save button
+        # Load what's actually on disk to compare against
+        saved_config = load_config()
+        saved_weights = saved_config.get('weights', {})
         has_changes = any(
-            merged_weights.get(s, 0) != DEFAULT_CONFIG['weights'].get(s, 0)
+            merged_weights.get(s, 0) != saved_weights.get(s, DEFAULT_CONFIG['weights'].get(s, 0))
             for s in new_weights
         )
         
@@ -802,6 +804,7 @@ def admin_view():
             if st.button("💾 Save Weight Changes", type="primary", key="save_weights"):
                 save_config(config)
                 st.success("✅ Weights saved to disk!")
+                has_changes = False  # Just saved — suppress the warning
         with col_reset:
             if st.button("🔄 Reset to Defaults", key="reset_weights"):
                 config['weights'] = copy.deepcopy(DEFAULT_CONFIG['weights'])
