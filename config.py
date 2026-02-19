@@ -54,7 +54,7 @@ DEFAULT_CONFIG = {
         "cpanel_detected": 25,              # cPanel hosting (common hacklink target, not malicious alone)
         
         # === TRANSFER LOCK / DOMAIN TAKEOVER ===
-        "transfer_lock_recent": 15,        # Transfer lock recently added (post-compromise lockdown signal)
+        "transfer_lock_recent": 35,        # Transfer lock recently added (post-compromise lockdown signal)
         "whois_recently_updated": 10,      # WHOIS updated in last 30 days
         
         # === EMPTY PAGE ===
@@ -72,13 +72,13 @@ DEFAULT_CONFIG = {
         "brand_spoofing_keyword": 20,      # Brand + phishing keyword (easyjetconnect, amazonverify)
         
         # === TLD VARIANT SPOOFING DETECTION ===
-        "tld_variant_spoofing": 30,        # Signup domain is TLD variant of established business
+        "tld_variant_spoofing": 45,        # Signup domain is TLD variant of established business
         
         # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
-        "hijack_path_pattern": 12,         # /tunnel/, /bid/, /secure/ paths
-        "doc_sharing_lure": 15,            # "Secure Document Sharing" content
-        "phishing_js_behavior": 18,        # atob(), hash extraction, etc.
-        "phishing_infra_redirect": 25,     # Redirect to workers.dev, etc.
+        "hijack_path_pattern": 25,         # /tunnel/, /bid/, /secure/ paths
+        "doc_sharing_lure": 25,            # "Secure Document Sharing" content
+        "phishing_js_behavior": 25,        # atob(), hash extraction, etc.
+        "phishing_infra_redirect": 35,     # Redirect to workers.dev, etc.
         "email_tracking_url": 20,          # Email in URL hash (tracking)
         
         # === E-COMMERCE / RETAIL SCAM INDICATORS ===
@@ -88,21 +88,21 @@ DEFAULT_CONFIG = {
         "ecommerce_missing_policies": 8,   # E-commerce without terms/refund policy
         
         # === DELIVERABILITY CONCERNS (Low weights - warn but don't deny alone) ===
-        "no_spf": 8,                  # Missing SPF - their problem, not fraud
-        "spf_neutral_all": 5,         # ?all - weak but not dangerous
-        "spf_softfail_all": 2,        # ~all - totally acceptable, very minor
-        "spf_too_many_lookups": 4,
-        "spf_syntax_error": 6,
-        "no_dmarc": 10,               # Missing DMARC - deliverability issue only
-        "dmarc_p_none": 8,            # p=none - tells receivers to do nothing about failures (raised from 5)
-        "dmarc_no_rua": 2,            # No reporting - trivial
-        "dmarc_syntax_error": 4,
-        "no_dkim": 10,                # Missing DKIM - strong risk signal per disabled apps data (raised from 6)
-        "no_mx": 8,                   # No MX - can't receive bounces
-        "null_mx": 12,
+        "no_spf": 0,                  # Missing SPF - their problem, not fraud
+        "spf_neutral_all": 0,         # ?all - weak but not dangerous
+        "spf_softfail_all": 0,        # ~all - totally acceptable, very minor
+        "spf_too_many_lookups": 0,
+        "spf_syntax_error": 0,
+        "no_dmarc": 0,               # Missing DMARC - deliverability issue only
+        "dmarc_p_none": 0,            # p=none - tells receivers to do nothing about failures (raised from 5)
+        "dmarc_no_rua": 0,            # No reporting - trivial
+        "dmarc_syntax_error": 0,
+        "no_dkim": 0,                # Missing DKIM - strong risk signal per disabled apps data (raised from 6)
+        "no_mx": 0,                   # No MX - can't receive bounces
+        "null_mx": 0,
         "mx_free_provider": 6,
         "mx_mail_prefix": 4,              # v6.2: MX is mail.{domain} — phishing template fingerprint
-        "spf_no_external_includes": 3,    # v6.2: SPF exists but no real provider (Google/M365/etc.)
+        "spf_no_external_includes": 0,    # v6.2: SPF exists but no real provider (Google/M365/etc.)
         
         # === INFRASTRUCTURE CONCERNS (Low weights) ===
         "no_ptr": 4,                  # Missing PTR - minor
