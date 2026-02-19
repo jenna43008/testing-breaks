@@ -17,6 +17,7 @@ DEFAULT_CONFIG = {
     "timeout": 10.0,
     "check_rdap": True,
     "admin_password": "admin123",  # CHANGE THIS!
+    "vt_api_key": "",              # VirusTotal API key (free tier: 4 req/min, 500 req/day)
     
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
@@ -31,6 +32,36 @@ DEFAULT_CONFIG = {
         "domain_lt_7d": 35,           # Brand new domain - high risk
         "credential_form": 12,        # Only concerning if combined with other signals
         "sensitive_fields": 10,
+        
+        # === VIRUSTOTAL REPUTATION ===
+        "vt_malicious_high": 45,           # 5+ vendors flag as malicious
+        "vt_malicious_medium": 30,         # 3-4 vendors flag as malicious
+        "vt_malicious_low": 18,            # 1-2 vendors flag as malicious
+        "vt_suspicious": 12,               # 3+ vendors flag as suspicious
+        "vt_suspicious_low": 5,            # 1-2 vendors flag as suspicious
+        "vt_negative_community": 10,       # Negative community reputation
+        "vt_clean": -5,                    # Clean bill from 50+ vendors (bonus)
+        
+        # === HACKLINK / SEO SPAM DETECTION ===
+        "hacklink_detected": 35,           # Hacklink SEO spam injection confirmed
+        "hacklink_keywords": 12,           # Hacklink keywords present (below detection threshold)
+        "hacklink_wp_compromised": 30,     # WordPress compromise indicators
+        "hacklink_vulnerable_plugins": 20, # Known exploitable WP plugins
+        "hacklink_spam_links": 25,         # 5+ hidden spam links in content
+        "malicious_script": 40,            # SocGholish/FakeUpdates/obfuscated script injection
+        "hidden_injection": 35,            # CSS-hidden content injection (hacklink fingerprint)
+        "cpanel_detected": 6,             # cPanel hosting (common hacklink target)
+        
+        # === TRANSFER LOCK / DOMAIN TAKEOVER ===
+        "transfer_lock_missing": 12,       # Domain not locked against transfers
+        "whois_recently_updated": 8,       # WHOIS updated in last 30 days
+        
+        # === EMPTY PAGE ===
+        "empty_page": 15,                  # Reachable domain with empty/near-empty content
+        
+        # === CERTIFICATE TRANSPARENCY ===
+        "ct_recent_issuance": 8,           # Cert issued within last 7 days
+        "ct_no_history": 12,               # Zero certs in CT logs
         
         # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
         "suspicious_prefix": 15,           # app-, my-, support-, login-, etc.
@@ -360,6 +391,58 @@ DEFAULT_CONFIG = {
         {"name": "combo_techsupport_tld_cred_form", "score": 22, "label": "tech support tld + credential form", "category": "Tech Support Scam", "enabled": True, "if_all": ["tech_support_tld", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_techsupport_tld_new_30d", "score": 18, "label": "tech support tld + domain <30d", "category": "Tech Support Scam", "enabled": True, "if_all": ["tech_support_tld", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_techsupport_tld_no_https", "score": 15, "label": "tech support tld + no https", "category": "Tech Support Scam", "enabled": True, "if_all": ["tech_support_tld", "no_https"], "if_any": [], "if_not": []},
+
+        # --- VirusTotal Combos (8 rules) ---
+        {"name": "vt_malicious_brand", "score": 30, "label": "VT malicious + brand impersonation", "category": "VirusTotal", "enabled": True, "if_all": ["domain_brand_impersonation"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
+        {"name": "vt_malicious_new_domain", "score": 25, "label": "VT malicious + domain <30d", "category": "VirusTotal", "enabled": True, "if_all": ["domain_lt_30d"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
+        {"name": "vt_malicious_blacklisted", "score": 20, "label": "VT malicious + domain blacklisted", "category": "VirusTotal", "enabled": True, "if_all": ["domain_blacklisted"], "if_any": ["vt_malicious_high", "vt_malicious_medium"], "if_not": []},
+        {"name": "vt_malicious_no_auth", "score": 20, "label": "VT malicious + no email auth", "category": "VirusTotal", "enabled": True, "if_all": ["no_dmarc", "no_spf"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
+        {"name": "vt_malicious_cred_form", "score": 25, "label": "VT malicious + credential form", "category": "VirusTotal", "enabled": True, "if_all": ["credential_form"], "if_any": ["vt_malicious_high", "vt_malicious_medium"], "if_not": []},
+        {"name": "vt_malicious_phishing_infra", "score": 30, "label": "VT malicious + phishing infra redirect", "category": "VirusTotal", "enabled": True, "if_all": ["phishing_infra_redirect"], "if_any": ["vt_malicious_high", "vt_malicious_medium"], "if_not": []},
+        {"name": "vt_suspicious_new_domain", "score": 15, "label": "VT suspicious + domain <30d", "category": "VirusTotal", "enabled": True, "if_all": ["domain_lt_30d"], "if_any": ["vt_suspicious", "vt_suspicious_low"], "if_not": []},
+        {"name": "vt_malicious_budget_host", "score": 18, "label": "VT malicious + budget hosting", "category": "VirusTotal", "enabled": True, "if_all": ["hosting_budget_shared"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
+
+        # --- Hacklink / SEO Spam Combos (7 rules) ---
+        {"name": "hacklink_new_domain", "score": 25, "label": "hacklink detected + domain <30d", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_detected", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "hacklink_wp_compromised_budget", "score": 20, "label": "WP compromised + budget hosting", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_wp_compromised", "hosting_budget_shared"], "if_any": [], "if_not": []},
+        {"name": "hacklink_blacklisted", "score": 20, "label": "hacklink + domain blacklisted", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_detected", "domain_blacklisted"], "if_any": [], "if_not": []},
+        {"name": "hacklink_vt_malicious", "score": 30, "label": "hacklink + VT malicious — confirmed compromise", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_detected"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
+        {"name": "hacklink_no_auth", "score": 18, "label": "hacklink + no email auth — domain may be abandoned", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_detected", "no_dmarc", "no_spf"], "if_any": [], "if_not": []},
+        {"name": "hacklink_vulnerable_wp_new", "score": 22, "label": "vulnerable WP plugins + domain <90d", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_vulnerable_plugins", "domain_lt_90d"], "if_any": [], "if_not": []},
+        {"name": "hacklink_spam_links_cloaking", "score": 20, "label": "spam links + 403 cloaking", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_spam_links", "status_403_cloaking"], "if_any": [], "if_not": []},
+
+        # --- Malicious Script / Hidden Injection (6 rules) ---
+        {"name": "malicious_script_new_domain", "score": 30, "label": "malicious script + domain <30d — active drive-by", "category": "Malicious Script", "enabled": True, "if_all": ["malicious_script", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "malicious_script_vt_malicious", "score": 35, "label": "malicious script + VT malicious — confirmed compromise", "category": "Malicious Script", "enabled": True, "if_all": ["malicious_script"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
+        {"name": "malicious_script_hacklink", "score": 30, "label": "malicious script + hacklink keywords — multi-vector compromise", "category": "Malicious Script", "enabled": True, "if_all": ["malicious_script", "hacklink_detected"], "if_any": [], "if_not": []},
+        {"name": "hidden_injection_new_domain", "score": 25, "label": "hidden injection + domain <30d — injected from day one", "category": "Malicious Script", "enabled": True, "if_all": ["hidden_injection", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "hidden_injection_vt_malicious", "score": 30, "label": "hidden injection + VT malicious", "category": "Malicious Script", "enabled": True, "if_all": ["hidden_injection"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
+        {"name": "hidden_injection_budget_host", "score": 20, "label": "hidden injection + budget hosting — mass-exploited shared host", "category": "Malicious Script", "enabled": True, "if_all": ["hidden_injection", "hosting_budget_shared"], "if_any": [], "if_not": []},
+
+        # --- cPanel + Transfer Lock Combos (4 rules) ---
+        {"name": "cpanel_transfer_lock_missing", "score": 22, "label": "cPanel + transfer lock missing — hijack-ready infrastructure", "category": "Domain Takeover", "enabled": True, "if_all": ["cpanel_detected", "transfer_lock_missing"], "if_any": [], "if_not": []},
+        {"name": "cpanel_whois_recently_updated", "score": 18, "label": "cPanel + WHOIS recently updated — possible recent compromise", "category": "Domain Takeover", "enabled": True, "if_all": ["cpanel_detected", "whois_recently_updated"], "if_any": [], "if_not": []},
+        {"name": "cpanel_hacklink", "score": 20, "label": "cPanel + hacklink detected — classic hacklink campaign target", "category": "Domain Takeover", "enabled": True, "if_all": ["cpanel_detected", "hacklink_detected"], "if_any": [], "if_not": []},
+        {"name": "cpanel_malicious_script", "score": 25, "label": "cPanel + malicious script — compromised shared hosting", "category": "Domain Takeover", "enabled": True, "if_all": ["cpanel_detected", "malicious_script"], "if_any": [], "if_not": []},
+
+        # --- Transfer Lock + Old Domain / VT Combos (4 rules) ---
+        {"name": "transfer_lock_old_domain", "score": 20, "label": "transfer lock missing + domain >1yr — domain takeover signal", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_missing", "domain_gt_1yr"], "if_any": [], "if_not": []},
+        {"name": "transfer_lock_whois_updated", "score": 22, "label": "transfer lock missing + WHOIS recently updated — active takeover", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_missing", "whois_recently_updated"], "if_any": [], "if_not": []},
+        {"name": "transfer_lock_vt_malicious", "score": 25, "label": "transfer lock missing + VT malicious — compromised domain", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_missing"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
+        {"name": "transfer_lock_hacklink", "score": 20, "label": "transfer lock missing + hacklink — unlocked hijacked domain", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_missing", "hacklink_detected"], "if_any": [], "if_not": []},
+
+        # --- VT Malicious + Hacklink Keywords (cross-intel) ---
+        {"name": "vt_malicious_hacklink_keywords", "score": 28, "label": "VT malicious + hacklink keywords — threat intel + content confirms compromise", "category": "VirusTotal", "enabled": True, "if_all": ["hacklink_keywords"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
+
+        # --- Empty Page Combos (3 rules) ---
+        {"name": "empty_page_new_domain", "score": 18, "label": "empty page + domain <30d — parked/staged phishing domain", "category": "General Risk", "enabled": True, "if_all": ["empty_page", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "empty_page_no_auth", "score": 15, "label": "empty page + no email auth — abandoned/fraudulent domain", "category": "General Risk", "enabled": True, "if_all": ["empty_page", "no_spf", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "empty_page_transfer_lock_missing", "score": 18, "label": "empty page + transfer lock missing — stripped post-takeover", "category": "Domain Takeover", "enabled": True, "if_all": ["empty_page", "transfer_lock_missing"], "if_any": [], "if_not": []},
+
+        # --- Cert Transparency Combos (3 rules) ---
+        {"name": "ct_recent_old_domain", "score": 20, "label": "CT recent issuance + domain >1yr — possible domain takeover/reactivation", "category": "Domain Takeover", "enabled": True, "if_all": ["ct_recent_issuance", "domain_gt_1yr"], "if_any": [], "if_not": []},
+        {"name": "ct_no_history_sending", "score": 15, "label": "no CT history + no email auth — ghost domain never used for web or email", "category": "General Risk", "enabled": True, "if_all": ["ct_no_history", "no_spf", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "ct_recent_hacklink", "score": 20, "label": "CT recent issuance + hacklink — newly activated compromised domain", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["ct_recent_issuance", "hacklink_detected"], "if_any": [], "if_not": []},
 
     ],
     
