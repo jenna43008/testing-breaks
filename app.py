@@ -166,15 +166,6 @@ def user_view():
                                   help="Lookup domain registration date - adds ~1s per domain")
         
         st.session_state.config['check_rdap'] = check_rdap
-        
-        # VirusTotal API Key
-        vt_key = st.text_input(
-            "🛡️ VirusTotal API Key",
-            value=st.session_state.config.get('vt_api_key', ''),
-            type="password",
-            help="Free VT API: 4 req/min, 500/day. Get one at virustotal.com/gui/my-apikey"
-        )
-        st.session_state.config['vt_api_key'] = vt_key
     
     # Main input area
     col1, col2 = st.columns([2, 1])
@@ -1177,17 +1168,6 @@ def admin_view():
             )
             if new_password:
                 config['admin_password'] = new_password
-            
-            st.markdown("---")
-            st.markdown("**🛡️ VirusTotal Integration**")
-            vt_key_admin = st.text_input(
-                "VT API Key",
-                value=config.get('vt_api_key', ''),
-                type="password",
-                help="Free: 4 req/min, 500/day. Get at virustotal.com/gui/my-apikey",
-                key="admin_vt_key"
-            )
-            config['vt_api_key'] = vt_key_admin
     
     with tab5:
         st.header("📋 Pattern Lists")
