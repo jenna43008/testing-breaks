@@ -936,6 +936,19 @@ def load_config() -> dict:
                     default_weights = copy.deepcopy(DEFAULT_CONFIG.get('weights', {}))
                     merged['weights'] = {**default_weights, **loaded['weights']}
                     
+                    # Rename migration: transfer_lock_missing → transfer_lock_recent
+                    if 'transfer_lock_missing' in merged['weights'] and 'transfer_lock_recent' not in loaded.get('weights', {}):
+                        merged['weights']['transfer_lock_recent'] = merged['weights'].pop('transfer_lock_missing')
+                    elif 'transfer_lock_missing' in merged['weights']:
+                        merged['weights'].pop('transfer_lock_missing', None)
+                    
+                    # Migrate rules referencing the old signal name
+                    if 'rules' in loaded:
+                        for rule in loaded['rules']:
+                            for key in ('if_all', 'if_any', 'if_not'):
+                                if key in rule:
+                                    rule[key] = ['transfer_lock_recent' if s == 'transfer_lock_missing' else s for s in rule[key]]
+                    
                     # v7.1 weight migration: if saved config has old (lower) weights for
                     # signals that were bumped in v7.1, upgrade them to new defaults.
                     # Only applies if user hasn't explicitly customized them above the old defaults.
