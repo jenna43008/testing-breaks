@@ -2873,24 +2873,32 @@ def check_cert_transparency(domain: str, timeout: float = 8.0) -> dict:
 # SCORING & SUMMARY
 # ============================================================================
 
-def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled: bool) -> str:
-    """Generate comprehensive summary showing ALL triggered signals and their email impacts."""
+def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled: bool, weights: dict = None) -> str:
+    """Generate comprehensive summary showing ALL triggered signals and their email impacts.
+    Issues are sorted by weight (highest risk first) and zero-weight issues are excluded from summary.
+    """
+    if weights is None:
+        weights = {}
     
-    all_issues = []  # Format: "ISSUE → IMPACT"
+    all_issues = []  # List of (weight, "ISSUE → IMPACT") tuples
     positives = []
+    
+    def issue(weight: int, text: str):
+        """Add an issue tagged with its scoring weight."""
+        all_issues.append((weight, text))
     
     # === HIGH-RISK PHISHING INFRASTRUCTURE (composite indicator) ===
     if res.high_risk_phish_infra:
-        all_issues.append(f"🚨 HIGH-RISK PHISHING INFRA → {res.high_risk_phish_infra_reason}")
+        issue(100, f"🚨 HIGH-RISK PHISHING INFRA → {res.high_risk_phish_infra_reason}")
     
     # === CRITICAL ISSUES ===
     if res.domain_blacklist_count > 0:
         bl_names = res.domain_blacklists_hit.replace(";", ", ")
-        all_issues.append(f"BLACKLISTED DOMAIN on {bl_names} ({res.domain_blacklist_count} lists) → Emails BLOCKED by Gmail/Outlook/Yahoo")
+        issue(weights.get('domain_blacklisted', 50), f"BLACKLISTED DOMAIN on {bl_names} ({res.domain_blacklist_count} lists) → Emails BLOCKED by Gmail/Outlook/Yahoo")
     
     if res.ip_blacklist_count > 0:
         ip_bl_names = res.ip_blacklists_hit.replace(";", ", ")
-        all_issues.append(f"BLACKLISTED IP on {ip_bl_names} ({res.ip_blacklist_count} lists) → Emails BLOCKED by major providers")
+        issue(weights.get('ip_blacklisted', 40), f"BLACKLISTED IP on {ip_bl_names} ({res.ip_blacklist_count} lists) → Emails BLOCKED by major providers")
     
     # v6.2: Warn when blacklist checks were inconclusive (timeout/rate limit)
     total_inconclusive = res.domain_blacklist_inconclusive + res.ip_blacklist_inconclusive
@@ -2900,143 +2908,142 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             parts.append(f"{res.domain_blacklist_inconclusive} domain")
         if res.ip_blacklist_inconclusive > 0:
             parts.append(f"{res.ip_blacklist_inconclusive} IP")
-        all_issues.append(f"⚠️ BLACKLIST CHECK INCONCLUSIVE ({', '.join(parts)} list(s) timed out) → May be rate-limited; result is NOT confirmed clean")
+        issue(weights.get('blacklist_inconclusive', 15), f"⚠️ BLACKLIST CHECK INCONCLUSIVE ({', '.join(parts)} list(s) timed out) → May be rate-limited; result is NOT confirmed clean")
     
     if res.spf_mechanism == "+all":
-        all_issues.append("SPF +all → Domain SPOOFABLE; anyone can forge emails as this sender")
+        issue(weights.get('spf_pass_all', 40), "SPF +all → Domain SPOOFABLE; anyone can forge emails as this sender")
     
     if rdap_enabled and res.domain_age_days >= 0 and res.domain_age_days <= 1:
         src = f" ({res.domain_age_source.upper()})" if res.domain_age_source else ""
-        all_issues.append(f"⚠ DOMAIN CREATED TODAY/YESTERDAY{src} → Registered {res.domain_age_days}d ago; near-certain spam/phishing infrastructure")
+        issue(weights.get('domain_age_0d', 40), f"⚠ DOMAIN CREATED TODAY/YESTERDAY{src} → Registered {res.domain_age_days}d ago; near-certain spam/phishing infrastructure")
     elif rdap_enabled and res.domain_age_days >= 0 and res.domain_age_days < 7:
-        all_issues.append(f"DOMAIN ONLY {res.domain_age_days} DAYS OLD → New domains hit spam folder 90%+ of the time")
+        issue(weights.get('domain_age_7d', 25), f"DOMAIN ONLY {res.domain_age_days} DAYS OLD → New domains hit spam folder 90%+ of the time")
     elif rdap_enabled and res.domain_age_days >= 7 and res.domain_age_days < 30:
-        all_issues.append(f"DOMAIN {res.domain_age_days} DAYS OLD → Young domains face increased spam filtering")
+        issue(weights.get('domain_age_30d', 15), f"DOMAIN {res.domain_age_days} DAYS OLD → Young domains face increased spam filtering")
     elif rdap_enabled and res.domain_age_days >= 30 and res.domain_age_days < 90:
-        all_issues.append(f"DOMAIN {res.domain_age_days} DAYS OLD → Relatively new; building reputation")
+        issue(weights.get('domain_age_90d', 8), f"DOMAIN {res.domain_age_days} DAYS OLD → Relatively new; building reputation")
     
     if not res.spf_exists and not res.dmarc_exists and not res.dkim_exists:
-        all_issues.append("ZERO EMAIL AUTH → Gmail/Yahoo REQUIRE authentication; emails will fail")
+        issue(weights.get('no_spf', 8) + weights.get('no_dkim', 6) + weights.get('no_dmarc', 10), "ZERO EMAIL AUTH → Gmail/Yahoo REQUIRE authentication; emails will fail")
     
     if res.is_disposable_email:
-        all_issues.append("DISPOSABLE EMAIL DOMAIN → Cannot build sender reputation; inherently untrusted")
+        issue(weights.get('disposable_domain', 35), "DISPOSABLE EMAIL DOMAIN → Cannot build sender reputation; inherently untrusted")
     
     if res.typosquat_target:
-        all_issues.append(f"TYPOSQUAT of '{res.typosquat_target}' → Triggers phishing/fraud filters automatically")
+        issue(weights.get('typosquat', 30), f"TYPOSQUAT of '{res.typosquat_target}' → Triggers phishing/fraud filters automatically")
     
     # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
     if res.domain_impersonates_brand:
         if res.brand_plus_keyword_domain:
-            all_issues.append(
+            issue(weights.get('brand_keyword_domain', 30),
                 f"BRAND + SPOOFING KEYWORD '{res.domain_impersonates_brand.upper()}' + '{res.brand_spoofing_keyword}' "
                 f"→ Domain mimics legitimate brand service/portal (e.g., {res.domain_impersonates_brand}connect.com = phishing)")
         else:
-            all_issues.append(f"DOMAIN IMPERSONATES '{res.domain_impersonates_brand.upper()}' → Brand name in domain; classic tech support scam pattern")
+            issue(weights.get('brand_impersonation_domain', 20), f"DOMAIN IMPERSONATES '{res.domain_impersonates_brand.upper()}' → Brand name in domain; classic tech support scam pattern")
     
     # === TLD VARIANT SPOOFING ===
     if res.tld_variant_detected:
-        all_issues.append(f"TLD VARIANT SPOOF ({res.tld_variant_domain}) → Established business exists at variant TLD")
-    # Diagnostic detail (TLD VARIANT CHECK / CHECK ERROR) is stored in res.tld_variant_summary
-    # but NOT shown in issues — it was confusing users into thinking spoofing was detected
+        issue(weights.get('tld_variant_spoof', 25), f"TLD VARIANT SPOOF ({res.tld_variant_domain}) → Established business exists at variant TLD")
     
     if res.has_suspicious_prefix:
-        all_issues.append(f"SUSPICIOUS PREFIX '{res.suspicious_prefix_found}' → Common phishing/scam domain pattern")
+        issue(weights.get('suspicious_prefix', 10), f"SUSPICIOUS PREFIX '{res.suspicious_prefix_found}' → Common phishing/scam domain pattern")
     
     if res.has_suspicious_suffix:
-        all_issues.append(f"SUSPICIOUS SUFFIX '{res.suspicious_suffix_found}' → Tech support scam domain pattern (e.g., 'brandaccount.com')")
+        issue(weights.get('suspicious_suffix', 10), f"SUSPICIOUS SUFFIX '{res.suspicious_suffix_found}' → Tech support scam domain pattern (e.g., 'brandaccount.com')")
     
     if res.is_tech_support_tld:
-        all_issues.append("TECH SUPPORT SCAM TLD (.support/.tech/.help) → Heavily abused for scams")
+        issue(weights.get('tech_support_tld', 8), "TECH SUPPORT SCAM TLD (.support/.tech/.help) → Heavily abused for scams")
     
     # E-commerce / Retail scam indicators
     if res.is_retail_scam_tld:
         tld = '.' + res.domain.split('.')[-1] if '.' in res.domain else ''
-        all_issues.append(f"RETAIL SCAM TLD ({tld}) → .shop/.store TLDs heavily abused for fake stores")
+        issue(weights.get('retail_scam_tld', 10), f"RETAIL SCAM TLD ({tld}) → .shop/.store TLDs heavily abused for fake stores")
     
     if res.has_cross_domain_brand_link:
-        all_issues.append(f"CROSS-DOMAIN BRAND LINKS ({res.cross_domain_brand_links}) → Links to same brand on different TLD; common in clone stores")
+        issue(weights.get('cross_domain_brand_link', 15), f"CROSS-DOMAIN BRAND LINKS ({res.cross_domain_brand_links}) → Links to same brand on different TLD; common in clone stores")
     
     if res.is_ecommerce_site and res.missing_business_identity:
-        all_issues.append("E-COMMERCE WITHOUT BUSINESS IDENTITY → No legal name/address/registration; high scam risk")
+        issue(weights.get('ecommerce_no_identity', 20), "E-COMMERCE WITHOUT BUSINESS IDENTITY → No legal name/address/registration; high scam risk")
     
     if res.brands_detected:
-        all_issues.append(f"BRAND IMPERSONATION ({res.brands_detected}) → Triggers phishing filters")
+        issue(weights.get('brand_impersonation', 20), f"BRAND IMPERSONATION ({res.brands_detected}) → Triggers phishing filters")
     
     if res.malware_links_found:
-        all_issues.append("MALWARE LINKS DETECTED → Domain will be blacklisted across providers")
+        issue(weights.get('malware_links', 25), "MALWARE LINKS DETECTED → Domain will be blacklisted across providers")
     
     if res.has_credential_form and res.brands_detected:
-        all_issues.append("CREDENTIAL FORM + BRAND IMPERSONATION → Classic phishing; will be blocked")
+        issue(weights.get('credential_form', 20) + weights.get('brand_impersonation', 20), "CREDENTIAL FORM + BRAND IMPERSONATION → Classic phishing; will be blocked")
     
     # === VIRUSTOTAL REPUTATION ===
     if res.vt_available:
         if res.vt_malicious_count >= 5:
             vendors = res.vt_malicious_vendors.replace(";", ", ")[:100]
-            all_issues.append(f"🛡️ VT MALICIOUS ({res.vt_malicious_count}/{res.vt_total_vendors} vendors: {vendors}) → Domain flagged as malicious by security vendors")
+            issue(weights.get('vt_malicious_high', 65), f"🛡️ VT MALICIOUS ({res.vt_malicious_count}/{res.vt_total_vendors} vendors: {vendors}) → Domain flagged as malicious by security vendors")
         elif res.vt_malicious_count >= 1:
-            all_issues.append(f"🛡️ VT FLAGGED ({res.vt_malicious_count} malicious + {res.vt_suspicious_count} suspicious) → Some security vendors flag this domain")
+            vt_w = weights.get('vt_malicious_medium', 40) if res.vt_malicious_count >= 2 else weights.get('vt_malicious_low', 22)
+            issue(vt_w, f"🛡️ VT FLAGGED ({res.vt_malicious_count} malicious + {res.vt_suspicious_count} suspicious) → Some security vendors flag this domain")
         elif res.vt_suspicious_count >= 1:
-            all_issues.append(f"VT SUSPICIOUS ({res.vt_suspicious_count} vendor(s)) → Domain under suspicion by some vendors")
+            issue(weights.get('vt_suspicious', 15), f"VT SUSPICIOUS ({res.vt_suspicious_count} vendor(s)) → Domain under suspicion by some vendors")
         if res.vt_threat_names:
             names = res.vt_threat_names.replace(";", ", ")
-            all_issues.append(f"VT THREAT NAMES: {names}")
+            issue(0, f"VT THREAT NAMES: {names}")  # Info-only, no weight
         if res.vt_malicious_count == 0 and res.vt_suspicious_count == 0 and res.vt_total_vendors >= 50:
             positives.append(f"VT CLEAN → 0/{res.vt_total_vendors} security vendors flag this domain")
     
     # === HACKLINK / SEO SPAM ===
     if res.hacklink_detected:
         kw = res.hacklink_keywords.replace(";", ", ")[:80] if res.hacklink_keywords else "various"
-        all_issues.append(f"🕷️ HACKLINK SEO SPAM DETECTED (keywords: {kw}) → Domain compromised with injected gambling/spam content")
+        issue(weights.get('hacklink_detected', 50), f"🕷️ HACKLINK SEO SPAM DETECTED (keywords: {kw}) → Domain compromised with injected gambling/spam content")
     elif res.hacklink_keywords:
         kw = res.hacklink_keywords.replace(";", ", ")[:80]
-        all_issues.append(f"HACKLINK KEYWORDS FOUND ({kw}) → Some hacklink-associated keywords present in page content")
+        issue(weights.get('hacklink_keywords', 15), f"HACKLINK KEYWORDS FOUND ({kw}) → Some hacklink-associated keywords present in page content")
     
     if res.hacklink_wp_compromised:
-        all_issues.append("WORDPRESS COMPROMISED → WordPress files show signs of code injection/backdoor")
+        issue(weights.get('hacklink_wp_compromised', 45), "WORDPRESS COMPROMISED → WordPress files show signs of code injection/backdoor")
     
     if res.hacklink_vulnerable_plugins:
         plugins = res.hacklink_vulnerable_plugins.replace(";", ", ")[:80]
-        all_issues.append(f"VULNERABLE WP PLUGINS ({plugins}) → Known exploitable plugins detected")
+        issue(weights.get('hacklink_vulnerable_plugins', 25), f"VULNERABLE WP PLUGINS ({plugins}) → Known exploitable plugins detected")
     
     if res.hacklink_spam_link_count >= 5:
-        all_issues.append(f"SPAM LINKS ({res.hacklink_spam_link_count} hidden links) → Hidden outbound spam links injected into page")
+        issue(weights.get('hacklink_spam_links', 35), f"SPAM LINKS ({res.hacklink_spam_link_count} hidden links) → Hidden outbound spam links injected into page")
     
     # === MALICIOUS SCRIPT / HIDDEN INJECTION (HIGH-VALUE SIGNALS) ===
     if res.hacklink_malicious_script:
-        all_issues.append("🚨 MALICIOUS SCRIPT INJECTION → SocGholish/FakeUpdates-style obfuscated script detected in page; domain is actively compromised")
+        issue(weights.get('malicious_script', 65), "🚨 MALICIOUS SCRIPT INJECTION → SocGholish/FakeUpdates-style obfuscated script detected in page; domain is actively compromised")
     
     if res.hacklink_hidden_injection:
-        all_issues.append("🚨 HIDDEN CONTENT INJECTION → CSS-cloaked content (display:none, font-size:0) with links; classic hacklink/SEO spam technique")
+        issue(weights.get('hidden_injection', 55), "🚨 HIDDEN CONTENT INJECTION → CSS-cloaked content (display:none, font-size:0) with links; classic hacklink/SEO spam technique")
     
     if res.hacklink_is_cpanel:
-        all_issues.append("CPANEL HOSTING → cPanel shared hosting detected; frequently targeted in hacklink campaigns")
+        issue(weights.get('cpanel_detected', 8), "CPANEL HOSTING → cPanel shared hosting detected; frequently targeted in hacklink campaigns")
     
     if res.hacklink_suspicious_scripts:
         scripts = res.hacklink_suspicious_scripts.replace(";", ", ")[:120]
-        all_issues.append(f"SUSPICIOUS EXTERNAL SCRIPTS ({scripts}) → Third-party scripts from known-bad or suspicious domains")
+        issue(weights.get('suspicious_scripts', 12), f"SUSPICIOUS EXTERNAL SCRIPTS ({scripts}) → Third-party scripts from known-bad or suspicious domains")
     
     # === TRANSFER LOCK / DOMAIN TAKEOVER ===
     if res.domain_transfer_lock_recent:
         age_note = ""
         if res.domain_age_days >= 365:
             age_note = f" (domain is {res.domain_age_days}d old — recently locked + aged = post-compromise lockdown)"
-        all_issues.append(f"TRANSFER LOCK RECENTLY ADDED → Domain locked against transfers within last 30 days{age_note}")
+        issue(weights.get('transfer_lock_recent', 15), f"TRANSFER LOCK RECENTLY ADDED → Domain locked against transfers within last 30 days{age_note}")
     
     if res.whois_recently_updated:
         days = res.whois_recently_updated_days
-        all_issues.append(f"WHOIS RECENTLY UPDATED ({days}d ago) → Possible recent transfer, ownership change, or DNS hijack")
+        issue(weights.get('whois_recently_updated', 10), f"WHOIS RECENTLY UPDATED ({days}d ago) → Possible recent transfer, ownership change, or DNS hijack")
     
     # === EMPTY PAGE ===
     if res.is_empty_page:
-        all_issues.append("EMPTY PAGE → Reachable domain returns empty/near-empty content; possibly parked, abandoned, or stripped post-compromise")
+        issue(weights.get('empty_page', 20), "EMPTY PAGE → Reachable domain returns empty/near-empty content; possibly parked, abandoned, or stripped post-compromise")
     
     # === CERTIFICATE TRANSPARENCY ===
     if res.ct_log_count == 0:
-        all_issues.append("NO CT HISTORY → Zero certificates found in CT logs; domain may never have been used for HTTPS")
+        issue(weights.get('ct_no_history', 15), "NO CT HISTORY → Zero certificates found in CT logs; domain may never have been used for HTTPS")
     elif res.ct_recent_issuance and res.domain_age_days > 365:
-        all_issues.append(f"CT RECENT ISSUANCE ON OLD DOMAIN → New cert issued in last 7d on {res.domain_age_days}d-old domain; possible takeover/reactivation")
+        issue(weights.get('ct_recent_issuance', 10), f"CT RECENT ISSUANCE ON OLD DOMAIN → New cert issued in last 7d on {res.domain_age_days}d-old domain; possible takeover/reactivation")
     elif res.ct_recent_issuance:
-        all_issues.append("CT RECENT CERT ISSUANCE → Certificate issued within last 7 days")
+        issue(weights.get('ct_recent_issuance', 10), "CT RECENT CERT ISSUANCE → Certificate issued within last 7 days")
     
     if res.ct_issuers:
         issuers = res.ct_issuers.replace(";", ", ")
@@ -3044,55 +3051,55 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     # === EMAIL AUTHENTICATION ===
     if not res.dmarc_exists:
-        all_issues.append("NO DMARC → Gmail/Yahoo now REQUIRE DMARC; expect 10-30% lower inbox placement")
+        issue(weights.get('no_dmarc', 10), "NO DMARC → Gmail/Yahoo now REQUIRE DMARC; expect 10-30% lower inbox placement")
     elif res.dmarc_policy == "none":
-        all_issues.append("DMARC p=none → Zero spoofing protection; upgrade to p=quarantine or p=reject")
+        issue(weights.get('dmarc_none', 5), "DMARC p=none → Zero spoofing protection; upgrade to p=quarantine or p=reject")
     
     if not res.dkim_exists:
-        all_issues.append("NO DKIM → Missing cryptographic signature; 15-25% deliverability penalty")
+        issue(weights.get('no_dkim', 6), "NO DKIM → Missing cryptographic signature; 15-25% deliverability penalty")
     
     if not res.spf_exists:
-        all_issues.append("NO SPF → Cannot verify authorized senders; emails may be rejected or spam-foldered")
+        issue(weights.get('no_spf', 8), "NO SPF → Cannot verify authorized senders; emails may be rejected or spam-foldered")
     elif res.spf_mechanism == "~all":
-        all_issues.append("SPF ~all (softfail) → Weak enforcement; upgrade to -all for strict rejection")
+        issue(weights.get('spf_softfail_all', 2), "SPF ~all (softfail) → Weak enforcement; upgrade to -all for strict rejection")
     elif res.spf_mechanism == "?all":
-        all_issues.append("SPF ?all (neutral) → Provides zero protection; upgrade to -all")
+        issue(weights.get('spf_neutral_all', 5), "SPF ?all (neutral) → Provides zero protection; upgrade to -all")
     
     if res.dmarc_exists and not res.dmarc_rua:
-        all_issues.append("DMARC NO REPORTING → Cannot monitor authentication failures; add rua= tag")
+        issue(weights.get('dmarc_no_rua', 2), "DMARC NO REPORTING → Cannot monitor authentication failures; add rua= tag")
     
     # === INFRASTRUCTURE ===
     if not res.mx_exists:
-        all_issues.append("NO MX RECORDS → Cannot receive bounces; some providers reject senders without MX")
+        issue(weights.get('no_mx', 5), "NO MX RECORDS → Cannot receive bounces; some providers reject senders without MX")
     elif res.mx_is_null:
-        all_issues.append("NULL MX RECORD → Domain explicitly cannot receive email")
+        issue(weights.get('null_mx', 5), "NULL MX RECORD → Domain explicitly cannot receive email")
     
     if res.mx_provider_type == "disposable":
-        all_issues.append(f"DISPOSABLE MX PROVIDER ({res.mx_primary}) → Cheap/temporary email service commonly used for spam")
+        issue(weights.get('disposable_mx', 15), f"DISPOSABLE MX PROVIDER ({res.mx_primary}) → Cheap/temporary email service commonly used for spam")
     elif res.mx_provider_type == "selfhosted":
         if res.mx_is_mail_prefix:
-            all_issues.append(f"SELF-HOSTED MX ({res.mx_primary}) → mail.{{domain}} template pattern; common phishing infrastructure fingerprint")
+            issue(weights.get('selfhosted_mx_mail_prefix', 12), f"SELF-HOSTED MX ({res.mx_primary}) → mail.{{domain}} template pattern; common phishing infrastructure fingerprint")
         else:
-            all_issues.append(f"SELF-HOSTED MX ({res.mx_primary}) → MX points to own domain; no external provider oversight")
+            issue(weights.get('selfhosted_mx', 8), f"SELF-HOSTED MX ({res.mx_primary}) → MX points to own domain; no external provider oversight")
     
     if not res.ptr_exists:
-        all_issues.append("NO PTR RECORD → Corporate/enterprise email filters may reject")
+        issue(weights.get('no_ptr', 3), "NO PTR RECORD → Corporate/enterprise email filters may reject")
     elif not res.ptr_matches_forward:
-        all_issues.append("PTR MISMATCH → Forward/reverse DNS inconsistent; triggers spam filters")
+        issue(weights.get('ptr_mismatch', 5), "PTR MISMATCH → Forward/reverse DNS inconsistent; triggers spam filters")
     
     # v4.4: Specific TLS failure messages instead of generic "NO VALID HTTPS"
     if res.tls_handshake_failed:
-        all_issues.append(f"TLS HANDSHAKE FAILED ({res.tls_error}) → Server rejects secure connections; broken SSL config or intentional evasion")
+        issue(weights.get('no_https', 8), f"TLS HANDSHAKE FAILED ({res.tls_error}) → Server rejects secure connections; broken SSL config or intentional evasion")
     elif res.tls_connection_failed:
-        all_issues.append(f"TLS CONNECTION FAILED ({res.tls_error}) → Cannot reach port 443; no HTTPS service running")
+        issue(weights.get('no_https', 8), f"TLS CONNECTION FAILED ({res.tls_error}) → Cannot reach port 443; no HTTPS service running")
     elif not res.https_valid:
-        all_issues.append("NO VALID HTTPS → May indicate abandoned or suspicious domain")
+        issue(weights.get('no_https', 8), "NO VALID HTTPS → May indicate abandoned or suspicious domain")
     
     if res.is_suspicious_tld:
-        all_issues.append("HIGH-ABUSE TLD → This domain extension faces extra spam scrutiny")
+        issue(weights.get('suspicious_tld', 10), "HIGH-ABUSE TLD → This domain extension faces extra spam scrutiny")
     
     if res.is_free_hosting:
-        all_issues.append("FREE HOSTING PROVIDER → Associated with spam; limited reputation potential")
+        issue(weights.get('free_hosting', 10), "FREE HOSTING PROVIDER → Associated with spam; limited reputation potential")
     
     if res.hosting_provider and res.hosting_provider_type in ("budget_shared", "free", "suspect", "platform"):
         type_labels = {
@@ -3101,96 +3108,96 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             "suspect": f"SUSPECT HOST ({res.hosting_provider}) → Known bulletproof/abuse-tolerant hosting provider",
             "platform": f"DEV PLATFORM HOST ({res.hosting_provider}) → Developer platform with free tier; custom domains used for phishing infrastructure",
         }
-        all_issues.append(type_labels.get(res.hosting_provider_type, f"HOSTING: {res.hosting_provider}"))
+        issue(weights.get('hosting_provider_risk', 5), type_labels.get(res.hosting_provider_type, f"HOSTING: {res.hosting_provider}"))
     
     if res.blocked_asn_org_match:
-        all_issues.append(f"BLOCKED ASN ORG ({res.blocked_asn_org_match} / {res.hosting_asn_org}) → Domain hosted on blocked network; ASN {res.hosting_asn}")
+        issue(weights.get('blocked_asn', 30), f"BLOCKED ASN ORG ({res.blocked_asn_org_match} / {res.hosting_asn_org}) → Domain hosted on blocked network; ASN {res.hosting_asn}")
     
     if res.is_free_email_domain:
-        all_issues.append("FREE EMAIL PROVIDER DOMAIN → Cannot send bulk from consumer email domains")
+        issue(weights.get('free_email_domain', 10), "FREE EMAIL PROVIDER DOMAIN → Cannot send bulk from consumer email domains")
     
     # === WEB/REDIRECT ISSUES ===
     if res.redirect_count >= 2:
-        all_issues.append(f"REDIRECT CHAIN ({res.redirect_count} hops) → May trigger phishing detection")
+        issue(weights.get('redirect_chain', 8), f"REDIRECT CHAIN ({res.redirect_count} hops) → May trigger phishing detection")
     
     if res.redirect_cross_domain:
-        all_issues.append("CROSS-DOMAIN REDIRECT → Suspicious pattern common in phishing")
+        issue(weights.get('cross_domain_redirect', 10), "CROSS-DOMAIN REDIRECT → Suspicious pattern common in phishing")
     
     if res.redirect_uses_temp:
-        all_issues.append("TEMP REDIRECTS (302/307) → Suggests URL cloaking; triggers filters")
+        issue(weights.get('temp_redirects', 5), "TEMP REDIRECTS (302/307) → Suggests URL cloaking; triggers filters")
     
     if res.is_minimal_shell:
-        all_issues.append("MINIMAL/SHELL WEBSITE → Common phishing indicator")
+        issue(weights.get('minimal_shell', 15), "MINIMAL/SHELL WEBSITE → Common phishing indicator")
     
     if res.has_js_redirect:
-        all_issues.append("JAVASCRIPT REDIRECT → Suspicious redirect technique")
+        issue(weights.get('js_redirect', 12), "JAVASCRIPT REDIRECT → Suspicious redirect technique")
     
     if res.has_meta_refresh:
-        all_issues.append("META REFRESH REDIRECT → Often used for cloaking")
+        issue(weights.get('meta_refresh', 5), "META REFRESH REDIRECT → Often used for cloaking")
     
     if res.has_external_js:
-        all_issues.append("EXTERNAL JS LOADER → Content loaded from external source")
+        issue(weights.get('external_js_loader', 6), "EXTERNAL JS LOADER → Content loaded from external source")
     
     if res.has_suspicious_iframe:
-        all_issues.append("HIDDEN IFRAME → Often used to load malicious content")
+        issue(weights.get('suspicious_iframe', 8), "HIDDEN IFRAME → Often used to load malicious content")
     
     if res.is_parking_page:
-        all_issues.append("PARKING PAGE → Domain not actively used")
+        issue(weights.get('parking_page', 6), "PARKING PAGE → Domain not actively used")
     
     if res.form_posts_external:
-        all_issues.append("FORM POSTS EXTERNALLY → Credentials sent to different domain")
+        issue(weights.get('form_posts_external', 10), "FORM POSTS EXTERNALLY → Credentials sent to different domain")
     
     if res.has_sensitive_fields:
-        all_issues.append("SENSITIVE FORM FIELDS → Requests SSN/card numbers")
+        issue(weights.get('sensitive_fields', 10), "SENSITIVE FORM FIELDS → Requests SSN/card numbers")
     
     # === STATUS CODE SIGNALS (infrastructure intent) ===
     if res.has_401:
-        all_issues.append("401 UNAUTHORIZED → Public domain requires authentication - unusual")
+        issue(weights.get('status_401', 5), "401 UNAUTHORIZED → Public domain requires authentication - unusual")
     
     if res.has_403:
-        all_issues.append("403 FORBIDDEN → May be blocking scanners (cloaking)")
+        issue(weights.get('status_403', 5), "403 FORBIDDEN → May be blocking scanners (cloaking)")
     
     if res.has_429:
-        all_issues.append("429 RATE LIMITED → Throttling automated checks")
+        issue(weights.get('status_429', 3), "429 RATE LIMITED → Throttling automated checks")
     
     if res.has_503:
-        all_issues.append("503 UNAVAILABLE → Disposable/intermittent infrastructure")
+        issue(weights.get('status_503', 3), "503 UNAVAILABLE → Disposable/intermittent infrastructure")
     
     # === ACCESS RESTRICTION / TRUST SIGNALS (supplier fraud detection) ===
     # Skip trust/footprint signals if page is empty — redundant with empty page signal
     if not res.is_empty_page:
         if res.is_opaque_entity:
-            all_issues.append("OPAQUE ENTITY → Access blocked AND no corporate pages found - high B2B fraud risk")
+            issue(weights.get('opaque_entity', 20), "OPAQUE ENTITY → Access blocked AND no corporate pages found - high B2B fraud risk")
         elif res.is_access_restricted:
-            all_issues.append(f"ACCESS RESTRICTED → {res.access_restriction_note}")
+            issue(weights.get('access_restricted', 10), f"ACCESS RESTRICTED → {res.access_restriction_note}")
         
         if res.missing_trust_signals and not res.is_opaque_entity:
-            all_issues.append("NO CORPORATE FOOTPRINT → Missing /about, /contact, /privacy pages")
+            issue(weights.get('missing_trust_signals', 8), "NO CORPORATE FOOTPRINT → Missing /about, /contact, /privacy pages")
     
     if res.has_credential_form and not res.brands_detected:
-        all_issues.append("CREDENTIAL FORM DETECTED → Login form on landing page")
+        issue(weights.get('credential_form', 20), "CREDENTIAL FORM DETECTED → Login form on landing page")
     
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     if res.redirects_to_phishing_infra:
-        all_issues.append(f"REDIRECTS TO PHISHING INFRASTRUCTURE ({res.phishing_infra_domain}) → Known malicious hosting")
+        issue(weights.get('phishing_infra_redirect', 25), f"REDIRECTS TO PHISHING INFRASTRUCTURE ({res.phishing_infra_domain}) → Known malicious hosting")
     
     if res.has_doc_sharing_lure:
-        all_issues.append(f"DOCUMENT SHARING LURE → '{res.doc_lure_found}' - Common phishing tactic")
+        issue(weights.get('doc_sharing_lure', 15), f"DOCUMENT SHARING LURE → '{res.doc_lure_found}' - Common phishing tactic")
     
     if res.has_phishing_js_behavior:
-        all_issues.append(f"PHISHING KIT JS PATTERNS → Suspicious JavaScript: {res.phishing_js_patterns}")
+        issue(weights.get('phishing_js_behavior', 18), f"PHISHING KIT JS PATTERNS → Suspicious JavaScript: {res.phishing_js_patterns}")
     
     if res.has_email_in_url:
-        all_issues.append(f"EMAIL TRACKING IN URL → {res.url_email_tracking} - Victim tracking technique")
+        issue(weights.get('email_tracking_url', 20), f"EMAIL TRACKING IN URL → {res.url_email_tracking} - Victim tracking technique")
     
     if res.has_hijack_path_pattern:
-        all_issues.append(f"SUSPICIOUS URL PATH '/{res.hijack_path_found}/' → Common hijacked domain pattern")
+        issue(weights.get('hijack_path_pattern', 12), f"SUSPICIOUS URL PATH '/{res.hijack_path_found}/' → Common hijacked domain pattern")
     
     # === CUSTOM RULE LABELS ===
     if res.rules_labels:
         for label in res.rules_labels.split(';'):
             if label.strip():
-                all_issues.append(f"RULE: {label.strip()}")
+                issue(1, f"RULE: {label.strip()}")  # Rules have their own scoring; just ensure they show
     
     # === POSITIVE SIGNALS ===
     if res.spf_exists and res.spf_mechanism == "-all":
@@ -3265,12 +3272,16 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     else:
         parts.append(f"✅ APPROVE (Score: {res.risk_score})")
     
+    # Sort issues by weight (highest first), exclude zero-weight from summary
+    scored_issues = [(w, t) for w, t in all_issues if w > 0]
+    scored_issues.sort(key=lambda x: x[0], reverse=True)
+    
     # Top issues only (limit to 3 most important, keep it readable)
-    if all_issues:
-        top_issues = all_issues[:3]
+    if scored_issues:
+        top_issues = [text for _, text in scored_issues[:3]]
         parts.append(" • ".join(top_issues))
-        if len(all_issues) > 3:
-            parts.append(f"+{len(all_issues) - 3} more issues")
+        if len(scored_issues) > 3:
+            parts.append(f"+{len(scored_issues) - 3} more issues")
     
     # Positive signals (compact)
     if positives:
@@ -3722,7 +3733,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             "partial match on known phishing infrastructure fingerprint"
         )
     
-    res.summary = generate_summary(res, signals, res.domain_age_days >= 0)
+    res.summary = generate_summary(res, signals, res.domain_age_days >= 0, weights)
 
 
 # ============================================================================
