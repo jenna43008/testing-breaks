@@ -4127,11 +4127,13 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.whois_updated = we["updated_date"]
             res.whois_recently_updated_days = we["updated_days_ago"]
             res.domain_transfer_locked = we["transfer_locked"]
-            # Transfer lock RECENTLY ADDED = lock present + WHOIS updated within 90 days
-            # This is the #1 signal for "compromise found and locked down"
+            # Transfer lock RECENTLY ADDED on OLD domain = post-compromise lockdown
+            # New domains get transfer locks by default from registrars — that's normal.
+            # The signal is: established domain (>1yr) + lock added recently (WHOIS updated ≤90d)
             res.domain_transfer_lock_recent = (
                 we["transfer_locked"] and
-                0 <= we["updated_days_ago"] <= 90
+                0 <= we["updated_days_ago"] <= 90 and
+                res.domain_age_days > 365
             )
             if we["updated_days_ago"] >= 0 and we["updated_days_ago"] <= 30:
                 res.whois_recently_updated = True
