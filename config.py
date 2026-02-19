@@ -25,33 +25,33 @@ DEFAULT_CONFIG = {
         "domain_blacklisted": 45,
         "ip_blacklisted": 40,
         "blacklist_inconclusive": 15,  # v6.2: DNSBL check timed out — "unknown" ≠ "clean"
-        "typosquat_detected": 40,
+        "typosquat_detected": 15,
         "brand_impersonation": 35,
-        "malware_links": 50,
+        "malware_links": 100,
         "disposable_email": 40,
-        "spf_pass_all": 40,           # +all allows anyone to spoof - security risk
-        "domain_lt_7d": 35,           # Brand new domain - high risk
-        "credential_form": 12,        # Only concerning if combined with other signals
+        "spf_pass_all": 0,           # +all allows anyone to spoof - security risk
+        "domain_lt_7d": 0,           # Brand new domain - high risk
+        "credential_form": 25,        # Only concerning if combined with other signals
         "sensitive_fields": 10,
         
         # === VIRUSTOTAL REPUTATION ===
-        "vt_malicious_high": 65,           # 5+ vendors flag as malicious — should deny alone
-        "vt_malicious_medium": 40,         # 3-4 vendors flag as malicious
+        "vt_malicious_high": 100,           # 5+ vendors flag as malicious — should deny alone
+        "vt_malicious_medium": 100,         # 3-4 vendors flag as malicious
         "vt_malicious_low": 22,            # 1-2 vendors flag as malicious
         "vt_suspicious": 15,               # 3+ vendors flag as suspicious
         "vt_suspicious_low": 5,            # 1-2 vendors flag as suspicious
-        "vt_negative_community": 10,       # Negative community reputation
-        "vt_clean": -5,                    # Clean bill from 50+ vendors (bonus)
+        "vt_negative_community": 25,       # Negative community reputation
+        "vt_clean": 0,                    # Clean bill from 50+ vendors (bonus)
         
         # === HACKLINK / SEO SPAM DETECTION ===
-        "hacklink_detected": 50,           # Hacklink SEO spam injection confirmed
-        "hacklink_keywords": 15,           # Hacklink keywords present (below detection threshold)
-        "hacklink_wp_compromised": 45,     # WordPress compromise indicators
+        "hacklink_detected": 100,           # Hacklink SEO spam injection confirmed
+        "hacklink_keywords": 25,           # Hacklink keywords present (below detection threshold)
+        "hacklink_wp_compromised": 50,     # WordPress compromise indicators
         "hacklink_vulnerable_plugins": 25, # Known exploitable WP plugins
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
-        "malicious_script": 65,            # SocGholish/FakeUpdates/obfuscated script injection — INSTANT DENY territory
-        "hidden_injection": 55,            # CSS-hidden content injection (hacklink fingerprint) — confirmed compromise
-        "cpanel_detected": 8,              # cPanel hosting (common hacklink target, not malicious alone)
+        "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — INSTANT DENY territory
+        "hidden_injection": 100,            # CSS-hidden content injection (hacklink fingerprint) — confirmed compromise
+        "cpanel_detected": 25,              # cPanel hosting (common hacklink target, not malicious alone)
         
         # === TRANSFER LOCK / DOMAIN TAKEOVER ===
         "transfer_lock_recent": 15,        # Transfer lock recently added (post-compromise lockdown signal)
