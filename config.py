@@ -17,7 +17,7 @@ DEFAULT_CONFIG = {
     "timeout": 10.0,
     "check_rdap": True,
     "admin_password": "admin123",  # CHANGE THIS!
-    "vt_api_key": "",              # VirusTotal API key (free tier: 4 req/min, 500 req/day)
+    "vt_api_key": "3b4caf4818ac9630c9fae5226522348ec9d7723c34b4f5a973dd3afdd31f287f",   # VirusTotal API key (hardcoded)
     
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
