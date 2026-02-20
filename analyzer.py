@@ -393,7 +393,7 @@ class DomainApprovalResult:
     whois_updated: str = ""                      # WHOIS last-updated date (ISO)
     whois_statuses: str = ""                     # Semicolon-separated domain statuses
     domain_transfer_locked: bool = True          # clientTransferProhibited present (default True = safe)
-    domain_transfer_lock_missing: bool = False   # Explicit: lock is absent (risk signal)
+    domain_transfer_lock_recent: bool = False    # Lock recently added on old domain (post-compromise lockdown signal)
     whois_recently_updated: bool = False         # WHOIS updated in last 30 days
     whois_recently_updated_days: int = -1        # Days since last WHOIS update
     
@@ -3016,11 +3016,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append(f"SUSPICIOUS EXTERNAL SCRIPTS ({scripts}) → Third-party scripts from known-bad or suspicious domains")
     
     # === TRANSFER LOCK / DOMAIN TAKEOVER ===
-    if res.domain_transfer_lock_missing:
-        age_note = ""
-        if res.domain_age_days >= 365:
-            age_note = f" (domain is {res.domain_age_days}d old — unlocked + aged = possible takeover)"
-        all_issues.append(f"TRANSFER LOCK MISSING → Domain not locked against transfers{age_note}")
+    if res.domain_transfer_lock_recent:
+        days = res.whois_recently_updated_days
+        all_issues.append(f"RECENT TRANSFER LOCK → Lock added recently ({days}d ago) on established domain — possible post-compromise lockdown by owner/registrar")
     
     if res.whois_recently_updated:
         days = res.whois_recently_updated_days
@@ -3292,7 +3290,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('FREE EMAIL PROVIDER', weights.get('free_email_domain', 15)),
             ('DOCUMENT SHARING LURE', weights.get('doc_lure', 15)),
             ('PHISHING KIT JS', weights.get('phishing_js', 15)),
-            ('TRANSFER LOCK', weights.get('transfer_lock_missing', 15)),
+            ('TRANSFER LOCK', weights.get('transfer_lock_recent', 15)),
             ('CT RECENT ISSUANCE ON OLD', weights.get('ct_recent_issuance', 8)),
             ('NO CT HISTORY', weights.get('ct_no_history', 12)),
             ('SENSITIVE FORM', weights.get('sensitive_fields', 12)),
@@ -3712,8 +3710,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("cpanel_detected", weights.get('cpanel_detected', 8))
     
     # === TRANSFER LOCK / WHOIS ENRICHMENT ===
-    if res.domain_transfer_lock_missing:
-        add("transfer_lock_missing", weights.get('transfer_lock_missing', 15))
+    if res.domain_transfer_lock_recent:
+        add("transfer_lock_recent", weights.get('transfer_lock_recent', 15))
     
     if res.whois_recently_updated:
         add("whois_recently_updated", weights.get('whois_recently_updated', 10))
@@ -4241,7 +4239,12 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.whois_updated = we["updated_date"]
             res.whois_recently_updated_days = we["updated_days_ago"]
             res.domain_transfer_locked = we["transfer_locked"]
-            res.domain_transfer_lock_missing = not we["transfer_locked"]
+            # Recently-added lock on established domain = post-compromise lockdown signal
+            # Lock present + WHOIS updated ≤90 days + domain >1yr old
+            if (we["transfer_locked"] and 
+                we["updated_days_ago"] >= 0 and we["updated_days_ago"] <= 90 and
+                res.domain_age_days >= 365):
+                res.domain_transfer_lock_recent = True
             if we["updated_days_ago"] >= 0 and we["updated_days_ago"] <= 30:
                 res.whois_recently_updated = True
         except Exception:
