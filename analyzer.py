@@ -4,6 +4,18 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 7.2 (Feb 2026)
+- MALICIOUS SCRIPT detection overhaul: replaced broad single-regex SocGholish pattern
+  with multi-signal scoring architecture (10 weighted signals, CDN whitelist, Shannon
+  entropy path analysis, NDSW/NDSX pattern matching)
+- CDN WHITELIST: 50+ known-good script domains excluded from detection to eliminate
+  false positives from legitimate React/Angular/Vue SPAs loading jQuery, Analytics, etc.
+- CONFIDENCE LEVELS: malicious_script now reports HIGH (5+ signal score, full weight)
+  or MEDIUM (3-4 signal score, reduced weight) instead of binary flag
+- New config weight: malicious_script_medium (default 25) for MEDIUM-confidence detections
+- New result fields: hacklink_malicious_script_confidence, hacklink_malicious_script_signals,
+  hacklink_malicious_script_score
+
 VERSION: 7.1 (Feb 2026)
 - MALICIOUS SCRIPT detection: SocGholish/FakeUpdates/obfuscated script injection scored as
   standalone high-weight signal (40 pts) — extracted from hacklink scanner's injection_patterns
@@ -84,7 +96,7 @@ VERSION: 4.4 (Feb 2026)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "7.1"
+ANALYZER_VERSION = "7.2"
 
 import re
 import json
@@ -384,6 +396,9 @@ class DomainApprovalResult:
     hacklink_vulnerable_plugins: str = ""         # Semicolon-separated vulnerable WP plugins
     hacklink_spam_link_count: int = 0            # Number of spam links found in content
     hacklink_malicious_script: bool = False       # SocGholish/FakeUpdates/obfuscated script injection
+    hacklink_malicious_script_confidence: str = "" # HIGH, MEDIUM, or NONE — multi-signal confidence level
+    hacklink_malicious_script_signals: str = ""    # Semicolon-separated signal names that fired
+    hacklink_malicious_script_score: int = 0       # Accumulated multi-signal score
     hacklink_hidden_injection: bool = False       # CSS hidden content injection (display:none, font-size:0)
     hacklink_is_cpanel: bool = False              # cPanel hosting environment detected
     hacklink_suspicious_scripts: str = ""         # Semicolon-separated suspicious external script URLs
@@ -3003,7 +3018,12 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     # === MALICIOUS SCRIPT / HIDDEN INJECTION (HIGH-VALUE SIGNALS) ===
     if res.hacklink_malicious_script:
-        all_issues.append("🚨 MALICIOUS SCRIPT INJECTION → SocGholish/FakeUpdates-style obfuscated script detected in page; domain is actively compromised")
+        conf = res.hacklink_malicious_script_confidence
+        signals = res.hacklink_malicious_script_signals.replace(";", ", ")[:100] if res.hacklink_malicious_script_signals else "unknown"
+        if conf == "HIGH":
+            all_issues.append(f"🚨 MALICIOUS SCRIPT INJECTION (HIGH confidence) → SocGholish/FakeUpdates-style obfuscated script detected; signals: {signals}")
+        else:
+            all_issues.append(f"⚠️ SUSPICIOUS SCRIPT DETECTED (MEDIUM confidence) → Potentially malicious script patterns found; signals: {signals}")
     
     if res.hacklink_hidden_injection:
         all_issues.append("🚨 HIDDEN CONTENT INJECTION → CSS-cloaked content (display:none, font-size:0) with links; classic hacklink/SEO spam technique")
@@ -3258,7 +3278,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         # Ordered by severity — first match wins
         _map = [
             ('HIGH-RISK PHISHING INFRA', 100),
-            ('MALICIOUS SCRIPT INJECTION', weights.get('malicious_script', 65)),
+            ('MALICIOUS SCRIPT INJECTION (HIGH', weights.get('malicious_script', 100)),
+            ('SUSPICIOUS SCRIPT DETECTED (MEDIUM', weights.get('malicious_script_medium', 25)),
             ('VT MALICIOUS', weights.get('vt_malicious_high', 65)),
             ('HIDDEN CONTENT INJECTION', weights.get('hidden_injection', 55)),
             ('BLACKLISTED DOMAIN', weights.get('domain_blacklisted', 50)),
@@ -3698,8 +3719,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("hacklink_spam_links", weights.get('hacklink_spam_links', 35))
     
     # === MALICIOUS SCRIPT INJECTION (SocGholish/FakeUpdates/obfuscated) ===
+    # v7.2: Multi-signal confidence — HIGH gets full weight, MEDIUM gets reduced weight
     if res.hacklink_malicious_script:
-        add("malicious_script", weights.get('malicious_script', 65))
+        if res.hacklink_malicious_script_confidence == "HIGH":
+            add("malicious_script", weights.get('malicious_script', 100))
+        elif res.hacklink_malicious_script_confidence == "MEDIUM":
+            add("malicious_script", weights.get('malicious_script_medium', 25))
     
     # === HIDDEN CONTENT INJECTION (CSS cloaking: display:none, font-size:0) ===
     if res.hacklink_hidden_injection:
@@ -4208,7 +4233,13 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             
             # Parse injection_patterns for malicious_script and hidden_injection flags
             inj_patterns = hl_result.get("injection_patterns", [])
-            res.hacklink_malicious_script = any("malicious_script" in p for p in inj_patterns)
+            # v7.2: Use multi-signal confidence instead of binary pattern matching
+            ms_confidence = hl_result.get("malicious_script_confidence", "NONE")
+            res.hacklink_malicious_script = ms_confidence in ("HIGH", "MEDIUM")
+            res.hacklink_malicious_script_confidence = ms_confidence
+            ms_signals = hl_result.get("malicious_script_signals", [])
+            res.hacklink_malicious_script_signals = ";".join(ms_signals) if ms_signals else ""
+            res.hacklink_malicious_script_score = hl_result.get("malicious_script_score", 0)
             res.hacklink_hidden_injection = any("hidden_content" in p for p in inj_patterns)
             
             # Suspicious external scripts
