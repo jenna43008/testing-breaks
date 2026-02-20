@@ -91,8 +91,11 @@ SUSPICIOUS_SCRIPT_DOMAINS = [
     r'\.buzz/.*\.js',
     r'\.click/.*\.js',
     r'\.link/.*\.js',
-    r'googletagmanager.*(?!google)',
-    r'google-analytics.*\.(?!google\.com)',
+    # Only flag googletagmanager URLs NOT from the real googletagmanager.com
+    # e.g. googletagmanager.evil.com or fake-googletagmanager.net
+    r'googletagmanager(?!\.com[/?\s"\'])',
+    # Only flag google-analytics URLs NOT from the real google-analytics.com
+    r'google-analytics(?!\.com[/?\s"\'])',
 ]
 
 WP_COMPROMISE_PATTERNS = [
