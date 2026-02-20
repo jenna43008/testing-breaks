@@ -2267,12 +2267,12 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
             result["final_url"] = current
             result["chain"].append(status)
             
-            if fetch_content and status == 200:
+            if fetch_content:
                 try:
                     result["content"] = resp.content[:50000]
                     result["content_length"] = len(result["content"])
-                except Exception:
-                    pass
+                except Exception as e:
+                    result["error"] = f"content_read_failed: {str(e)[:150]}"
             return result
 
         # v4.4 FIX: typed exception handling (was bare `except:` that silently returned)
@@ -3961,10 +3961,13 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.content_length = http_result["content_length"]
     
     # === EMPTY PAGE DETECTION ===
-    # A reachable domain that returns empty/near-empty content is suspicious
+    # A reachable domain that returns 200 with empty/near-empty content is suspicious
     # (parked, abandoned, or stripped after compromise)
+    # Do NOT flag as empty if the site returned 401/403 (access restricted) or 5xx (server error)
+    # — those aren't "empty pages", they're blocked or broken
     if res.https_reachable or res.http_reachable:
-        if not content or len(content.strip()) < 50:
+        is_error_response = res.is_access_restricted or res.has_5xx or res.has_503
+        if not is_error_response and (not content or len(content.strip()) < 50):
             res.is_empty_page = True
     
     if content:
