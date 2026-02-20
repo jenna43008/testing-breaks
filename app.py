@@ -308,7 +308,7 @@ def display_results(results: list):
             "hacklink_detected": st.column_config.CheckboxColumn("🕷️ Hacklink", width="small"),
             "hacklink_malicious_script": st.column_config.CheckboxColumn("💀 Mal Script", width="small"),
             "hacklink_hidden_injection": st.column_config.CheckboxColumn("💀 Hidden Inj", width="small"),
-            "domain_transfer_lock_recent": st.column_config.CheckboxColumn("🔒 Recent Lock", width="small"),
+            "domain_transfer_lock_missing": st.column_config.CheckboxColumn("🔓 No Lock", width="small"),
             "is_empty_page": st.column_config.CheckboxColumn("📄 Empty", width="small"),
             "ct_log_count": st.column_config.NumberColumn("📜 CT Certs", width="small"),
             "asn_display": st.column_config.TextColumn("ASN", width="medium"),
@@ -321,15 +321,17 @@ def display_results(results: list):
         # Column selector
         with st.expander("🔧 Select columns to display"):
             all_cols = df.columns.tolist()
+            desired_defaults = ['domain', 'risk_score', 'recommendation', 'summary', 
+                        'vt_malicious_count', 'hacklink_detected',
+                        'hacklink_malicious_script', 'hacklink_hidden_injection',
+                        'domain_transfer_lock_missing',
+                        'asn_display', 'rules_triggered',
+                        'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
+            safe_defaults = [c for c in desired_defaults if c in all_cols]
             selected_cols = st.multiselect(
                 "Columns",
                 all_cols,
-                default=['domain', 'risk_score', 'recommendation', 'summary', 
-                        'vt_malicious_count', 'hacklink_detected',
-                        'hacklink_malicious_script', 'hacklink_hidden_injection',
-                        'domain_transfer_lock_recent',
-                        'asn_display', 'rules_triggered',
-                        'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
+                default=safe_defaults
             )
             if selected_cols:
                 st.dataframe(df[selected_cols], use_container_width=True)
@@ -623,26 +625,17 @@ def display_results(results: list):
         
         # === DOMAIN TAKEOVER / TRANSFER LOCK ===
         has_takeover_signal = (
-            domain_data.get('domain_transfer_lock_recent') or 
+            domain_data.get('domain_transfer_lock_missing') or 
             domain_data.get('whois_recently_updated') or
             (domain_data.get('ct_recent_issuance') and domain_data.get('domain_age_days', 0) > 365)
         )
         if has_takeover_signal:
-            with st.expander("🔒 Domain Takeover Indicators", expanded=True):
+            with st.expander("🔓 Domain Takeover Indicators", expanded=True):
                 tk_col1, tk_col2, tk_col3 = st.columns(3)
                 with tk_col1:
-                    locked = domain_data.get('domain_transfer_locked', False)
-                    recent = domain_data.get('domain_transfer_lock_recent', False)
-                    if recent:
-                        icon = "🔴"
-                        label = "RECENTLY LOCKED"
-                    elif locked:
-                        icon = "🟢"
-                        label = "Locked"
-                    else:
-                        icon = "⚪"
-                        label = "No Lock"
-                    st.metric(f"{icon} Transfer Lock", label)
+                    locked = domain_data.get('domain_transfer_locked', True)
+                    icon = "🟢" if locked else "🔴"
+                    st.metric(f"{icon} Transfer Lock", "Locked" if locked else "UNLOCKED")
                 with tk_col2:
                     days = domain_data.get('whois_recently_updated_days', -1)
                     if days >= 0:
@@ -658,12 +651,12 @@ def display_results(results: list):
                 if statuses:
                     st.caption(f"Domain statuses: {statuses.replace(';', ', ')}")
                 
-                if domain_data.get('domain_transfer_lock_recent'):
+                if domain_data.get('domain_transfer_lock_missing'):
                     age = domain_data.get('domain_age_days', -1)
                     if age > 365:
-                        st.error(f"**⚠️ RECENTLY LOCKED + {age}d OLD** — Transfer lock added within 90 days on established domain = post-compromise lockdown")
+                        st.error(f"**⚠️ UNLOCKED + {age}d OLD** — Established domain without transfer lock is a strong takeover indicator")
                     else:
-                        st.warning("**Transfer lock recently added** — Lock applied within last 90 days; may indicate response to compromise or ownership dispute")
+                        st.warning("**Transfer lock missing** — Domain is not protected against unauthorized transfers")
                 
                 if domain_data.get('whois_recently_updated'):
                     st.warning(f"**WHOIS recently updated** ({domain_data.get('whois_recently_updated_days')}d ago) — Possible ownership change, transfer, or DNS hijack")
@@ -763,7 +756,7 @@ def admin_view():
             "Hacklink / SEO Spam": ['hacklink_detected', 'hacklink_keywords', 'hacklink_wp_compromised',
                                     'hacklink_vulnerable_plugins', 'hacklink_spam_links'],
             "Malicious Script / Hidden Injection": ['malicious_script', 'hidden_injection', 'cpanel_detected'],
-            "Transfer Lock / Domain Takeover": ['transfer_lock_recent', 'whois_recently_updated'],
+            "Transfer Lock / Domain Takeover": ['transfer_lock_missing', 'whois_recently_updated'],
             "Empty Page / Cert Transparency": ['empty_page', 'ct_recent_issuance', 'ct_no_history'],
         }
         
@@ -790,11 +783,9 @@ def admin_view():
         merged_weights = {**weights, **new_weights}
         config['weights'] = merged_weights
         
-        # Load what's actually on disk to compare against
-        saved_config = load_config()
-        saved_weights = saved_config.get('weights', {})
+        # Detect changes and show save button
         has_changes = any(
-            merged_weights.get(s, 0) != saved_weights.get(s, DEFAULT_CONFIG['weights'].get(s, 0))
+            merged_weights.get(s, 0) != DEFAULT_CONFIG['weights'].get(s, 0)
             for s in new_weights
         )
         
@@ -804,7 +795,6 @@ def admin_view():
             if st.button("💾 Save Weight Changes", type="primary", key="save_weights"):
                 save_config(config)
                 st.success("✅ Weights saved to disk!")
-                has_changes = False  # Just saved — suppress the warning
         with col_reset:
             if st.button("🔄 Reset to Defaults", key="reset_weights"):
                 config['weights'] = copy.deepcopy(DEFAULT_CONFIG['weights'])
@@ -952,7 +942,7 @@ def admin_view():
                 "cpanel_detected": "cPanel shared hosting environment detected — cPanel servers are the #1 target for mass hacklink injection campaigns",
             },
             "Transfer Lock / Domain Takeover": {
-                "transfer_lock_recent": "clientTransferProhibited recently added (within 90 days) — post-compromise lockdown signal",
+                "transfer_lock_missing": "Domain missing clientTransferProhibited status — not locked against unauthorized transfers",
                 "whois_recently_updated": "WHOIS record updated within last 30 days — possible ownership change, transfer, or DNS hijack",
                 "domain_gt_1yr": "Domain registered more than 1 year ago — established (used in takeover combos)",
             },
