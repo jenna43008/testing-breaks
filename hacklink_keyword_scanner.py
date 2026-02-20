@@ -13,11 +13,13 @@ or has certificate issues is itself suspicious for a sending domain.
 """
 
 import re
+import math
 import socket
 import urllib.request
 import urllib.error
 import ssl
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 
 # ================================================================
@@ -40,14 +42,125 @@ TURKISH_HACKLINK_KEYWORDS = [
     "oto çekici", "nakliyat",
 ]
 
-SOCGHOLISH_PATTERNS = [
-    r'<script[^>]*src=["\']https?://[^"\']*\.js["\'][^>]*>.*?</script>',
-    r'document\.write\s*\(\s*unescape\s*\(',
-    r'eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*d\s*\)',
-    r'String\.fromCharCode\s*\(\s*\d+',
-    r'window\[.atob\(',
-    r'<script[^>]*>\s*var\s+_0x[a-f0-9]+\s*=',
-]
+# ================================================================
+# SocGholish / FakeUpdate Multi-Signal Detection (v7.2)
+# ================================================================
+# Replaces the broad single-regex approach with weighted signals.
+# Each signal has a name, weight, and detection logic.
+# Signals accumulate; threshold of 3+ triggers detection.
+#
+# Why: The old pattern `<script[^>]*src=...\.js...>` matched ANY
+# external JS file, causing false positives on React SPAs loading
+# jQuery from CDN, Google Analytics, Stripe, etc.
+# ================================================================
+
+# CDN / known-good script domains — NEVER flag these as suspicious.
+# Scripts served from these domains are legitimate third-party resources.
+CDN_WHITELIST = {
+    # Major CDNs
+    "cdnjs.cloudflare.com", "cdn.jsdelivr.net", "unpkg.com",
+    "ajax.googleapis.com", "ajax.aspnetcdn.com",
+    "cdn.bootcdn.net", "cdn.staticfile.org", "cdn.bootcss.com",
+    
+    # jQuery / Bootstrap / common libraries
+    "code.jquery.com", "stackpath.bootstrapcdn.com",
+    "maxcdn.bootstrapcdn.com", "cdn.datatables.net",
+    
+    # Google services
+    "www.googletagmanager.com", "googletagmanager.com",
+    "www.google-analytics.com", "google-analytics.com",
+    "www.gstatic.com", "apis.google.com",
+    "maps.googleapis.com", "www.google.com",
+    "pagead2.googlesyndication.com", "adservice.google.com",
+    "www.googleadservices.com",
+    
+    # Analytics / marketing (legitimate)
+    "cdn.segment.com", "js.hs-scripts.com", "js.hsforms.net",
+    "static.hotjar.com", "snap.licdn.com", "connect.facebook.net",
+    "platform.twitter.com", "widgets.leadconnectorhq.com",
+    "cdn.heapanalytics.com", "cdn.amplitude.com",
+    "cdn.mxpnl.com", "cdn.optimizely.com",
+    "js.intercomcdn.com", "widget.intercom.io",
+    "js.driftt.com", "cdn.pendo.io",
+    
+    # Payment / e-commerce
+    "js.stripe.com", "checkout.stripe.com",
+    "www.paypal.com", "www.paypalobjects.com",
+    "sdk.mercadopago.com",
+    
+    # Fonts / icons
+    "fonts.googleapis.com", "use.fontawesome.com",
+    "kit.fontawesome.com", "use.typekit.net",
+    
+    # Cloud / hosting platforms (serving legitimate app bundles)
+    "cdn.shopify.com", "cdn.squarespace.com",
+    "assets.squarespace.com", "static.wixstatic.com",
+    "cdn.wix.com", "cdn.hubspot.com",
+    
+    # reCAPTCHA / security
+    "www.google.com", "www.recaptcha.net",
+    "challenges.cloudflare.com", "js.hcaptcha.com",
+    
+    # Microsoft
+    "ajax.aspnetcdn.com", "appsforoffice.microsoft.com",
+    
+    # React / Vue / Angular CDN patterns
+    "reactjs.org", "vuejs.org", "angular.io",
+}
+
+# Patterns that are CRITICAL (weight=3) — near-certain SocGholish
+SOCGHOLISH_CRITICAL_PATTERNS = {
+    # ndsw / ndsx variables — THE canonical SocGholish marker
+    "NDSW_NDSX_VARIABLE": re.compile(
+        r'(?:var|let|const)\s+(?:ndsw|ndsx|_ndsw|_ndsx)\s*=', re.IGNORECASE
+    ),
+    # s_code.js?cid= pattern — known SocGholish loader URL format
+    "SCODE_CID_PATTERN": re.compile(
+        r'src=["\'][^"\']*s_code\.js\?cid=["\']', re.IGNORECASE
+    ),
+}
+
+# Patterns that are HIGH weight (weight=2)
+SOCGHOLISH_HIGH_PATTERNS = {
+    # eval(atob(...)) chain — decoding + executing Base64 payload
+    "EVAL_ATOB_CHAIN": re.compile(
+        r'eval\s*\(\s*(?:window\.)?\s*atob\s*\(', re.IGNORECASE
+    ),
+    # document.write(<script...) — injecting script tags dynamically
+    "DOCUMENT_WRITE_SCRIPT": re.compile(
+        r'document\.write\s*\(\s*(?:unescape\s*\(|["\']<\s*script)', re.IGNORECASE
+    ),
+    # Packed JavaScript: eval(function(p,a,c,k,e,d)...) — Dean Edwards packer
+    "PACKED_JS": re.compile(
+        r'eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*d\s*\)', re.IGNORECASE
+    ),
+    # var _0x[hex] = [...] — common JS obfuscator output
+    "HEX_OBFUSCATED_ARRAY": re.compile(
+        r'var\s+_0x[a-f0-9]{4,}\s*=\s*\[', re.IGNORECASE
+    ),
+    # jQuery masquerade: non-CDN script pretending to be jQuery
+    # (actual jQuery is on CDN whitelist; non-CDN "jquery" is suspicious)
+    "JQUERY_MASQUERADE": re.compile(
+        r'src=["\'][^"\']*jquery[^"\']*\.js["\']', re.IGNORECASE
+    ),
+}
+
+# Patterns that are MODERATE weight (weight=1)
+SOCGHOLISH_MODERATE_PATTERNS = {
+    # String.fromCharCode obfuscation
+    "FROMCHARCODE_CHAIN": re.compile(
+        r'String\.fromCharCode\s*\(\s*\d+\s*(?:,\s*\d+\s*){5,}', re.IGNORECASE
+    ),
+    # User-agent conditional check in inline script (SocGholish fingerprints visitors)
+    "CONDITIONAL_UA_CHECK": re.compile(
+        r'navigator\s*\.\s*userAgent.*(?:Windows|MSIE|Trident|Chrome).*(?:document\.write|eval|window\.location)',
+        re.IGNORECASE | re.DOTALL
+    ),
+    # Large Base64 payload (>100 chars) inside inline script
+    "BASE64_PAYLOAD": re.compile(
+        r'atob\s*\(\s*["\'][A-Za-z0-9+/=]{100,}["\']', re.IGNORECASE
+    ),
+}
 
 HIDDEN_CONTENT_PATTERNS = [
     # --- Inline style hiding with embedded links (the #1 real-world pattern) ---
@@ -202,6 +315,9 @@ class HacklinkKeywordScanner:
                 "wp_plugins": [],
                 "vulnerable_plugins": [],
                 "spam_link_count": 0,
+                "malicious_script_confidence": "NONE",
+                "malicious_script_signals": [],
+                "malicious_script_score": 0,
                 "google_dorks": self._generate_google_dorks(domain, domain_name_keywords, [], False),
                 "findings": findings,
                 "fetch_error": fetch_error,
@@ -267,18 +383,129 @@ class HacklinkKeywordScanner:
                               f"Pattern: {pattern[:60]}..."
                 })
 
-        # ----- 3. SocGholish/Malicious Script Detection -----
-        for pattern in SOCGHOLISH_PATTERNS:
-            matches = re.findall(pattern, page_content, re.IGNORECASE | re.DOTALL)
-            if matches:
-                injection_patterns.append(f"malicious_script: {pattern[:50]}")
-                score = min(score + 15, 30)
+        # ----- 3. SocGholish/Malicious Script Detection (Multi-Signal v7.2) -----
+        # Accumulates weighted signals instead of matching a single broad regex.
+        # CDN-hosted scripts are whitelisted. Threshold: 3+ = MEDIUM, 5+ = HIGH.
+        soc_signals = []  # List of (signal_name, weight) tuples
+        soc_score_val = 0
+        page_domain = domain.lower().split(':')[0]  # strip port if present
+
+        # --- 3a. Inline script analysis ---
+        inline_scripts = re.findall(
+            r'<script(?:\s[^>]*)?>(.+?)</script>',
+            page_content, re.IGNORECASE | re.DOTALL
+        )
+        for script_content in inline_scripts:
+            # CRITICAL patterns (weight=3 each)
+            for sig_name, pattern in SOCGHOLISH_CRITICAL_PATTERNS.items():
+                if pattern.search(script_content):
+                    soc_signals.append((sig_name, 3))
+            # HIGH patterns (weight=2 each)
+            for sig_name, pattern in SOCGHOLISH_HIGH_PATTERNS.items():
+                # Skip JQUERY_MASQUERADE for inline scripts (it's for src= attributes)
+                if sig_name == "JQUERY_MASQUERADE":
+                    continue
+                if pattern.search(script_content):
+                    soc_signals.append((sig_name, 2))
+            # MODERATE patterns (weight=1 each)
+            for sig_name, pattern in SOCGHOLISH_MODERATE_PATTERNS.items():
+                if pattern.search(script_content):
+                    soc_signals.append((sig_name, 1))
+
+        # --- 3b. External script analysis ---
+        script_srcs = re.findall(
+            r'<script[^>]*src=["\']([^"\']+)["\']',
+            page_content, re.IGNORECASE
+        )
+        for src in script_srcs:
+            src_domain = self._extract_script_domain(src)
+            if not src_domain:
+                continue
+
+            # Skip whitelisted CDN domains
+            if self._is_whitelisted_cdn(src_domain):
+                continue
+
+            # Skip same-domain scripts (site's own JS bundles)
+            if src_domain == page_domain or src_domain.endswith('.' + page_domain):
+                continue
+
+            # --- Signal: UNKNOWN_EXTERNAL_SCRIPT (+1) ---
+            # External .js from non-CDN, non-same-domain source
+            soc_signals.append(("UNKNOWN_EXTERNAL_SCRIPT", 1))
+
+            # --- Signal: HIGH_ENTROPY_PATH (+2) ---
+            # SocGholish URLs have randomized paths with entropy > 4.0 bits/char
+            url_path = urlparse(src).path if '/' in src else src
+            path_entropy = self._calculate_path_entropy(url_path)
+            if path_entropy > 4.0 and len(url_path) > 25:
+                soc_signals.append(("HIGH_ENTROPY_PATH", 2))
+
+            # --- Signal: ASYNC_UNKNOWN_DOMAIN (+1) ---
+            # Check if this script tag has async attribute
+            # Re-find the full tag for this src
+            async_pattern = re.compile(
+                r'<script[^>]*\basync\b[^>]*src=["\']' + re.escape(src) + r'["\']|'
+                r'<script[^>]*src=["\']' + re.escape(src) + r'["\'][^>]*\basync\b',
+                re.IGNORECASE
+            )
+            if async_pattern.search(page_content):
+                soc_signals.append(("ASYNC_UNKNOWN_DOMAIN", 1))
+
+            # --- Signal: JQUERY_MASQUERADE (+2) ---
+            # Non-CDN script with "jquery" in filename
+            if SOCGHOLISH_HIGH_PATTERNS["JQUERY_MASQUERADE"].search(f'src="{src}"'):
+                soc_signals.append(("JQUERY_MASQUERADE", 2))
+
+            # --- Signal: SUSPICIOUS_TLD_SCRIPT (+1) ---
+            # Script from high-abuse TLD (.top, .buzz, .click, .link, .xyz)
+            if re.search(r'\.(top|buzz|click|link|xyz|gq|ml|cf|ga|tk)$', src_domain, re.IGNORECASE):
+                soc_signals.append(("SUSPICIOUS_TLD_SCRIPT", 1))
+
+        # --- 3c. Deduplicate signals (same signal name counts once) ---
+        seen_signals = set()
+        deduped_signals = []
+        for sig_name, weight in soc_signals:
+            if sig_name not in seen_signals:
+                seen_signals.add(sig_name)
+                deduped_signals.append((sig_name, weight))
+        soc_signals = deduped_signals
+        soc_score_val = sum(w for _, w in soc_signals)
+
+        # --- 3d. Determine confidence level ---
+        if soc_score_val >= 5:
+            malicious_script_confidence = "HIGH"
+            injection_patterns.append("malicious_script: multi-signal HIGH confidence")
+            score = min(score + 15, 30)
+            findings.append({
+                "severity": "critical",
+                "category": "malicious_script",
+                "detail": f"HIGH-confidence SocGholish/FakeUpdate detection. "
+                          f"Score: {soc_score_val} (threshold: 5). "
+                          f"Signals: {', '.join(s[0] for s in soc_signals)}"
+            })
+        elif soc_score_val >= 3:
+            malicious_script_confidence = "MEDIUM"
+            injection_patterns.append("malicious_script: multi-signal MEDIUM confidence")
+            score = min(score + 10, 30)
+            findings.append({
+                "severity": "high",
+                "category": "malicious_script",
+                "detail": f"MEDIUM-confidence malicious script detection. "
+                          f"Score: {soc_score_val} (threshold: 3). "
+                          f"Signals: {', '.join(s[0] for s in soc_signals)}"
+            })
+        else:
+            malicious_script_confidence = "NONE"
+            # Log for diagnostics even if below threshold
+            if soc_signals:
                 findings.append({
-                    "severity": "critical",
-                    "category": "malicious_script",
-                    "detail": f"Potential SocGholish/FakeUpdates script injection detected."
+                    "severity": "info",
+                    "category": "malicious_script_below_threshold",
+                    "detail": f"Script signals detected but below threshold. "
+                              f"Score: {soc_score_val} (need 3). "
+                              f"Signals: {', '.join(s[0] for s in soc_signals)}"
                 })
-                break
 
         # ----- 4. Suspicious External Scripts -----
         script_srcs = re.findall(r'<script[^>]*src=["\']([^"\']+)["\']', page_content, re.IGNORECASE)
@@ -474,10 +701,73 @@ class HacklinkKeywordScanner:
             "wp_plugins": wp_plugins,
             "vulnerable_plugins": vulnerable_plugins,
             "spam_link_count": spam_links,
+            "malicious_script_confidence": malicious_script_confidence,
+            "malicious_script_signals": [s[0] for s in soc_signals],
+            "malicious_script_score": soc_score_val,
             "google_dorks": google_dorks,
             "findings": findings,
             "fetch_status": fetch_status,
         }
+
+    # ================================================================
+    # Multi-Signal Detection Helpers (v7.2)
+    # ================================================================
+
+    @staticmethod
+    def _calculate_path_entropy(path: str) -> float:
+        """
+        Calculate Shannon entropy of a URL path.
+        Legitimate paths: 2.5-3.5 bits/char (readable words, predictable structure)
+        SocGholish paths: 4.0-5.0+ bits/char (random alphanumeric gibberish)
+        
+        Examples:
+            /wp-content/themes/flavor/main.js     → ~3.2 (legitimate)
+            /f8a3c9d1e4b7/x2k9m4n7/tracker.js     → ~4.3 (suspicious)
+        """
+        if not path or len(path) < 5:
+            return 0.0
+        # Strip leading slashes and file extension for cleaner measurement
+        clean = path.lstrip('/').rsplit('.', 1)[0] if '.' in path else path.lstrip('/')
+        if not clean:
+            return 0.0
+        freq = {}
+        for c in clean:
+            freq[c] = freq.get(c, 0) + 1
+        length = len(clean)
+        entropy = 0.0
+        for count in freq.values():
+            p = count / length
+            if p > 0:
+                entropy -= p * math.log2(p)
+        return round(entropy, 2)
+
+    @staticmethod
+    def _is_whitelisted_cdn(domain: str) -> bool:
+        """Check if a script domain is on the known-good CDN whitelist."""
+        domain = domain.lower().strip('.')
+        # Exact match
+        if domain in CDN_WHITELIST:
+            return True
+        # Subdomain match (e.g., cdn.example.com matches if example.com is whitelisted)
+        parts = domain.split('.')
+        for i in range(1, len(parts)):
+            parent = '.'.join(parts[i:])
+            if parent in CDN_WHITELIST:
+                return True
+        return False
+
+    @staticmethod
+    def _extract_script_domain(src: str) -> Optional[str]:
+        """Extract the domain from a script src attribute value."""
+        try:
+            if src.startswith('//'):
+                src = 'https:' + src
+            elif not src.startswith(('http://', 'https://')):
+                return None  # Relative path = same-domain, skip
+            parsed = urlparse(src)
+            return parsed.hostname.lower() if parsed.hostname else None
+        except Exception:
+            return None
 
     def _score_fetch_failure(self, domain, status, error, error_type, score, findings):
         """
