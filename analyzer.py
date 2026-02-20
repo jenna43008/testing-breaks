@@ -2235,12 +2235,12 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
             result["domains"].append(host)
         
         try:
-            method = "GET" if (fetch_content and i == MAX_REDIRECTS) else "HEAD"
-            resp = session.request(method, current, allow_redirects=False, timeout=timeout, verify=True, stream=True)
+            # Use HEAD for redirect chasing (fast), GET only when we need content
+            resp = session.head(current, allow_redirects=False, timeout=timeout, verify=True)
             status = resp.status_code
             
-            if status in (405, 501) and method == "HEAD":
-                resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True, stream=True)
+            if status in (405, 501):
+                resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True)
                 status = resp.status_code
             
             if i == 0:
@@ -2263,12 +2263,14 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
             result["final_url"] = current
             result["chain"].append(status)
             
-            if fetch_content and status == 200:
+            # Non-redirect final response — fetch body with GET if caller wants content
+            if fetch_content:
                 try:
-                    result["content"] = resp.content[:50000]
+                    get_resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True)
+                    result["content"] = get_resp.content[:50000]
                     result["content_length"] = len(result["content"])
-                except Exception:
-                    pass
+                except Exception as e:
+                    result["error"] = f"content_read_failed: {str(e)[:150]}"
             return result
 
         # v4.4 FIX: typed exception handling (was bare `except:` that silently returned)
@@ -3609,16 +3611,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("access_restricted", weights.get('access_restricted', 10))
     
     # Missing trust signals (no about/contact pages)
-    if res.missing_trust_signals:
+    # Don't flag on empty pages — obviously an empty page has no /about etc.
+    if res.missing_trust_signals and not res.is_empty_page:
         add("missing_trust_signals", weights.get('missing_trust_signals', 8))
     
     # Opaque entity - access blocked AND no corporate footprint
     # This is a classic B2B fraud / supplier impersonation pattern
-    if res.is_opaque_entity:
+    if res.is_opaque_entity and not res.is_empty_page:
         add("opaque_entity", weights.get('opaque_entity', 20))
     
     # Content
-    if res.is_minimal_shell:
+    if res.is_minimal_shell and not res.is_empty_page:
         add("minimal_shell", weights.get('minimal_shell', 15))
     if res.has_js_redirect:
         add("js_redirect", weights.get('js_redirect', 12))
@@ -4054,9 +4057,11 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     # === EMPTY PAGE DETECTION ===
     # A reachable domain that returns empty/near-empty content is suspicious
     # (parked, abandoned, or stripped after compromise)
+    # But 403/5xx responses aren't "empty" — they're blocked/broken, different signal
     if res.https_reachable or res.http_reachable:
-        if not content or len(content.strip()) < 50:
-            res.is_empty_page = True
+        if not (res.is_access_restricted or res.has_5xx or res.has_503):
+            if not content or len(content.strip()) < 50:
+                res.is_empty_page = True
     
     if content:
         res.content_hash = hashlib.md5(content).hexdigest()[:12]
