@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "check_rdap": True,
     "admin_password": "admin123",  # CHANGE THIS!
     "vt_api_key": "3976cc546c3ac01b8f50773c46a5c4a7e508709ae23b62ab4d82436222367d8",   # VirusTotal API key (hardcoded)
-    "config_version": "7.1",              # Used for weight migration between versions
+    "config_version": "7.2",              # Used for weight migration between versions
     
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
@@ -49,7 +49,8 @@ DEFAULT_CONFIG = {
         "hacklink_wp_compromised": 50,     # WordPress compromise indicators
         "hacklink_vulnerable_plugins": 25, # Known exploitable WP plugins
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
-        "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — INSTANT DENY territory
+        "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — HIGH confidence (5+ multi-signal score)
+        "malicious_script_medium": 25,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — log + moderate penalty
         "hidden_injection": 100,            # CSS-hidden content injection (hacklink fingerprint) — confirmed compromise
         "cpanel_detected": 25,              # cPanel hosting (common hacklink target, not malicious alone)
         
@@ -979,6 +980,23 @@ def load_config() -> dict:
                             if saved_val <= old_val:  # User hasn't bumped it above old default
                                 merged['weights'][signal] = new_val
                         merged['config_version'] = '7.1'
+                    
+                    # v7.2 migration: malicious_script raised to 100 (instant deny for HIGH
+                    # confidence), new malicious_script_medium signal added at 25 for MEDIUM.
+                    if saved_version < '7.2':
+                        v72_bumps = {
+                            'malicious_script': (65, 100),
+                            'hidden_injection': (55, 100),
+                            'hacklink_detected': (50, 100),
+                        }
+                        for signal, (old_val, new_val) in v72_bumps.items():
+                            saved_val = loaded['weights'].get(signal, old_val)
+                            if saved_val <= old_val:
+                                merged['weights'][signal] = new_val
+                        # Ensure new signal exists
+                        if 'malicious_script_medium' not in merged['weights']:
+                            merged['weights']['malicious_script_medium'] = 25
+                        merged['config_version'] = '7.2'
                 # Legacy: if old config has combos, ignore them (now in rules)
                 loaded.pop('combos', None)
                 loaded.pop('disabled_combos', None)
