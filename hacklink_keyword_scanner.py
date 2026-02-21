@@ -30,6 +30,38 @@ from urllib.parse import urlparse
 TURKISH_HACKLINK_KEYWORDS = [
     "hacklink", "hack link", "hacklink satın al", "hacklink al",
     "hacklink panel", "hacklink servisi", "hacklink fiyat",
+    "bahis", "bahis siteleri", "canlı bahis", "illegal bahis","""
+Hacklink Keyword Scanner
+========================
+Scans domain page content for hacklink SEO poisoning indicators.
+
+Hacklink campaigns (predominantly Turkish-origin) inject hidden keywords and links
+into compromised websites. These include gambling, pharmaceutical, and adult content
+keywords designed to boost attacker-controlled sites in search rankings.
+
+IMPORTANT: HTTP errors (403, timeout, SSL failures) are treated as risk signals,
+not benign outcomes. A legitimate business domain that blocks access, times out,
+or has certificate issues is itself suspicious for a sending domain.
+"""
+
+import re
+import math
+import socket
+import urllib.request
+import urllib.error
+import ssl
+from typing import Dict, List, Optional
+from urllib.parse import urlparse
+
+
+# ================================================================
+# Hacklink Keyword Families
+# ================================================================
+
+# Long/specific keywords — safe for substring matching (low false-positive risk)
+TURKISH_HACKLINK_KEYWORDS = [
+    "hacklink", "hack link", "hacklink satın al", "hacklink al",
+    "hacklink panel", "hacklink servisi", "hacklink fiyat",
     "bahis", "bahis siteleri", "canlı bahis", "illegal bahis",
     "casino", "canlı casino", "online casino", "casino siteleri",
     "kumar", "kumar siteleri", "slot oyunları",
@@ -38,18 +70,20 @@ TURKISH_HACKLINK_KEYWORDS = [
     "deneme bonusu", "bonus veren siteler", "free bonus",
     "kaçak iddaa", "iddaa", "spor bahis",
     "escort bayan",
-    "porno", "cialis", "viagra",
+    "porno", "viagra",
     "oto çekici", "nakliyat",
 ]
 
 # Short/ambiguous keywords — require word-boundary matching (\b) to avoid
 # false positives on legitimate words (e.g. "bet" in "better", "slot" in
-# "slotted", "sex" in "next", "hap" in "happen", "xxx" in CSS comments).
+# "slotted", "sex" in "next", "hap" in "happen", "xxx" in CSS comments,
+# "cialis" in "specialist").
 HACKLINK_EXACT_KEYWORDS = [
     r'\bbet\b', r'\bslot\b', r'\bslots\b',
     r'\bescort\b',
     r'\bsex\b', r'\bxxx\b',
     r'\bhap\b',
+    r'\bcialis\b',
 ]
 HACKLINK_EXACT_COMPILED = [re.compile(p, re.IGNORECASE) for p in HACKLINK_EXACT_KEYWORDS]
 
