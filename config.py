@@ -55,8 +55,8 @@ DEFAULT_CONFIG = {
         "cpanel_detected": 25,              # cPanel hosting (common hacklink target, not malicious alone)
         
         # === TRANSFER LOCK / DOMAIN TAKEOVER ===
-        "transfer_lock_recent": 0,        # Transfer lock recently added (post-compromise lockdown signal)
-        "whois_recently_updated": 0,      # WHOIS updated in last 30 days
+        "transfer_lock_recent": 5,        # Transfer lock recently added (post-compromise lockdown signal)
+        "whois_recently_updated": 5,      # WHOIS updated in last 30 days
         
         # === EMPTY PAGE ===
         "empty_page": 20,                  # Reachable domain with empty/near-empty content
