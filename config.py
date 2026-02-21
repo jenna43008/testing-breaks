@@ -50,7 +50,7 @@ DEFAULT_CONFIG = {
         "hacklink_vulnerable_plugins": 25, # Known exploitable WP plugins
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
         "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — HIGH confidence (5+ multi-signal score)
-        "malicious_script_medium": 25,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — log + moderate penalty
+        "malicious_script_medium": 40,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — log + moderate penalty
         "hidden_injection": 100,            # CSS-hidden content injection (hacklink fingerprint) — confirmed compromise
         "cpanel_detected": 25,              # cPanel hosting (common hacklink target, not malicious alone)
         
