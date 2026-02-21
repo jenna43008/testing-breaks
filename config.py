@@ -85,7 +85,7 @@ DEFAULT_CONFIG = {
         # === E-COMMERCE / RETAIL SCAM INDICATORS ===
         "retail_scam_tld": 12,             # .shop, .store, .sale, etc.
         "ecommerce_no_identity": 15,       # E-commerce site with no business identity
-        "cross_domain_brand_link": 18,     # Links to same-brand different TLD (clone indicator)
+        "cross_domain_brand_link": 30,     # Links to same-brand different TLD (clone indicator)
         "ecommerce_missing_policies": 8,   # E-commerce without terms/refund policy
         
         # === DELIVERABILITY CONCERNS (Low weights - warn but don't deny alone) ===
@@ -125,10 +125,10 @@ DEFAULT_CONFIG = {
         "url_shortener": 20,
         
         # === REDIRECT/CLOAKING CONCERNS ===
-        "redirect_chain_2plus": 15,
-        "redirect_chain_3plus": 15,
-        "redirect_cross_domain": 15,
-        "redirect_temp_302_307": 15,
+        "redirect_chain_2plus": 25,
+        "redirect_chain_3plus": 25,
+        "redirect_cross_domain": 25,
+        "redirect_temp_302_307": 25,
         
         # === SUSPICIOUS BEHAVIOR (Higher weights - actual red flags) ===
         "status_401_unauthorized": 25,    # 401 on public site - unusual
