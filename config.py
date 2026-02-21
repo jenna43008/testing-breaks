@@ -138,7 +138,7 @@ DEFAULT_CONFIG = {
         "status_5xx_errors": 10,
         "access_restricted": 15,          # 401 or 403 on what should be public domain
         "minimal_shell": 15,
-        "js_redirect": 20,
+        "js_redirect": 25,
         "meta_refresh": 5,
         "external_js_loader": 6,
         "obfuscated_js": 15,
