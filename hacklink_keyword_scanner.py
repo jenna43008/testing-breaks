@@ -239,26 +239,107 @@ WP_COMPROMISE_PATTERNS = [
 class HacklinkKeywordScanner:
     """Scans domains for hacklink SEO poisoning indicators."""
 
-    # Regex to extract href URLs from an HTML chunk
-    _HREF_EXTRACTOR = re.compile(
-        r'<a\s[^>]*href\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE
-    )
+    # Known-legitimate external domains commonly found inside hidden page
+    # elements (mobile nav footers, newsletter widgets, analytics noscript
+    # fallbacks, CMS attribution, comment systems, social embeds, etc.).
+    # These should NEVER count as hacklink injection evidence.
+    _BENIGN_EXTERNAL_DOMAINS = {
+        # Newsletter / email services
+        "eepurl.com", "mailchimp.com", "list-manage.com",
+        "mailchi.mp", "campaign-archive.com",
+        "convertkit.com", "buttondown.email", "substack.com",
+        "sendinblue.com", "brevo.com", "mailerlite.com",
+        "constantcontact.com", "hubspot.com",
+        # CMS / hosting platforms
+        "ghost.org", "ghost.io", "wordpress.org", "wordpress.com",
+        "squarespace.com", "wix.com", "webflow.com", "weebly.com",
+        "shopify.com", "blogger.com", "medium.com", "tumblr.com",
+        # Analytics / tracking
+        "google.com", "google-analytics.com", "googletagmanager.com",
+        "gstatic.com", "googleapis.com", "googlesyndication.com",
+        "doubleclick.net", "facebook.com", "facebook.net",
+        "twitter.com", "x.com", "linkedin.com", "instagram.com",
+        "pinterest.com", "tiktok.com", "youtube.com",
+        "hotjar.com", "clarity.ms", "segment.com",
+        # Comment / engagement systems
+        "disqus.com", "disquscdn.com", "gravatar.com",
+        # CDN / infrastructure
+        "cloudflare.com", "jsdelivr.net", "unpkg.com",
+        "cdnjs.cloudflare.com", "bootstrapcdn.com",
+        "fontawesome.com", "fonts.googleapis.com",
+        # Payment / trust
+        "stripe.com", "paypal.com",
+        # Development / code
+        "github.com", "github.io", "gitlab.com", "codepen.io",
+        "jsfiddle.net", "stackblitz.com", "netlify.com",
+        "vercel.com", "herokuapp.com",
+        # Common web services
+        "apple.com", "microsoft.com", "amazon.com", "amazonaws.com",
+        "intercom.io", "intercomcdn.com", "drift.com",
+        "recaptcha.net", "hcaptcha.com",
+    }
+
+    # TLDs overwhelmingly associated with hacklink/SEO spam campaigns
+    _SUSPICIOUS_TLDS = {
+        ".top", ".buzz", ".click", ".link", ".xyz", ".icu",
+        ".cam", ".rest", ".surf", ".monster", ".cyou",
+    }
+
+    # Keywords that indicate a domain is part of a hacklink/SEO spam network
+    _SUSPICIOUS_DOMAIN_KEYWORDS = {
+        "bahis", "casino", "slot", "poker", "rulet", "kumar",
+        "betting", "blackjack", "bakara", "jackpot", "roulette",
+        "escort", "porno", "cialis", "viagra", "hacklink",
+        "canlibahis", "canli-bahis", "bonus", "freespin",
+    }
 
     def __init__(self, timeout: int = 10, max_content_size: int = 500_000):
         self.timeout = timeout
         self.max_content_size = max_content_size
 
     @staticmethod
+    def _is_benign_external(host: str) -> bool:
+        """Check if a hostname belongs to a known-legitimate service."""
+        for benign in HacklinkKeywordScanner._BENIGN_EXTERNAL_DOMAINS:
+            if host == benign or host.endswith("." + benign):
+                return True
+        return False
+
+    @staticmethod
+    def _is_suspicious_external(host: str) -> bool:
+        """Check if a hostname has hacklink-associated indicators."""
+        # Check suspicious TLDs
+        for tld in HacklinkKeywordScanner._SUSPICIOUS_TLDS:
+            if host.endswith(tld):
+                return True
+        # Check for hacklink keywords in the domain name
+        host_lower = host.lower()
+        for kw in HacklinkKeywordScanner._SUSPICIOUS_DOMAIN_KEYWORDS:
+            if kw in host_lower:
+                return True
+        return False
+
+    @staticmethod
     def _has_external_links(html_chunk: str, domain: str) -> tuple:
         """
-        Check whether an HTML chunk contains links to EXTERNAL domains.
+        Check whether an HTML chunk contains links to SUSPICIOUS external domains.
 
-        Returns (has_external: bool, external_domains: set).
-        Internal/relative links (same domain, relative paths, anchors,
-        javascript:, mailto:) are ignored — these are normal nav/UI elements.
+        Returns (has_suspicious: bool, suspicious_domains: set).
+
+        Logic:
+          1. Extract all hrefs from the chunk.
+          2. Skip relative/internal/anchor/javascript/mailto links.
+          3. Skip known-legitimate external services (Mailchimp, Ghost, Google,
+             social media, CDNs, etc.) — these appear in hidden elements on
+             virtually every responsive website.
+          4. For remaining external links, check if they're on suspicious TLDs
+             or contain hacklink-associated keywords.
+          5. Also flag if there are 3+ distinct non-benign external domains
+             (mass link injection pattern), even without suspicious keywords.
         """
         hrefs = HacklinkKeywordScanner._HREF_EXTRACTOR.findall(html_chunk)
-        external_domains = set()
+        suspicious_domains = set()
+        non_benign_external = set()
 
         # Build the base registrable domain for comparison
         base_domain = domain.lower().split(":")[0]
@@ -283,15 +364,29 @@ class HacklinkKeywordScanner:
                 host = (parsed.hostname or "").lower()
                 if not host:
                     continue
-                # Same-domain check: if the link host ends with the base
-                # registrable domain, it's internal (e.g. blog.example.com → example.com)
+                # Same-domain check
                 if host == base or host.endswith("." + base):
                     continue
-                external_domains.add(host)
+                # Known-legitimate service check
+                if HacklinkKeywordScanner._is_benign_external(host):
+                    continue
+                # This is a non-benign external link
+                non_benign_external.add(host)
+                # Check if it's actively suspicious
+                if HacklinkKeywordScanner._is_suspicious_external(host):
+                    suspicious_domains.add(host)
             except Exception:
                 continue
 
-        return (len(external_domains) > 0, external_domains)
+        # Flag as suspicious if:
+        #   - Any link goes to a domain with hacklink keywords/TLDs, OR
+        #   - 3+ distinct non-benign external domains (mass injection pattern)
+        has_suspicious = (
+            len(suspicious_domains) > 0
+            or len(non_benign_external) >= 3
+        )
+
+        return (has_suspicious, suspicious_domains or non_benign_external)
 
     def scan(self, domain: str, content: Optional[str] = None) -> Dict:
         """
@@ -447,56 +542,58 @@ class HacklinkKeywordScanner:
         # ----- 2. Hidden Content Injection -----
         # Two-pass approach:
         #   Pass 1 — Check HIGH patterns (CSS hiding + embedded links).
-        #            For each match, inspect whether links point to EXTERNAL
-        #            domains (hacklink injection) or INTERNAL/same-domain
-        #            (responsive nav, mobile menus, collapsed UI — legitimate).
-        #   Pass 2 — If no HIGH match with external links, check LOW patterns
+        #            For each match, inspect whether links point to SUSPICIOUS
+        #            external domains (hacklink/gambling/pharma keywords, spam
+        #            TLDs, or mass injection of 3+ distinct external domains).
+        #            Known-benign services (Mailchimp, Ghost, Google, social
+        #            media, CDNs) are whitelisted and ignored.
+        #   Pass 2 — If no suspicious external links found, check LOW patterns
         #            (CSS-only, no links at all).
         hidden_high_found = False
         hidden_low_found = False
         hidden_external_domains = set()
-        high_pattern_matched_internal_only = False
+        high_pattern_matched_benign_only = False
 
         for pattern in HIDDEN_CONTENT_PATTERNS_HIGH:
             for m in re.finditer(pattern, page_content, re.IGNORECASE | re.DOTALL):
                 # Grab up to 1500 chars from match start to capture full
                 # hidden block including the link targets
                 block = page_content[m.start():m.start() + 1500]
-                has_ext, ext_doms = self._has_external_links(block, domain)
+                has_suspicious, sus_doms = self._has_external_links(block, domain)
 
-                if has_ext:
-                    # External links inside hidden content → real hacklink
+                if has_suspicious:
+                    # Suspicious external links inside hidden content → real hacklink
                     hidden_high_found = True
-                    hidden_external_domains.update(ext_doms)
+                    hidden_external_domains.update(sus_doms)
                     injection_patterns.append(f"hidden_content_high: {pattern[:50]}")
                     if score < 25:
                         score += 10
-                    ext_sample = ", ".join(sorted(ext_doms)[:5])
+                    ext_sample = ", ".join(sorted(sus_doms)[:5])
                     findings.append({
                         "severity": "critical",
                         "category": "hidden_injection",
-                        "detail": f"Hidden content injection with EXTERNAL links detected "
+                        "detail": f"Hidden content injection with SUSPICIOUS external links "
                                   f"(CSS hiding + links to: {ext_sample}). "
                                   f"Classic hacklink/SEO spam technique."
                     })
-                    break  # One confirmed external-link match is enough
+                    break  # One confirmed match is enough
                 else:
-                    # Hidden content with only internal/relative links →
-                    # almost certainly responsive nav / mobile menu / collapsed UI
-                    high_pattern_matched_internal_only = True
+                    # Hidden content with only internal/benign-external links →
+                    # responsive nav, mobile menu, newsletter widget, CMS footer
+                    high_pattern_matched_benign_only = True
 
             if hidden_high_found:
                 break
 
-        # If HIGH patterns matched but links were all internal → demote to LOW
-        if high_pattern_matched_internal_only and not hidden_high_found:
+        # If HIGH patterns matched but all links were internal or benign → demote to LOW
+        if high_pattern_matched_benign_only and not hidden_high_found:
             hidden_low_found = True
-            injection_patterns.append("hidden_content_low: internal_links_only")
+            injection_patterns.append("hidden_content_low: benign_links_only")
             findings.append({
                 "severity": "low",
                 "category": "hidden_injection_css_only",
-                "detail": "CSS-hidden elements contain only internal/same-domain links "
-                          "(responsive navigation, mobile menus, collapsed UI — normal pattern)."
+                "detail": "CSS-hidden elements contain only internal or known-benign links "
+                          "(responsive navigation, mobile menus, newsletter widgets — normal pattern)."
             })
 
         # Low-confidence: CSS patterns only, no links at all
