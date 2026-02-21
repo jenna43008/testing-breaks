@@ -26,21 +26,32 @@ from urllib.parse import urlparse
 # Hacklink Keyword Families
 # ================================================================
 
+# Long/specific keywords — safe for substring matching (low false-positive risk)
 TURKISH_HACKLINK_KEYWORDS = [
     "hacklink", "hack link", "hacklink satın al", "hacklink al",
     "hacklink panel", "hacklink servisi", "hacklink fiyat",
     "bahis", "bahis siteleri", "canlı bahis", "illegal bahis",
     "casino", "canlı casino", "online casino", "casino siteleri",
-    "kumar", "kumar siteleri", "slot", "slot oyunları",
-    "bet", "betting", "betist", "betpark", "bahsegel",
+    "kumar", "kumar siteleri", "slot oyunları",
+    "betting", "betist", "betpark", "bahsegel",
     "rulet", "poker", "blackjack", "bakara",
     "deneme bonusu", "bonus veren siteler", "free bonus",
     "kaçak iddaa", "iddaa", "spor bahis",
-    "escort", "escort bayan",
-    "porno", "sex", "xxx",
-    "cialis", "viagra", "hap",
+    "escort bayan",
+    "porno", "cialis", "viagra",
     "oto çekici", "nakliyat",
 ]
+
+# Short/ambiguous keywords — require word-boundary matching (\b) to avoid
+# false positives on legitimate words (e.g. "bet" in "better", "slot" in
+# "slotted", "sex" in "next", "hap" in "happen", "xxx" in CSS comments).
+HACKLINK_EXACT_KEYWORDS = [
+    r'\bbet\b', r'\bslot\b', r'\bslots\b',
+    r'\bescort\b',
+    r'\bsex\b', r'\bxxx\b',
+    r'\bhap\b',
+]
+HACKLINK_EXACT_COMPILED = [re.compile(p, re.IGNORECASE) for p in HACKLINK_EXACT_KEYWORDS]
 
 # ================================================================
 # SocGholish / FakeUpdate Multi-Signal Detection (v7.2)
@@ -162,8 +173,11 @@ SOCGHOLISH_MODERATE_PATTERNS = {
     ),
 }
 
-HIDDEN_CONTENT_PATTERNS = [
-    # --- Inline style hiding with embedded links (the #1 real-world pattern) ---
+HIDDEN_CONTENT_PATTERNS_HIGH = [
+    # --- HIGH CONFIDENCE: Hidden content WITH embedded links ---
+    # These require both a CSS hiding technique AND an <a href> inside the hidden
+    # block.  Almost certainly injected hacklink/SEO spam.
+    #
     # <div style="display:none">...<a href="...">casino</a>...</div>
     r'style\s*=\s*["\'][^"\']*display\s*:\s*none[^"\']*["\'][^>]*>.{0,800}?<a\s+href',
     # <div style="visibility:hidden">...<a href="...">
@@ -178,23 +192,27 @@ HIDDEN_CONTENT_PATTERNS = [
     r'style\s*=\s*["\'][^"\']*opacity\s*:\s*0[;\s"\'"][^"\']*["\'][^>]*>.{0,800}?<a\s+href',
     # <span style="font-size:0">...<a href="...">
     r'style\s*=\s*["\'][^"\']*font-size\s*:\s*0[^1-9][^"\']*["\'][^>]*>.{0,800}?<a\s+href',
-    
-    # --- CSS class-based hiding (injected <style> blocks with display:none targeting link containers) ---
-    r'<style[^>]*>[^<]*\{[^}]*display\s*:\s*none[^}]*\}[^<]*</style>',
-    
-    # --- Direct suspicious combinations (broader catchall — no links required) ---
-    # font-size:0 or 1px anywhere (still suspicious even standalone)
-    r'font-size\s*:\s*[01]px',
-    # text-indent with large negative value (off-screen text)
-    r'text-indent\s*:\s*-\d{4,}',
-    # position:absolute with large negative left (off-screen positioning)
-    r'position\s*:\s*absolute[^;"\']*left\s*:\s*-\d{4,}',
-    
-    # --- Noscript/comment-based injection ---
     # Hidden links inside <noscript> (search engines see these, users don't)
     r'<noscript>.{0,500}?<a\s+href\s*=\s*["\']https?://[^"\']+["\'].{0,500}?</noscript>',
     # HTML comment-wrapped links
     r'<!--.{0,300}?<a\s+href\s*=\s*["\']https?://.{0,300}?-->',
+]
+
+HIDDEN_CONTENT_PATTERNS_LOW = [
+    # --- LOW CONFIDENCE: CSS patterns WITHOUT links ---
+    # These fire on CSS hiding techniques alone. Common in legitimate sites
+    # (screen-reader text, image replacement, inline-block gap fixes, collapsed
+    # menus, React/SPA hidden components).  Only meaningful when COMBINED with
+    # hacklink keywords or other compromise signals.
+    #
+    # CSS class-based hiding (injected <style> blocks)
+    r'<style[^>]*>[^<]*\{[^}]*display\s*:\s*none[^}]*\}[^<]*</style>',
+    # font-size:0 or 1px (screen-reader / gap fix in legit CSS)
+    r'font-size\s*:\s*[01]px',
+    # text-indent with large negative value (image replacement technique)
+    r'text-indent\s*:\s*-\d{4,}',
+    # position:absolute with large negative left (off-screen positioning)
+    r'position\s*:\s*absolute[^;"\']*left\s*:\s*-\d{4,}',
 ]
 
 SUSPICIOUS_SCRIPT_DOMAINS = [
@@ -318,6 +336,7 @@ class HacklinkKeywordScanner:
                 "malicious_script_confidence": "NONE",
                 "malicious_script_signals": [],
                 "malicious_script_score": 0,
+                "hidden_injection_confidence": "",
                 "google_dorks": self._generate_google_dorks(domain, domain_name_keywords, [], False),
                 "findings": findings,
                 "fetch_error": fetch_error,
@@ -342,9 +361,15 @@ class HacklinkKeywordScanner:
             })
 
         # ----- 1. Turkish Hacklink Keyword Scan -----
+        # Substring match for long/specific keywords (low false-positive risk)
         for keyword in TURKISH_HACKLINK_KEYWORDS:
             if keyword.lower() in content_lower:
                 keywords_found.append(keyword)
+        # Word-boundary match for short/ambiguous keywords (high false-positive risk)
+        for pattern in HACKLINK_EXACT_COMPILED:
+            m = pattern.search(page_content)
+            if m:
+                keywords_found.append(m.group().lower())
 
         if len(keywords_found) >= 5:
             score += 30
@@ -370,18 +395,38 @@ class HacklinkKeywordScanner:
             })
 
         # ----- 2. Hidden Content Injection -----
-        for pattern in HIDDEN_CONTENT_PATTERNS:
+        hidden_high_found = False
+        hidden_low_found = False
+
+        # High-confidence: hidden content WITH links (near-certain hacklink)
+        for pattern in HIDDEN_CONTENT_PATTERNS_HIGH:
             matches = re.findall(pattern, page_content, re.IGNORECASE | re.DOTALL)
             if matches:
-                injection_patterns.append(f"hidden_content: {pattern[:50]}")
+                hidden_high_found = True
+                injection_patterns.append(f"hidden_content_high: {pattern[:50]}")
                 if score < 25:
                     score += 10
                 findings.append({
                     "severity": "critical",
                     "category": "hidden_injection",
-                    "detail": f"Hidden content injection detected (CSS hiding technique). "
+                    "detail": f"Hidden content injection with links detected (CSS hiding + embedded links). "
                               f"Pattern: {pattern[:60]}..."
                 })
+
+        # Low-confidence: CSS patterns only, no links (common in legit CSS)
+        if not hidden_high_found:
+            for pattern in HIDDEN_CONTENT_PATTERNS_LOW:
+                matches = re.findall(pattern, page_content, re.IGNORECASE | re.DOTALL)
+                if matches:
+                    hidden_low_found = True
+                    injection_patterns.append(f"hidden_content_low: {pattern[:50]}")
+                    findings.append({
+                        "severity": "low",
+                        "category": "hidden_injection_css_only",
+                        "detail": f"CSS hiding technique found (no hidden links detected — "
+                                  f"common in legitimate templates/dev sites). "
+                                  f"Pattern: {pattern[:60]}..."
+                    })
 
         # ----- 3. SocGholish/Malicious Script Detection (Multi-Signal v7.2) -----
         # Accumulates weighted signals instead of matching a single broad regex.
@@ -684,6 +729,14 @@ class HacklinkKeywordScanner:
 
         hacklink_detected = score >= 15 or len(keywords_found) >= 2
 
+        # Determine hidden injection confidence
+        if hidden_high_found:
+            hidden_injection_confidence = "HIGH"
+        elif hidden_low_found:
+            hidden_injection_confidence = "LOW"
+        else:
+            hidden_injection_confidence = ""
+
         # ----- Generate Google Dork Queries -----
         google_dorks = self._generate_google_dorks(
             domain, keywords_found, injection_patterns, is_wordpress
@@ -704,6 +757,7 @@ class HacklinkKeywordScanner:
             "malicious_script_confidence": malicious_script_confidence,
             "malicious_script_signals": [s[0] for s in soc_signals],
             "malicious_script_score": soc_score_val,
+            "hidden_injection_confidence": hidden_injection_confidence,
             "google_dorks": google_dorks,
             "findings": findings,
             "fetch_status": fetch_status,
