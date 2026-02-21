@@ -239,9 +239,59 @@ WP_COMPROMISE_PATTERNS = [
 class HacklinkKeywordScanner:
     """Scans domains for hacklink SEO poisoning indicators."""
 
+    # Regex to extract href URLs from an HTML chunk
+    _HREF_EXTRACTOR = re.compile(
+        r'<a\s[^>]*href\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE
+    )
+
     def __init__(self, timeout: int = 10, max_content_size: int = 500_000):
         self.timeout = timeout
         self.max_content_size = max_content_size
+
+    @staticmethod
+    def _has_external_links(html_chunk: str, domain: str) -> tuple:
+        """
+        Check whether an HTML chunk contains links to EXTERNAL domains.
+
+        Returns (has_external: bool, external_domains: set).
+        Internal/relative links (same domain, relative paths, anchors,
+        javascript:, mailto:) are ignored — these are normal nav/UI elements.
+        """
+        hrefs = HacklinkKeywordScanner._HREF_EXTRACTOR.findall(html_chunk)
+        external_domains = set()
+
+        # Build the base registrable domain for comparison
+        base_domain = domain.lower().split(":")[0]
+        parts = base_domain.split(".")
+        # Handle ccTLDs like .co.uk, .com.au
+        if len(parts) > 2 and parts[-2] in ("co", "com", "org", "net", "ac", "gov"):
+            base = ".".join(parts[-3:])
+        elif len(parts) >= 2:
+            base = ".".join(parts[-2:])
+        else:
+            base = base_domain
+
+        for href in hrefs:
+            href = href.strip()
+            # Skip relative URLs, anchors, javascript:, mailto:, tel:
+            if (not href or href.startswith("/") or href.startswith("#")
+                    or href.startswith("javascript:") or href.startswith("mailto:")
+                    or href.startswith("tel:")):
+                continue
+            try:
+                parsed = urlparse(href)
+                host = (parsed.hostname or "").lower()
+                if not host:
+                    continue
+                # Same-domain check: if the link host ends with the base
+                # registrable domain, it's internal (e.g. blog.example.com → example.com)
+                if host == base or host.endswith("." + base):
+                    continue
+                external_domains.add(host)
+            except Exception:
+                continue
+
+        return (len(external_domains) > 0, external_domains)
 
     def scan(self, domain: str, content: Optional[str] = None) -> Dict:
         """
@@ -395,26 +445,62 @@ class HacklinkKeywordScanner:
             })
 
         # ----- 2. Hidden Content Injection -----
+        # Two-pass approach:
+        #   Pass 1 — Check HIGH patterns (CSS hiding + embedded links).
+        #            For each match, inspect whether links point to EXTERNAL
+        #            domains (hacklink injection) or INTERNAL/same-domain
+        #            (responsive nav, mobile menus, collapsed UI — legitimate).
+        #   Pass 2 — If no HIGH match with external links, check LOW patterns
+        #            (CSS-only, no links at all).
         hidden_high_found = False
         hidden_low_found = False
+        hidden_external_domains = set()
+        high_pattern_matched_internal_only = False
 
-        # High-confidence: hidden content WITH links (near-certain hacklink)
         for pattern in HIDDEN_CONTENT_PATTERNS_HIGH:
-            matches = re.findall(pattern, page_content, re.IGNORECASE | re.DOTALL)
-            if matches:
-                hidden_high_found = True
-                injection_patterns.append(f"hidden_content_high: {pattern[:50]}")
-                if score < 25:
-                    score += 10
-                findings.append({
-                    "severity": "critical",
-                    "category": "hidden_injection",
-                    "detail": f"Hidden content injection with links detected (CSS hiding + embedded links). "
-                              f"Pattern: {pattern[:60]}..."
-                })
+            for m in re.finditer(pattern, page_content, re.IGNORECASE | re.DOTALL):
+                # Grab up to 1500 chars from match start to capture full
+                # hidden block including the link targets
+                block = page_content[m.start():m.start() + 1500]
+                has_ext, ext_doms = self._has_external_links(block, domain)
 
-        # Low-confidence: CSS patterns only, no links (common in legit CSS)
-        if not hidden_high_found:
+                if has_ext:
+                    # External links inside hidden content → real hacklink
+                    hidden_high_found = True
+                    hidden_external_domains.update(ext_doms)
+                    injection_patterns.append(f"hidden_content_high: {pattern[:50]}")
+                    if score < 25:
+                        score += 10
+                    ext_sample = ", ".join(sorted(ext_doms)[:5])
+                    findings.append({
+                        "severity": "critical",
+                        "category": "hidden_injection",
+                        "detail": f"Hidden content injection with EXTERNAL links detected "
+                                  f"(CSS hiding + links to: {ext_sample}). "
+                                  f"Classic hacklink/SEO spam technique."
+                    })
+                    break  # One confirmed external-link match is enough
+                else:
+                    # Hidden content with only internal/relative links →
+                    # almost certainly responsive nav / mobile menu / collapsed UI
+                    high_pattern_matched_internal_only = True
+
+            if hidden_high_found:
+                break
+
+        # If HIGH patterns matched but links were all internal → demote to LOW
+        if high_pattern_matched_internal_only and not hidden_high_found:
+            hidden_low_found = True
+            injection_patterns.append("hidden_content_low: internal_links_only")
+            findings.append({
+                "severity": "low",
+                "category": "hidden_injection_css_only",
+                "detail": "CSS-hidden elements contain only internal/same-domain links "
+                          "(responsive navigation, mobile menus, collapsed UI — normal pattern)."
+            })
+
+        # Low-confidence: CSS patterns only, no links at all
+        if not hidden_high_found and not hidden_low_found:
             for pattern in HIDDEN_CONTENT_PATTERNS_LOW:
                 matches = re.findall(pattern, page_content, re.IGNORECASE | re.DOTALL)
                 if matches:
