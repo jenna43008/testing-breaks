@@ -2260,6 +2260,21 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
     current = url
     seen = set()
     
+    # Helper: extract registrable domain to avoid false cross-domain on
+    # www-normalization (tandem.co.uk → www.tandem.co.uk) or subdomain
+    # redirects (app.example.com → api.example.com).
+    _CCTLD_2ND = {"co", "com", "org", "net", "ac", "gov", "edu", "or", "ne", "go"}
+    def _registrable(host: str) -> str:
+        h = host.lower()
+        if h.startswith("www."):
+            h = h[4:]
+        parts = h.split(".")
+        if len(parts) >= 3 and parts[-2] in _CCTLD_2ND:
+            return ".".join(parts[-3:])
+        return ".".join(parts[-2:]) if len(parts) >= 2 else h
+    
+    start_registrable = _registrable(start_host)
+    
     for i in range(MAX_REDIRECTS + 1):
         if current in seen:
             break
@@ -2287,7 +2302,7 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
                     result["uses_temp"] = True
                 next_url = urljoin(current, resp.headers["Location"])
                 next_host = urlparse(next_url).netloc.lower()
-                if next_host and next_host != start_host:
+                if next_host and _registrable(next_host) != start_registrable:
                     result["cross_domain"] = True
                 current = next_url
                 result["hops"] += 1
@@ -2507,37 +2522,74 @@ def analyze_ecommerce_indicators(content: bytes, domain: str) -> Dict:
         result["missing_identity_signals"] = missing
     
     # === CROSS-DOMAIN BRAND LINK DETECTION ===
-    # Extract domain name without TLD for comparison
-    domain_parts = domain.lower().split('.')
-    if len(domain_parts) >= 2:
-        # Get the "brand" part (e.g., "gabyandbeauty" from "gabyandbeauty.shop")
-        brand_name = domain_parts[0] if len(domain_parts) == 2 else '.'.join(domain_parts[:-1])
-        current_tld = '.' + domain_parts[-1]
+    # Extract the registrable domain (brand + effective TLD) for comparison.
+    # Must handle ccTLDs like .co.uk, .com.au, .com.br, .co.ke, .or.ke, etc.
+    # Without this, "tandem.co.uk" is parsed as brand="tandem.co" tld=".uk",
+    # causing www.tandem.co.uk to fuzzy-match as a "different brand."
+    
+    _CCTLD_SECOND_LEVELS = {"co", "com", "org", "net", "ac", "gov", "edu", "or", "ne", "go"}
+    
+    def _split_brand_tld(hostname: str):
+        """Split a hostname into (brand, effective_tld), stripping subdomains.
+        
+        Examples:
+            tandem.co.uk     → ("tandem", ".co.uk")
+            www.tandem.co.uk → ("tandem", ".co.uk")
+            cs.tandem.co.uk  → ("tandem", ".co.uk")
+            gabyandbeauty.shop → ("gabyandbeauty", ".shop")
+            sub.example.com.au → ("example", ".com.au")
+        """
+        parts = hostname.lower().strip(".").split(".")
+        # Remove www prefix — it's never part of the brand
+        if parts and parts[0] == "www":
+            parts = parts[1:]
+        if len(parts) < 2:
+            return (hostname.lower(), "")
+        # Detect ccTLD: if second-to-last part is a known second-level (co, com, org, etc.)
+        if len(parts) >= 3 and parts[-2] in _CCTLD_SECOND_LEVELS:
+            tld = "." + ".".join(parts[-2:])
+            brand = parts[-3] if len(parts) >= 3 else parts[0]
+        else:
+            tld = "." + parts[-1]
+            brand = parts[-2] if len(parts) >= 2 else parts[0]
+        return (brand, tld)
+    
+    brand_name, current_tld = _split_brand_tld(domain)
+    
+    if brand_name and current_tld:
+        # Build the registrable domain for same-domain checks
+        registrable_domain = brand_name + current_tld
         
         # Find all links in content
         links = re.findall(r'href=["\']([^"\']+)["\']', content_str, re.IGNORECASE)
         
         for link in links:
             try:
-                # Parse the link
                 if link.startswith('http'):
                     parsed = urlparse(link)
-                    link_domain = parsed.netloc.lower()
+                    link_host = parsed.netloc.lower()
+                    if not link_host or link_host == domain:
+                        continue
                     
-                    # Check if link contains same brand but different TLD
-                    if link_domain and link_domain != domain:
-                        link_parts = link_domain.split('.')
-                        if len(link_parts) >= 2:
-                            link_brand = link_parts[0] if len(link_parts) == 2 else '.'.join(link_parts[:-1])
-                            link_tld = '.' + link_parts[-1]
-                            
-                            # Same brand, different TLD = suspicious
-                            if link_brand == brand_name and link_tld != current_tld:
-                                result["cross_domain_brand_links"].append(link_domain)
-                            
-                            # Similar brand (80%+ match) = also suspicious
-                            elif difflib.SequenceMatcher(None, brand_name, link_brand).ratio() > 0.8:
-                                result["cross_domain_brand_links"].append(link_domain)
+                    link_brand, link_tld = _split_brand_tld(link_host)
+                    if not link_brand or not link_tld:
+                        continue
+                    
+                    link_registrable = link_brand + link_tld
+                    
+                    # Skip subdomains of the SAME registrable domain
+                    # e.g. www.tandem.co.uk, cs.tandem.co.uk are same as tandem.co.uk
+                    if link_registrable == registrable_domain:
+                        continue
+                    
+                    # Same brand, different TLD = suspicious
+                    if link_brand == brand_name and link_tld != current_tld:
+                        result["cross_domain_brand_links"].append(link_host)
+                    
+                    # Similar brand (80%+ match) on different registrable domain
+                    elif link_registrable != registrable_domain:
+                        if difflib.SequenceMatcher(None, brand_name, link_brand).ratio() > 0.8:
+                            result["cross_domain_brand_links"].append(link_host)
             except:
                 pass
         
