@@ -364,6 +364,7 @@ class DomainApprovalResult:
     # === HIGH-RISK COMPOSITE INDICATORS ===
     high_risk_phish_infra: bool = False          # Render ASN + self-hosted MX + both phish rules fired
     high_risk_phish_infra_reason: str = ""       # Human-readable explanation
+    pattern_match: str = ""                      # Known attack pattern identifier (e.g. "Swedish Invoice Phish", "Hacklink/SEO Spam")
     asn_display: str = ""                        # Formatted "AS{number} ({org})" for results display
     
     # === SCORING DETAILS ===
@@ -3393,6 +3394,11 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     else:
         parts.append(f"✅ APPROVE (Score: {res.risk_score})")
     
+    # === PATTERN MATCH INDICATORS ===
+    # These help specialists instantly recognize known attack patterns.
+    if res.pattern_match:
+        parts.append("PATTERN: " + res.pattern_match)
+    
     # Top issues only (limit to 3 most important by weight)
     if scored_issues:
         top_issues = [text for _, text in scored_issues[:3]]
@@ -3859,6 +3865,35 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             f"Render ASN + self-hosted MX + {' + '.join(matched)} — "
             "partial match on known phishing infrastructure fingerprint"
         )
+    
+    # === BUILD PATTERN MATCH INDICATOR ===
+    # Identifies known attack patterns for specialist visibility.
+    _patterns = []
+    
+    # Swedish Invoice Phish pattern
+    if res.high_risk_phish_infra:
+        reason = res.high_risk_phish_infra_reason or ""
+        if "swedish" in reason.lower() or "invoice" in reason.lower():
+            _patterns.append("🇸🇪 Swedish Invoice Phish")
+        elif "render" in reason.lower() and "phish" in reason.lower():
+            _patterns.append("🇸🇪 Swedish Invoice Phish (partial match)")
+    
+    # Hacklink / SEO Spam pattern
+    _hl_signals = []
+    if res.hacklink_detected:
+        _hl_signals.append("hacklink keywords")
+    if res.hacklink_hidden_injection and res.hacklink_hidden_injection_confidence == "HIGH":
+        _hl_signals.append("hidden content injection")
+    if res.hacklink_wp_compromised:
+        _hl_signals.append("WP compromised")
+    if res.hacklink_malicious_script:
+        _hl_signals.append("malicious script")
+    if res.hacklink_spam_link_count >= 5:
+        _hl_signals.append(f"{res.hacklink_spam_link_count} spam links")
+    if _hl_signals:
+        _patterns.append(f"🕷️ Hacklink/SEO Spam ({', '.join(_hl_signals)})")
+    
+    res.pattern_match = " + ".join(_patterns) if _patterns else ""
     
     res.summary = generate_summary(res, signals, res.domain_age_days >= 0, weights=weights)
 
