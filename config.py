@@ -47,7 +47,7 @@ DEFAULT_CONFIG = {
         "hacklink_detected": 100,           # Hacklink SEO spam injection confirmed
         "hacklink_keywords": 25,           # Hacklink keywords present (below detection threshold)
         "hacklink_wp_compromised": 50,     # WordPress compromise indicators
-        "hacklink_vulnerable_plugins": 25, # Known exploitable WP plugins
+        "hacklink_vulnerable_plugins": 10, # Known exploitable WP plugins
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
         "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — HIGH confidence (5+ multi-signal score)
         "malicious_script_medium": 40,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — log + moderate penalty
