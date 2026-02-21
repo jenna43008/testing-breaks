@@ -171,7 +171,7 @@ DEFAULT_CONFIG = {
         # === MX PROVIDER SCORING (v4.7) ===
         "mx_disposable": 20,          # Disposable/cheap MX (Titan, ImprovMX, Hostinger email, etc.)
         "mx_selfhosted": 20,           # Self-hosted MX on same domain/IP - no provider oversight
-        "mx_enterprise_bonus": -10,    # Enterprise MX (Google Workspace, M365, Proofpoint) = legitimacy signal
+        "mx_enterprise_bonus": -20,    # Enterprise MX (Google Workspace, M365, Proofpoint) = legitimacy signal
     },
     
     # ==========================================================================
