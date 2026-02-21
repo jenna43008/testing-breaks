@@ -3887,17 +3887,14 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         if not has_compromise_evidence:
             # Domain has strong positive signals — theoretical vuln only
             is_established = res.domain_age_days and res.domain_age_days >= 365
-            has_app_presence = res.app_store_presence
-            has_enterprise_mx = res.mx_provider and res.mx_provider.lower() in (
-                "google workspace", "microsoft 365", "proofpoint", "mimecast",
-                "barracuda", "google", "microsoft",
-            )
+            has_app_presence = res.app_store_has_presence
+            has_enterprise_mx = res.mx_provider_type == "enterprise"
             legitimacy_signals = sum([
                 bool(has_strong_email_auth),
                 bool(is_established),
                 bool(has_app_presence),
                 bool(has_enterprise_mx),
-                bool(res.dkim_configured),
+                bool(res.dkim_exists),
             ])
             # 3+ legitimacy signals = clearly legitimate site with a popular plugin
             if legitimacy_signals >= 3:
