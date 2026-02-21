@@ -79,7 +79,7 @@ DEFAULT_CONFIG = {
         "hijack_path_pattern": 25,         # /tunnel/, /bid/, /secure/ paths
         "doc_sharing_lure": 25,            # "Secure Document Sharing" content
         "phishing_js_behavior": 25,        # atob(), hash extraction, etc.
-        "phishing_infra_redirect": 35,     # Redirect to workers.dev, etc.
+        "phishing_infra_redirect": 45,     # Redirect to workers.dev, etc.
         "email_tracking_url": 20,          # Email in URL hash (tracking)
         
         # === E-COMMERCE / RETAIL SCAM INDICATORS ===
@@ -138,7 +138,7 @@ DEFAULT_CONFIG = {
         "status_5xx_errors": 10,
         "access_restricted": 15,          # 401 or 403 on what should be public domain
         "minimal_shell": 15,
-        "js_redirect": 10,
+        "js_redirect": 20,
         "meta_refresh": 5,
         "external_js_loader": 6,
         "obfuscated_js": 15,
