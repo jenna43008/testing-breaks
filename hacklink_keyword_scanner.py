@@ -30,38 +30,6 @@ from urllib.parse import urlparse
 TURKISH_HACKLINK_KEYWORDS = [
     "hacklink", "hack link", "hacklink satın al", "hacklink al",
     "hacklink panel", "hacklink servisi", "hacklink fiyat",
-    "bahis", "bahis siteleri", "canlı bahis", "illegal bahis","""
-Hacklink Keyword Scanner
-========================
-Scans domain page content for hacklink SEO poisoning indicators.
-
-Hacklink campaigns (predominantly Turkish-origin) inject hidden keywords and links
-into compromised websites. These include gambling, pharmaceutical, and adult content
-keywords designed to boost attacker-controlled sites in search rankings.
-
-IMPORTANT: HTTP errors (403, timeout, SSL failures) are treated as risk signals,
-not benign outcomes. A legitimate business domain that blocks access, times out,
-or has certificate issues is itself suspicious for a sending domain.
-"""
-
-import re
-import math
-import socket
-import urllib.request
-import urllib.error
-import ssl
-from typing import Dict, List, Optional
-from urllib.parse import urlparse
-
-
-# ================================================================
-# Hacklink Keyword Families
-# ================================================================
-
-# Long/specific keywords — safe for substring matching (low false-positive risk)
-TURKISH_HACKLINK_KEYWORDS = [
-    "hacklink", "hack link", "hacklink satın al", "hacklink al",
-    "hacklink panel", "hacklink servisi", "hacklink fiyat",
     "bahis", "bahis siteleri", "canlı bahis", "illegal bahis",
     "casino", "canlı casino", "online casino", "casino siteleri",
     "kumar", "kumar siteleri", "slot oyunları",
@@ -540,15 +508,28 @@ class HacklinkKeywordScanner:
             })
 
         # ----- 1. Turkish Hacklink Keyword Scan -----
+        # Build a set of keywords that appear in the domain name itself.
+        # If a business is literally named "acarlar nakliyat" (a Turkish moving
+        # company), the word "nakliyat" appearing in their page content is
+        # expected — it's their business name, not evidence of compromise.
+        # We suppress these from page-content matching to avoid false positives.
+        domain_name_kw_set = set(k.lower() for k in domain_name_keywords)
+
         # Substring match for long/specific keywords (low false-positive risk)
         for keyword in TURKISH_HACKLINK_KEYWORDS:
-            if keyword.lower() in content_lower:
+            kw_lower = keyword.lower()
+            if kw_lower in domain_name_kw_set:
+                continue  # Skip — this is the business's own terminology
+            if kw_lower in content_lower:
                 keywords_found.append(keyword)
         # Word-boundary match for short/ambiguous keywords (high false-positive risk)
         for pattern in HACKLINK_EXACT_COMPILED:
             m = pattern.search(page_content)
             if m:
-                keywords_found.append(m.group().lower())
+                matched = m.group().lower()
+                if matched in domain_name_kw_set:
+                    continue  # Skip — domain's own terminology
+                keywords_found.append(matched)
 
         if len(keywords_found) >= 5:
             score += 30
