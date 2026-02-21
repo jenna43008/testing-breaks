@@ -2993,13 +2993,13 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     if rdap_enabled and res.domain_age_days >= 0 and res.domain_age_days <= 1:
         src = f" ({res.domain_age_source.upper()})" if res.domain_age_source else ""
-        all_issues.append(f"⚠ DOMAIN CREATED TODAY/YESTERDAY{src} → Registered {res.domain_age_days}d ago; near-certain spam/phishing infrastructure")
+        all_issues.append(f"⚠ DOMAIN CREATED TODAY/YESTERDAY{src} → Registered {res.domain_age_days}d ago")
     elif rdap_enabled and res.domain_age_days >= 0 and res.domain_age_days < 7:
-        all_issues.append(f"DOMAIN ONLY {res.domain_age_days} DAYS OLD → New domains hit spam folder 90%+ of the time")
+        all_issues.append(f"DOMAIN ONLY {res.domain_age_days} DAYS OLD → Very new domain")
     elif rdap_enabled and res.domain_age_days >= 7 and res.domain_age_days < 30:
-        all_issues.append(f"DOMAIN {res.domain_age_days} DAYS OLD → Young domains face increased spam filtering")
+        all_issues.append(f"DOMAIN {res.domain_age_days} DAYS OLD → Young domain")
     elif rdap_enabled and res.domain_age_days >= 30 and res.domain_age_days < 90:
-        all_issues.append(f"DOMAIN {res.domain_age_days} DAYS OLD → Relatively new; building reputation")
+        all_issues.append(f"DOMAIN {res.domain_age_days} DAYS OLD → Relatively new domain")
     
     if not res.spf_exists and not res.dmarc_exists and not res.dkim_exists:
         all_issues.append("ZERO EMAIL AUTH → Gmail/Yahoo REQUIRE authentication; emails will fail")
@@ -3383,7 +3383,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('WORDPRESS COMPROMISED', weights.get('hacklink_wp_compromised', 45)),
             ('BLACKLISTED IP', weights.get('ip_blacklisted', 40)),
             ('SPF +all', weights.get('spf_pass_all', 40)),
-            ('DOMAIN CREATED TODAY', weights.get('domain_age_0d', 40)),
+            ('DOMAIN CREATED TODAY + RISK', weights.get('new_domain_with_risk', 40)),
             ('SPAM LINKS', weights.get('hacklink_spam_links', 35)),
             ('DISPOSABLE EMAIL', weights.get('disposable_domain', 35)),
             ('TYPOSQUAT', weights.get('typosquat', 30)),
@@ -3392,7 +3392,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('MALWARE LINKS', weights.get('malware_links', 25)),
             ('CREDENTIAL FORM + BRAND', 25),
             ('VULNERABLE WP PLUGINS', weights.get('hacklink_vulnerable_plugins', 25)),
-            ('DOMAIN ONLY', weights.get('domain_age_7d', 25)),
+            ('YOUNG DOMAIN + RISK', weights.get('young_domain_with_risk_7d', 25)),
             ('REDIRECTS TO PHISHING', weights.get('redirects_phishing', 25)),
             ('VT FLAGGED', weights.get('vt_malicious_medium', 40)),
             ('BLOCKED ASN', weights.get('blocked_asn', 20)),
@@ -3618,20 +3618,49 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             add("blocked_asn_org", asn_score)
             res.blocked_asn_org_match = matched_asn  # Store for display
     
-    # Domain age
+    # Domain age — tracked as zero-point signals for rule engine only.
+    # Age alone is not a risk — it only matters when combined with actual
+    # content/infrastructure risk indicators (NOT email auth, which is weak).
     if res.domain_age_days >= 0:
         if res.domain_age_days <= 1:
             res.domain_created_today = True
-            add("domain_created_today", weights.get('domain_created_today', 50))
-        if res.domain_age_days < 7:
-            add("domain_lt_7d", weights.get('domain_lt_7d', 35))
-        if res.domain_age_days < 30:
-            add("domain_lt_30d", weights.get('domain_lt_30d', 12))
+            add("domain_created_today", 0)
+        elif res.domain_age_days < 7:
+            add("domain_lt_7d", 0)
+        elif res.domain_age_days < 30:
+            add("domain_lt_30d", 0)
         elif res.domain_age_days < 90:
-            add("domain_lt_90d", weights.get('domain_lt_90d', 5))
+            add("domain_lt_90d", 0)
         # Track established domains (for rule detection)
         if res.domain_age_days >= 365:
             add("domain_gt_1yr", 0)
+
+        # === AGE AMPLIFIER: only score age when real risk signals are present ===
+        # Email auth (no_dkim, no_spf, dmarc_none, spf_pass_all) is excluded —
+        # it's a weak signal that shouldn't activate age scoring on its own.
+        _CONTENT_RISK_SIGNALS = {
+            "hacklink_keywords", "hidden_injection", "hacklink_wp_compromised",
+            "hacklink_spam_links", "hacklink_vulnerable_plugins", "malicious_script",
+            "js_redirect", "minimal_shell", "empty_page", "suspicious_tld",
+            "hosting_suspect", "hosting_free", "typosquat_detected",
+            "disposable_email", "free_email_domain", "hosting_budget_shared",
+            "redirect_cross_domain", "cross_domain_brand_link",
+            "tld_variant_spoof", "domain_brand_impersonation",
+            "opaque_entity", "sensitive_fields", "phishing_js", "doc_lure",
+            "vt_malicious", "vt_malicious_medium", "vt_suspicious",
+            "blocked_asn", "cpanel_detected",
+        }
+        has_content_risk = bool(signals & _CONTENT_RISK_SIGNALS)
+
+        if has_content_risk:
+            if res.domain_age_days <= 1:
+                add("new_domain_with_risk", weights.get('new_domain_with_risk', 40))
+            elif res.domain_age_days < 7:
+                add("new_domain_with_risk", weights.get('young_domain_with_risk_7d', 25))
+            elif res.domain_age_days < 30:
+                add("new_domain_with_risk", weights.get('young_domain_with_risk_30d', 10))
+            elif res.domain_age_days < 90:
+                add("new_domain_with_risk", weights.get('young_domain_with_risk_90d', 4))
     
     # Domain type
     if res.is_suspicious_tld:
