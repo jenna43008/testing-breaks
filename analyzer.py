@@ -3880,6 +3880,8 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         'hosting_providers': src.get('hosting_providers', DEFAULT_CONFIG.get('hosting_providers', {})),
         'tld_variant_allowlist': src.get('tld_variant_allowlist', DEFAULT_CONFIG.get('tld_variant_allowlist', [])),
         'spoofing_allowlist': src.get('spoofing_allowlist', DEFAULT_CONFIG.get('spoofing_allowlist', [])),
+        'blocked_asn_orgs': src.get('blocked_asn_orgs', DEFAULT_CONFIG.get('blocked_asn_orgs', [])),
+        'blocked_asn_org_score': src.get('blocked_asn_org_score', DEFAULT_CONFIG.get('blocked_asn_org_score', 100)),
     }
     
     res = DomainApprovalResult(domain=domain)
