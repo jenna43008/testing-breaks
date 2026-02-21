@@ -4276,9 +4276,8 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                 we["updated_days_ago"] >= 0 and we["updated_days_ago"] <= 90 and
                 res.domain_age_days >= 365):
                 res.domain_transfer_lock_recent = True
-            if (we["updated_days_ago"] >= 0 and we["updated_days_ago"] <= 30
-        and res.domain_age_days >= 365):
-    res.whois_recently_updated = True    
+            if (we["updated_days_ago"] >= 0 and we["updated_days_ago"] <= 30:
+            res.whois_recently_updated = True    
         except Exception:
             pass
     
