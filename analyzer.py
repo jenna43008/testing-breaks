@@ -400,6 +400,7 @@ class DomainApprovalResult:
     hacklink_malicious_script_signals: str = ""    # Semicolon-separated signal names that fired
     hacklink_malicious_script_score: int = 0       # Accumulated multi-signal score
     hacklink_hidden_injection: bool = False       # CSS hidden content injection (display:none, font-size:0)
+    hacklink_hidden_injection_confidence: str = "" # HIGH = hidden+links, LOW = CSS-only (legit pattern)
     hacklink_is_cpanel: bool = False              # cPanel hosting environment detected
     hacklink_suspicious_scripts: str = ""         # Semicolon-separated suspicious external script URLs
     
@@ -3026,7 +3027,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             all_issues.append(f"⚠️ SUSPICIOUS SCRIPT DETECTED (MEDIUM confidence) → Potentially malicious script patterns found; signals: {signals}")
     
     if res.hacklink_hidden_injection:
-        all_issues.append("🚨 HIDDEN CONTENT INJECTION → CSS-cloaked content (display:none, font-size:0) with links; classic hacklink/SEO spam technique")
+        if res.hacklink_hidden_injection_confidence == "HIGH":
+            all_issues.append("🚨 HIDDEN CONTENT INJECTION → CSS-cloaked content (display:none, font-size:0) with embedded links; classic hacklink/SEO spam technique")
+        elif res.hacklink_hidden_injection_confidence == "LOW":
+            all_issues.append("CSS HIDING PATTERNS → CSS hiding techniques found (no hidden links detected — common in legitimate templates/dev sites)")
     
     if res.hacklink_is_cpanel:
         all_issues.append("CPANEL HOSTING → cPanel shared hosting detected; frequently targeted in hacklink campaigns")
@@ -3282,6 +3286,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('SUSPICIOUS SCRIPT DETECTED (MEDIUM', weights.get('malicious_script_medium', 25)),
             ('VT MALICIOUS', weights.get('vt_malicious_high', 65)),
             ('HIDDEN CONTENT INJECTION', weights.get('hidden_injection', 55)),
+            ('CSS HIDING PATTERNS', weights.get('hidden_injection_css_only', 5)),
             ('BLACKLISTED DOMAIN', weights.get('domain_blacklisted', 50)),
             ('HACKLINK SEO SPAM DETECTED', weights.get('hacklink_detected', 50)),
             ('WORDPRESS COMPROMISED', weights.get('hacklink_wp_compromised', 45)),
@@ -3727,8 +3732,13 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             add("malicious_script", weights.get('malicious_script_medium', 25))
     
     # === HIDDEN CONTENT INJECTION (CSS cloaking: display:none, font-size:0) ===
+    # HIGH = hidden content WITH embedded links (near-certain hacklink/SEO spam)
+    # LOW  = CSS hiding patterns only, no links (common in legit templates/dev sites)
     if res.hacklink_hidden_injection:
-        add("hidden_injection", weights.get('hidden_injection', 55))
+        if res.hacklink_hidden_injection_confidence == "HIGH":
+            add("hidden_injection", weights.get('hidden_injection', 55))
+        elif res.hacklink_hidden_injection_confidence == "LOW":
+            add("hidden_injection_css_only", weights.get('hidden_injection_css_only', 5))
     
     # === CPANEL HOSTING DETECTED ===
     if res.hacklink_is_cpanel:
@@ -4243,6 +4253,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.hacklink_malicious_script_signals = ";".join(ms_signals) if ms_signals else ""
             res.hacklink_malicious_script_score = hl_result.get("malicious_script_score", 0)
             res.hacklink_hidden_injection = any("hidden_content" in p for p in inj_patterns)
+            res.hacklink_hidden_injection_confidence = hl_result.get("hidden_injection_confidence", "")
             
             # Suspicious external scripts
             sus_scripts = hl_result.get("suspicious_scripts", [])
