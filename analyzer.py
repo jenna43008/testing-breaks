@@ -3082,7 +3082,16 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     if res.hacklink_vulnerable_plugins:
         plugins = res.hacklink_vulnerable_plugins.replace(";", ", ")[:80]
-        all_issues.append(f"VULNERABLE WP PLUGINS ({plugins}) → Known exploitable plugins detected")
+        # Check if there's actual compromise evidence alongside the vuln plugins
+        has_compromise_evidence = (
+            res.hacklink_keywords or res.hacklink_hidden_injection_confidence == "HIGH"
+            or res.hacklink_wp_compromised or res.hacklink_spam_link_count >= 5
+            or (res.hacklink_malicious_script and res.hacklink_malicious_script_confidence in ("HIGH", "MEDIUM"))
+        )
+        if has_compromise_evidence:
+            all_issues.append(f"VULNERABLE WP PLUGINS ({plugins}) → Known exploitable plugins detected")
+        else:
+            all_issues.append(f"VULNERABLE WP PLUGINS ({plugins}) → Known exploitable plugins detected (⬇ no active compromise evidence — popular plugin on established site)")
     
     if res.hacklink_spam_link_count >= 5:
         all_issues.append(f"SPAM LINKS ({res.hacklink_spam_link_count} hidden links) → Hidden outbound spam links injected into page")
@@ -3864,6 +3873,38 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             add("js_redirect_email_auth_mitigated", weights.get('js_redirect_email_auth_mitigated', -8))
         if "minimal_shell" in signals:
             add("minimal_shell_email_auth_mitigated", weights.get('minimal_shell_email_auth_mitigated', -8))
+
+    # === VULNERABLE PLUGINS WITHOUT COMPROMISE EVIDENCE ===
+    # Contact Form 7, Elementor, etc. are on millions of legitimate WordPress sites.
+    # Having them installed is theoretical risk, not evidence of actual compromise.
+    # When there's NO evidence of exploitation AND the domain has strong legitimacy
+    # signals, reduce the weight significantly — it's just a popular plugin, not a hack.
+    if "hacklink_vulnerable_plugins" in signals:
+        has_compromise_evidence = any(s in signals for s in [
+            "hacklink_keywords", "hidden_injection", "hacklink_wp_compromised",
+            "hacklink_spam_links", "malicious_script",
+        ])
+        if not has_compromise_evidence:
+            # Domain has strong positive signals — theoretical vuln only
+            is_established = res.domain_age_days and res.domain_age_days >= 365
+            has_app_presence = res.app_store_presence
+            has_enterprise_mx = res.mx_provider and res.mx_provider.lower() in (
+                "google workspace", "microsoft 365", "proofpoint", "mimecast",
+                "barracuda", "google", "microsoft",
+            )
+            legitimacy_signals = sum([
+                bool(has_strong_email_auth),
+                bool(is_established),
+                bool(has_app_presence),
+                bool(has_enterprise_mx),
+                bool(res.dkim_configured),
+            ])
+            # 3+ legitimacy signals = clearly legitimate site with a popular plugin
+            if legitimacy_signals >= 3:
+                add("vuln_plugins_no_compromise_mitigated", -18)
+            # 2 legitimacy signals = likely legitimate, moderate reduction
+            elif legitimacy_signals >= 2:
+                add("vuln_plugins_no_compromise_mitigated", -10)
 
     # === UNIFIED RULES ENGINE ===
     # All scoring logic beyond base weights (former combos + custom rules)
