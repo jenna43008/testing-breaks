@@ -3872,8 +3872,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # === TRANSFER LOCK / WHOIS ENRICHMENT ===
     if res.domain_transfer_lock_recent:
         add("transfer_lock_recent", weights.get('transfer_lock_recent', 15))
-    
-    if res.whois_recently_updated:
+    elif res.whois_recently_updated:
+        # Only score whois update if transfer lock didn't already fire —
+        # they're driven by the same WHOIS update event
         add("whois_recently_updated", weights.get('whois_recently_updated', 10))
     
     # === EMPTY PAGE ===
