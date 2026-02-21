@@ -961,7 +961,24 @@ def classify_mx_provider(mx_records: List[Tuple[int, str]], domain: str, config:
     # Check all MX hostnames (primary first, but check all)
     all_mx_hosts = [h.lower() for _, h in mx_records]
     
-    # Check enterprise patterns first (highest priority)
+    # --- HARDCODED ENTERPRISE SAFETY NET ---
+    # These patterns are so fundamental that they must match regardless of config.
+    # Prevents misclassification if config fails to load or is incomplete.
+    # Example: hriscloudlk-com.mail.protection.outlook.com → Microsoft 365
+    _ENTERPRISE_ALWAYS = [
+        "mail.protection.outlook.com",   # Microsoft 365 / Exchange Online
+        "google.com",                     # Google Workspace
+        "googlemail.com",                 # Google Workspace (legacy)
+        "pphosted.com",                   # Proofpoint
+        "mimecast.com",                   # Mimecast
+        "barracudanetworks.com",          # Barracuda
+    ]
+    for mx_host in all_mx_hosts:
+        for pattern in _ENTERPRISE_ALWAYS:
+            if pattern in mx_host:
+                return "enterprise"
+    
+    # Check enterprise patterns from config (highest priority)
     enterprise_patterns = mx_providers.get('enterprise', {}).get('patterns', [])
     for mx_host in all_mx_hosts:
         for pattern in enterprise_patterns:
