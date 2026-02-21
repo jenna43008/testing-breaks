@@ -3142,11 +3142,23 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.redirect_uses_temp:
         all_issues.append("TEMP REDIRECTS (302/307) → Suggests URL cloaking; triggers filters")
     
+    # Check for strong email auth (used to annotate mitigated issues)
+    _strong_email = (
+        res.spf_exists and res.spf_mechanism == "-all"
+        and res.dmarc_exists and res.dmarc_policy in ("reject", "quarantine")
+    )
+
     if res.is_minimal_shell:
-        all_issues.append("MINIMAL/SHELL WEBSITE → Common phishing indicator")
+        if _strong_email:
+            all_issues.append("MINIMAL/SHELL WEBSITE → Common phishing indicator (⬇ mitigated: strong email auth)")
+        else:
+            all_issues.append("MINIMAL/SHELL WEBSITE → Common phishing indicator")
     
     if res.has_js_redirect:
-        all_issues.append("JAVASCRIPT REDIRECT → Suspicious redirect technique")
+        if _strong_email:
+            all_issues.append("JAVASCRIPT REDIRECT → Suspicious redirect technique (⬇ mitigated: strong email auth)")
+        else:
+            all_issues.append("JAVASCRIPT REDIRECT → Suspicious redirect technique")
     
     if res.has_meta_refresh:
         all_issues.append("META REFRESH REDIRECT → Often used for cloaking")
@@ -3768,6 +3780,22 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.ct_log_count == 0:
         add("ct_no_history", weights.get('ct_no_history', 15))
     
+    # === MITIGATIONS (strong counter-signals reduce risk from ambiguous indicators) ===
+    # JS redirect + minimal shell is the classic phishing dropper fingerprint, but it's
+    # also exactly what a legit "coming soon" page or storefront redirect looks like.
+    # Phishing throwaways almost NEVER set up strict SPF + DMARC enforcement because
+    # they don't care about long-term deliverability. When both are present, reduce
+    # the weight of these ambiguous content signals.
+    has_strong_email_auth = (
+        res.spf_exists and res.spf_mechanism == "-all"
+        and res.dmarc_exists and res.dmarc_policy in ("reject", "quarantine")
+    )
+    if has_strong_email_auth:
+        if "js_redirect" in signals:
+            add("js_redirect_email_auth_mitigated", weights.get('js_redirect_email_auth_mitigated', -8))
+        if "minimal_shell" in signals:
+            add("minimal_shell_email_auth_mitigated", weights.get('minimal_shell_email_auth_mitigated', -8))
+
     # === UNIFIED RULES ENGINE ===
     # All scoring logic beyond base weights (former combos + custom rules)
     # Rules support if/then/else logic:
