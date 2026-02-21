@@ -398,6 +398,11 @@ def display_results(results: list):
             if 'risk_level' in domain_data:
                 st.metric("Risk Level", domain_data.get('risk_level', 'N/A'))
             
+            # Pattern match indicator for specialists
+            pattern = domain_data.get('pattern_match', '')
+            if pattern:
+                st.warning(f"**Pattern Match:** {pattern}")
+            
             # High-risk phishing infrastructure indicator
             if domain_data.get('high_risk_phish_infra'):
                 st.error(f"### 🚨 HIGH-RISK PHISHING INFRA")
