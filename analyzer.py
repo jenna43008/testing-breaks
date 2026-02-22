@@ -309,6 +309,14 @@ class DomainApprovalResult:
     exfil_drop_details: str = ""               # Human-readable descriptions
     phishing_kit_detected: bool = False        # Composite: multiple kit signals confirm a kit
     phishing_kit_reason: str = ""              # Human-readable explanation of kit detection
+    has_form_action_kit: bool = False           # <form action="gate.php"> targets kit filename
+    form_action_kit_target: str = ""           # Which kit filename the form posts to
+    form_action_kit_strong: bool = False        # True if form targets strong kit filename
+    has_suspicious_page_title: bool = False     # <title> matches phishing lure pattern
+    page_title: str = ""                       # Extracted page title
+    page_title_match: str = ""                 # Which suspicious pattern matched
+    whois_privacy: bool = False                # WHOIS registrant uses privacy/proxy service
+    whois_privacy_service: str = ""            # Which privacy service detected
     
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     has_hijack_path_pattern: bool = False
@@ -539,6 +547,33 @@ EXFIL_DROP_PATTERNS = [
     # Hardcoded email recipient in JS string context (kit exfil target)
     (_re.compile(rb'''["'](?:to|email|recipient|receiver)["']\s*[:=]\s*["'][a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}["']''', _re.IGNORECASE),
      'js_email_exfil', 'Hardcoded email in JavaScript (kit exfiltration target)'),
+    # JavaScript cross-domain POST — fetch() or XHR sending data to external domain
+    (_re.compile(rb'''fetch\s*\(\s*["']https?://[^"'/]+[^"']*["']\s*,\s*\{.*?method\s*:\s*["']POST["']''', _re.IGNORECASE | _re.DOTALL),
+     'js_fetch_external_post', 'JavaScript fetch() POST to external domain'),
+    (_re.compile(rb'''\.open\s*\(\s*["']POST["']\s*,\s*["']https?://''', _re.IGNORECASE),
+     'js_xhr_external_post', 'XMLHttpRequest POST to external domain'),
+]
+
+# Suspicious page titles — common in phishing kit landing pages.
+# These are matched against <title> tag content (case-insensitive).
+SUSPICIOUS_PAGE_TITLES = [
+    # Document lure titles
+    'secure document portal', 'document verification', 'verify your identity',
+    'account verification required', 'verify your account', 'confirm your identity',
+    'security verification', 'identity verification', 'email verification required',
+    # Login clone titles
+    'sign in to your account', 'login to continue', 'sign in required',
+    'session expired', 'session timeout', 'your session has expired',
+    # Brand-generic lure titles
+    'update your information', 'update your payment', 'update billing information',
+    'confirm your payment', 'payment verification', 'secure payment portal',
+    # Access/sharing lures
+    'shared with you', 'file shared with you', 'access your document',
+    'view shared file', 'document shared', 'secure file access',
+    # Urgency titles
+    'action required', 'immediate action required', 'urgent action needed',
+    'account suspended', 'account locked', 'account restricted',
+    'unauthorized login attempt', 'suspicious activity detected',
 ]
 
 # ============================================================================
@@ -2506,6 +2541,8 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
         # Phishing kit detection (v7.3)
         "kit_filename": "", "kit_filename_strong": False,
         "exfil_signals": [], "exfil_details": [],
+        "form_action_kit": "", "form_action_kit_strong": False,
+        "page_title": "", "suspicious_title_match": "",
     }
     
     if not content:
@@ -2636,8 +2673,35 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
                 if action_host and action_host != final_domain:
                     result["form_external"] = True
                     break
+            # === FORM ACTION → KIT FILENAME CHECK (v7.4) ===
+            # Check if form posts to a known kit filename — even on same domain.
+            # <form action="next.php"> is the #1 phishing kit signature.
+            action_basename = action_url.rsplit('/', 1)[-1].lower().strip() if action_url else ""
+            if action_basename and not result["form_action_kit"]:
+                for fn in PHISHING_KIT_FILENAMES_STRONG:
+                    if action_basename == fn:
+                        result["form_action_kit"] = fn
+                        result["form_action_kit_strong"] = True
+                        break
+                if not result["form_action_kit"]:
+                    for fn in PHISHING_KIT_FILENAMES_WEAK:
+                        if action_basename == fn:
+                            result["form_action_kit"] = fn
+                            result["form_action_kit_strong"] = False
+                            break
         except:
             pass
+    
+    # === PAGE TITLE EXTRACTION + SUSPICIOUS TITLE DETECTION (v7.4) ===
+    title_match = re.search(rb'<title[^>]*>([^<]{1,200})</title>', content_lower)
+    if title_match:
+        raw_title = title_match.group(1).decode('utf-8', errors='ignore').strip()
+        result["page_title"] = raw_title[:200]
+        title_lower = raw_title.lower()
+        for pattern in SUSPICIOUS_PAGE_TITLES:
+            if pattern in title_lower:
+                result["suspicious_title_match"] = pattern
+                break
     
     links = re.findall(rb'(?:href|src)=["\']([^"\']+)["\']', content_lower)
     for link in links:
@@ -3075,7 +3139,35 @@ def whois_enrich(domain: str) -> dict:
         "updated_date": "",
         "updated_days_ago": -1,
         "transfer_locked": True,  # Default safe — only flag if we confirm lock is missing
+        "privacy": False,         # v7.4: WHOIS privacy/proxy service detected
+        "privacy_service": "",    # v7.4: Which privacy service matched
     }
+    
+    # Known WHOIS privacy/proxy service indicators
+    PRIVACY_KEYWORDS = [
+        ('domains by proxy', 'Domains By Proxy (GoDaddy)'),
+        ('domainsbyproxy', 'Domains By Proxy (GoDaddy)'),
+        ('whoisguard', 'WhoisGuard (Namecheap)'),
+        ('whois guard', 'WhoisGuard (Namecheap)'),
+        ('contactprivacy', 'Contact Privacy (Tucows)'),
+        ('contact privacy', 'Contact Privacy (Tucows)'),
+        ('privacy protect', 'Privacy Protection Service'),
+        ('privacyprotect', 'Privacy Protection Service'),
+        ('withheldforprivacy', 'Withheld for Privacy'),
+        ('withheld for privacy', 'Withheld for Privacy'),
+        ('redacted for privacy', 'ICANN Redacted'),
+        ('data protected', 'Data Protected'),
+        ('identity protection', 'Identity Protection Service'),
+        ('id shield', 'ID Shield'),
+        ('perfect privacy', 'Perfect Privacy'),
+        ('whois privacy', 'WHOIS Privacy Service'),
+        ('whoisprivacy', 'WHOIS Privacy Service'),
+        ('privacy service', 'Privacy Service'),
+        ('proxy service', 'Proxy Registration Service'),
+        ('domain privacy', 'Domain Privacy Service'),
+        ('registrant not identified', 'Registrant Not Identified'),
+    ]
+    
     if not WHOIS_AVAILABLE:
         return result
     try:
@@ -3085,6 +3177,31 @@ def whois_enrich(domain: str) -> dict:
         
         # Registrar
         result["registrar"] = (w.registrar or "")[:200]
+        
+        # === WHOIS PRIVACY DETECTION (v7.4) ===
+        # Check org, name, and registrar fields for privacy service indicators.
+        # Build a single string from all available registrant info.
+        privacy_haystack_parts = []
+        for attr in ['org', 'name', 'registrar', 'emails']:
+            val = getattr(w, attr, None)
+            if val:
+                if isinstance(val, list):
+                    privacy_haystack_parts.extend(str(v) for v in val)
+                else:
+                    privacy_haystack_parts.append(str(val))
+        # Also check raw text if available (some TLDs only have raw text)
+        if hasattr(w, 'text') and w.text:
+            raw = w.text if isinstance(w.text, str) else str(w.text)
+            # Only check first 2000 chars of raw text for efficiency
+            privacy_haystack_parts.append(raw[:2000])
+        
+        privacy_haystack = ' '.join(privacy_haystack_parts).lower()
+        
+        for keyword, service_name in PRIVACY_KEYWORDS:
+            if keyword in privacy_haystack:
+                result["privacy"] = True
+                result["privacy_service"] = service_name
+                break
         
         # Statuses
         raw_status = w.status
@@ -3307,6 +3424,22 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.has_exfil_drop_script:
         details = res.exfil_drop_details.replace(";", "; ")
         all_issues.append(f"EXFIL DROP SCRIPT ({details}) → Credential exfiltration infrastructure in page source")
+    
+    # v7.4: Form action kit filename
+    if res.has_form_action_kit:
+        severity = "STRONG" if res.form_action_kit_strong else "WEAK"
+        all_issues.append(f"FORM ACTION → KIT FILENAME ({res.form_action_kit_target}, {severity}) → Form posts to known phishing kit entry point")
+    
+    # v7.4: Suspicious page title
+    if res.has_suspicious_page_title:
+        all_issues.append(f"SUSPICIOUS PAGE TITLE (\"{res.page_title[:60]}\") → Matches phishing lure pattern: \"{res.page_title_match}\"")
+    
+    # v7.4: WHOIS privacy — only surface as issue when combined with other risk factors
+    if res.whois_privacy and res.domain_age_days >= 0 and res.domain_age_days < 90:
+        all_issues.append(f"WHOIS PRIVACY ({res.whois_privacy_service}) → Privacy-protected registrant on {res.domain_age_days}d-old domain")
+    elif res.whois_privacy and res.domain_age_days >= 90:
+        # Older domain with privacy is normal — note for context but not an issue
+        pass
     
     # === VIRUSTOTAL REPUTATION ===
     if res.vt_available:
@@ -3664,6 +3797,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('EXFIL DROP SCRIPT', weights.get('exfil_drop_script', 30)),
             ('PHISHING KIT DETECTED', weights.get('phishing_kit_detected', 15)),
             ('PHISHING KIT FILENAME', weights.get('phishing_kit_filename_strong', 22)),
+            ('FORM ACTION → KIT', weights.get('form_action_kit_strong', 25)),
+            ('SUSPICIOUS TITLE', weights.get('suspicious_page_title', 5)),
             ('CREDENTIAL FORM + BRAND', weights.get('credential_form', 10)),
             ('VULNERABLE WP PLUGINS', weights.get('hacklink_vulnerable_plugins', 25)),
             ('YOUNG DOMAIN + RISK', weights.get('young_domain_with_risk_7d', 25)),
@@ -3792,6 +3927,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('PHISHING KIT FILENAME', ['phishing_kit_filename_strong', 'phishing_kit_filename_weak']),
         ('PHISHING KIT DETECTED', ['phishing_kit_detected']),
         ('EXFIL DROP SCRIPT', ['exfil_drop_script']),
+        ('FORM ACTION KIT', ['form_action_kit_strong', 'form_action_kit_weak']),
+        ('SUSPICIOUS TITLE', ['suspicious_page_title']),
+        ('WHOIS PRIVACY', ['whois_privacy']),
         ('401 UNAUTHORIZED', ['access_restricted']),
         ('403 FORBIDDEN', ['access_restricted']),
         ('429 RATE LIMITED', ['status_429_throttling']),
@@ -4243,6 +4381,24 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.phishing_kit_detected:
         add("phishing_kit_detected", weights.get('phishing_kit_detected', 15))
     
+    # === v7.4: FORM ACTION → KIT FILENAME ===
+    if res.has_form_action_kit:
+        if res.form_action_kit_strong:
+            add("form_action_kit_strong", weights.get('form_action_kit_strong', 25))
+        else:
+            # Weak form targets (login.php, verify.php) — combo fuel only
+            add("form_action_kit_weak", 0)
+    
+    # === v7.4: SUSPICIOUS PAGE TITLE ===
+    if res.has_suspicious_page_title:
+        add("suspicious_page_title", weights.get('suspicious_page_title', 5))
+    
+    # === v7.4: WHOIS PRIVACY ===
+    # Standalone: very low weight (most legitimate domains use privacy too).
+    # Value is as combo fuel with new_domain + credential_form + self-hosted MX.
+    if res.whois_privacy:
+        add("whois_privacy", weights.get('whois_privacy', 0))
+    
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     if res.has_hijack_path_pattern:
         add("hijack_path_pattern", weights.get('hijack_path_pattern', 12))
@@ -4511,10 +4667,14 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     kit_evidence = []
     if res.has_phishing_kit_filename:
         kit_evidence.append(f"kit filename: {res.phishing_kit_filename}")
+    if res.has_form_action_kit:
+        kit_evidence.append(f"form action: {res.form_action_kit_target}")
     if res.has_exfil_drop_script:
         kit_evidence.append(f"exfil: {res.exfil_drop_signals}")
     if res.has_credential_form:
         kit_evidence.append("credential form")
+    if res.has_suspicious_page_title:
+        kit_evidence.append(f"lure title: {res.page_title_match}")
     if res.phishing_paths_found:
         kit_evidence.append(f"phishing paths: {res.phishing_paths_found}")
     if res.brands_detected:
@@ -4841,6 +5001,17 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.has_exfil_drop_script = True
             res.exfil_drop_signals = ";".join(ca["exfil_signals"])
             res.exfil_drop_details = ";".join(ca["exfil_details"])
+        
+        # v7.4: Form action kit filename + suspicious page title
+        if ca["form_action_kit"]:
+            res.has_form_action_kit = True
+            res.form_action_kit_target = ca["form_action_kit"]
+            res.form_action_kit_strong = ca["form_action_kit_strong"]
+        if ca["page_title"]:
+            res.page_title = ca["page_title"]
+        if ca["suspicious_title_match"]:
+            res.has_suspicious_page_title = True
+            res.page_title_match = ca["suspicious_title_match"]
     
     # Check for hijacked domain / stepping stone indicators
     redirect_chain_urls = res.redirect_chain.split(' → ') if res.redirect_chain else []
@@ -5010,6 +5181,9 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.whois_updated = we["updated_date"]
             res.whois_recently_updated_days = we["updated_days_ago"]
             res.domain_transfer_locked = we["transfer_locked"]
+            # v7.4: WHOIS privacy detection
+            res.whois_privacy = we.get("privacy", False)
+            res.whois_privacy_service = we.get("privacy_service", "")
             # Recently-added lock on established domain = post-compromise lockdown signal
             # Lock present + WHOIS updated ≤90 days + domain >1yr old
             if (we["transfer_locked"] and 
