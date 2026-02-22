@@ -538,15 +538,27 @@ def display_results(results: list):
                 dmarc = "✅" if domain_data.get('dmarc_exists') else "❌"
                 st.markdown(f"DMARC: {dmarc}")
             
-            if domain_data.get('domain_age_days', -1) >= 0:
-                st.markdown(f"**Domain Age:** {domain_data['domain_age_days']} days")
+            age_days = domain_data.get('domain_age_days', -1)
+            if age_days >= 0:
+                if age_days < 7:
+                    st.markdown(f"**Domain Age:** 🔴 {age_days} days")
+                elif age_days < 30:
+                    st.markdown(f"**Domain Age:** 🟠 {age_days} days")
+                elif age_days < 90:
+                    st.markdown(f"**Domain Age:** 🟡 {age_days} days")
+                elif age_days < 365:
+                    st.markdown(f"**Domain Age:** {age_days} days")
+                else:
+                    years = age_days // 365
+                    st.markdown(f"**Domain Age:** {age_days} days (~{years}yr)")
+            else:
+                st.markdown("**Domain Age:** ⚠️ Unknown (RDAP/WHOIS lookup failed)")
             
             # WHOIS privacy indicator
             if domain_data.get('whois_privacy'):
                 service = domain_data.get('whois_privacy_service', 'Unknown')
-                age = domain_data.get('domain_age_days', -1)
-                if age >= 0 and age < 90:
-                    st.markdown(f"**WHOIS:** 🔐 Privacy ({service}) — {age}d-old domain")
+                if age_days >= 0 and age_days < 90:
+                    st.markdown(f"**WHOIS:** 🔐 Privacy ({service}) — {age_days}d-old domain")
                 else:
                     st.markdown(f"**WHOIS:** Privacy ({service})")
             
