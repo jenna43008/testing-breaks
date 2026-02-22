@@ -944,15 +944,15 @@ def _deep_merge(default: dict, override: dict) -> dict:
     • Keys present in *default* but absent in *override* are kept.
     • Keys present in *override* but absent in *default* are kept.
 
-    Special-cased keys ('weights', 'rules') are handled by load_config
-    itself, so they are NOT recursed into here — the caller passes them
-    through its own dedicated merge/migration logic.
+    Keys handled by dedicated merge logic in load_config are passed
+    through without recursion.
     """
+    # Keys whose merge semantics are handled by load_config itself.
+    _SKIP_RECURSE = {'weights', 'rules',
+                     '_default_weights_snapshot', '_default_rules_snapshot'}
     merged = copy.deepcopy(default)
     for key, override_val in override.items():
-        if key in ('weights', 'rules'):
-            # Handled separately by load_config — just copy the override
-            # through so the caller's dedicated logic can operate on it.
+        if key in _SKIP_RECURSE:
             merged[key] = copy.deepcopy(override_val)
         elif (
             key in merged
@@ -970,20 +970,37 @@ def load_config() -> dict:
 
     Merge strategy
     ──────────────
-    • Scalar / top-level keys: saved value wins; new defaults propagate.
-    • Nested dicts (hosting_providers, mx_providers, brand_impersonation,
-      etc.): recursively merged so new sub-keys from DEFAULT_CONFIG appear
-      even when config.json has an older snapshot.
-    • Weights: flat {signal: int} merge — saved values win per-key, new
-      default signals propagate.  Version-gated migrations bump values
-      that haven't been user-customised above the old default.
-    • Rules: name-based merge — user rules override defaults with the
-      same name, new default rules propagate, user-added rules are kept.
-      Set "rules_replace": true in config.json for full replacement.
-    • Lists (suspicious_tlds, protected_brands, blocked_asn_orgs, …):
-      saved list replaces the default.  To pick up new default entries
-      you must either delete the key from config.json or add them
-      manually.
+    Scalar / top-level keys
+        Saved value wins; new defaults propagate for missing keys.
+
+    Nested dicts (hosting_providers, mx_providers, brand_impersonation…)
+        Recursively merged — new sub-keys from DEFAULT_CONFIG appear even
+        when config.json has an older snapshot of that dict.
+
+    Weights  (snapshot-aware)
+        If config.json contains ``_default_weights_snapshot`` (written by
+        ``save_config``), each weight is compared to the snapshot:
+        • saved == snapshot  →  user never customised it  →  use current
+          DEFAULT_CONFIG value  (your code edits propagate automatically)
+        • saved != snapshot  →  user explicitly changed it via the UI  →
+          keep the user's value
+        • key missing in saved  →  new signal  →  use DEFAULT_CONFIG
+        If no snapshot exists (legacy config), falls back to the old
+        behaviour: saved values win per-key, version-gated migrations
+        bump values that haven't been raised above the old default.
+
+    Rules  (snapshot-aware, name-keyed)
+        Same principle as weights.  If ``_default_rules_snapshot`` exists,
+        unchanged rules pick up the current DEFAULT_CONFIG version; user-
+        customised rules are preserved.  New default rules propagate; rules
+        removed from DEFAULT_CONFIG are dropped unless the user edited them.
+        Set ``"rules_replace": true`` in config.json to skip merge logic
+        entirely.
+
+    Lists (suspicious_tlds, protected_brands, blocked_asn_orgs…)
+        Saved list replaces the default.  To pick up new default entries
+        you must either delete the key from config.json or add them
+        manually.
     """
     ensure_config_dir()
 
@@ -1001,95 +1018,243 @@ def load_config() -> dict:
     loaded.pop('combos', None)
     loaded.pop('disabled_combos', None)
 
-    # ── Deep-merge everything except weights & rules ─────────────
+    # ── Deep-merge everything except weights, rules & snapshots ──
     merged = _deep_merge(DEFAULT_CONFIG, loaded)
 
-    # ── Weights: flat per-key merge ──────────────────────────────
-    default_weights = copy.deepcopy(DEFAULT_CONFIG.get('weights', {}))
+    # ── Rename migration: transfer_lock_missing → transfer_lock_recent
     loaded_weights = loaded.get('weights', {})
-    merged['weights'] = {**default_weights, **loaded_weights}
-
-    # Rename migration: transfer_lock_missing → transfer_lock_recent
-    if 'transfer_lock_missing' in merged['weights'] and 'transfer_lock_recent' not in loaded_weights:
-        merged['weights']['transfer_lock_recent'] = merged['weights'].pop('transfer_lock_missing')
-    elif 'transfer_lock_missing' in merged['weights']:
-        merged['weights'].pop('transfer_lock_missing', None)
-
-    # Migrate rules referencing the old signal name
     if 'rules' in loaded:
         for rule in loaded['rules']:
             for key in ('if_all', 'if_any', 'if_not'):
                 if key in rule:
-                    rule[key] = ['transfer_lock_recent' if s == 'transfer_lock_missing' else s for s in rule[key]]
+                    rule[key] = [
+                        'transfer_lock_recent' if s == 'transfer_lock_missing' else s
+                        for s in rule[key]
+                    ]
 
-    # ── Version-gated weight migrations ──────────────────────────
-    saved_version = loaded.get('config_version', '0')
+    # ==================================================================
+    # WEIGHTS MERGE
+    # ==================================================================
+    default_weights = copy.deepcopy(DEFAULT_CONFIG.get('weights', {}))
+    snapshot_weights = loaded.get('_default_weights_snapshot', None)
 
-    if saved_version < '7.1':
-        v71_bumps = {
-            # signal: (old_default, new_default) — only upgrade if saved == old
-            'malicious_script': (40, 65),
-            'hidden_injection': (35, 55),
-            'hacklink_detected': (35, 50),
-            'hacklink_wp_compromised': (30, 45),
-            'hacklink_spam_links': (25, 35),
-            'hacklink_vulnerable_plugins': (20, 25),
-            'hacklink_keywords': (12, 15),
-            'vt_malicious_high': (45, 65),
-            'vt_malicious_medium': (30, 40),
-            'vt_malicious_low': (18, 22),
-            'vt_suspicious': (12, 15),
-            'empty_page': (15, 20),
-            'transfer_lock_recent': (12, 15),
-            'ct_no_history': (12, 15),
-            'whois_recently_updated': (8, 10),
-            'ct_recent_issuance': (8, 10),
-            'cpanel_detected': (6, 8),
-        }
-        for signal, (old_val, new_val) in v71_bumps.items():
-            saved_val = loaded_weights.get(signal, old_val)
-            if saved_val <= old_val:
-                merged['weights'][signal] = new_val
-        merged['config_version'] = '7.1'
-
-    if saved_version < '7.2':
-        v72_bumps = {
-            'malicious_script': (65, 100),
-            'hidden_injection': (55, 100),
-            'hacklink_detected': (50, 100),
-        }
-        for signal, (old_val, new_val) in v72_bumps.items():
-            saved_val = loaded_weights.get(signal, old_val)
-            if saved_val <= old_val:
-                merged['weights'][signal] = new_val
-        if 'malicious_script_medium' not in merged['weights']:
-            merged['weights']['malicious_script_medium'] = 25
-        merged['config_version'] = '7.2'
-
-    # ── Rules: name-based merge ──────────────────────────────────
-    if 'rules' in loaded:
-        if loaded.get('rules_replace', False):
-            merged['rules'] = loaded['rules']
+    # Handle rename in loaded weights
+    if 'transfer_lock_missing' in loaded_weights:
+        if 'transfer_lock_recent' not in loaded_weights:
+            loaded_weights['transfer_lock_recent'] = loaded_weights.pop('transfer_lock_missing')
         else:
-            default_rules = {r['name']: copy.deepcopy(r) for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r}
-            for user_rule in loaded['rules']:
-                name = user_rule.get('name', '')
+            loaded_weights.pop('transfer_lock_missing', None)
+    if snapshot_weights and 'transfer_lock_missing' in snapshot_weights:
+        if 'transfer_lock_recent' not in snapshot_weights:
+            snapshot_weights['transfer_lock_recent'] = snapshot_weights.pop('transfer_lock_missing')
+        else:
+            snapshot_weights.pop('transfer_lock_missing', None)
+
+    if snapshot_weights is not None:
+        # ── Smart merge: detect user customisations via snapshot ──
+        merged_weights = {}
+        all_weight_keys = set(default_weights) | set(loaded_weights)
+        for wkey in all_weight_keys:
+            saved  = loaded_weights.get(wkey)       # what config.json has
+            snap   = snapshot_weights.get(wkey)      # default at last save
+            cur    = default_weights.get(wkey)       # current DEFAULT_CONFIG
+
+            if saved is None:
+                # New signal added in DEFAULT_CONFIG → use it
+                merged_weights[wkey] = cur if cur is not None else 0
+            elif snap is not None and saved == snap:
+                # User never changed this weight → pick up current default
+                merged_weights[wkey] = cur if cur is not None else saved
+            else:
+                # User explicitly customised via UI → preserve their value
+                merged_weights[wkey] = saved
+        merged['weights'] = merged_weights
+    else:
+        # ── Legacy config (no snapshot) ──────────────────────────
+        # Without a snapshot we cannot distinguish "user customised
+        # this via the UI" from "stale copy of an old default".
+        #
+        # Strategy:
+        #   • Old configs (saved_version < current): apply version-
+        #     gated migrations as before — they upgrade known old
+        #     defaults while preserving user bumps.
+        #   • Current-version configs (no snapshot, version matches):
+        #     use DEFAULT_CONFIG for all weights.  This is a one-time
+        #     reset that picks up your code edits.  Any weights the
+        #     user changed via the UI will need to be re-applied once
+        #     (after the next save, the snapshot prevents this from
+        #     happening again).
+        saved_version = loaded.get('config_version', '0')
+        current_version = DEFAULT_CONFIG.get('config_version', '0')
+
+        if saved_version < '7.1':
+            merged['weights'] = {**default_weights, **loaded_weights}
+            v71_bumps = {
+                'malicious_script': (40, 65),
+                'hidden_injection': (35, 55),
+                'hacklink_detected': (35, 50),
+                'hacklink_wp_compromised': (30, 45),
+                'hacklink_spam_links': (25, 35),
+                'hacklink_vulnerable_plugins': (20, 25),
+                'hacklink_keywords': (12, 15),
+                'vt_malicious_high': (45, 65),
+                'vt_malicious_medium': (30, 40),
+                'vt_malicious_low': (18, 22),
+                'vt_suspicious': (12, 15),
+                'empty_page': (15, 20),
+                'transfer_lock_recent': (12, 15),
+                'ct_no_history': (12, 15),
+                'whois_recently_updated': (8, 10),
+                'ct_recent_issuance': (8, 10),
+                'cpanel_detected': (6, 8),
+            }
+            for signal, (old_val, new_val) in v71_bumps.items():
+                saved_val = loaded_weights.get(signal, old_val)
+                if saved_val <= old_val:
+                    merged['weights'][signal] = new_val
+            merged['config_version'] = '7.1'
+            saved_version = '7.1'  # allow fall-through to 7.2
+
+        if saved_version < '7.2':
+            if 'weights' not in merged or merged.get('config_version', '0') < '7.1':
+                merged['weights'] = {**default_weights, **loaded_weights}
+            v72_bumps = {
+                'malicious_script': (65, 100),
+                'hidden_injection': (55, 100),
+                'hacklink_detected': (50, 100),
+            }
+            for signal, (old_val, new_val) in v72_bumps.items():
+                saved_val = loaded_weights.get(signal, old_val)
+                if saved_val <= old_val:
+                    merged['weights'][signal] = new_val
+            if 'malicious_script_medium' not in merged['weights']:
+                merged['weights']['malicious_script_medium'] = 25
+            merged['config_version'] = '7.2'
+            saved_version = '7.2'
+
+        if saved_version >= current_version:
+            # Config is already at (or beyond) the current version but
+            # has no snapshot — this is a pre-snapshot config.json.
+            # Use DEFAULT_CONFIG values so code edits take effect.
+            # User-only keys (not in defaults) are preserved.
+            merged_weights = copy.deepcopy(default_weights)
+            for wkey, wval in loaded_weights.items():
+                if wkey not in default_weights:
+                    # User added a signal that's not in DEFAULT_CONFIG
+                    merged_weights[wkey] = wval
+            merged['weights'] = merged_weights
+
+    # ==================================================================
+    # RULES MERGE
+    # ==================================================================
+    loaded_rules = loaded.get('rules', None)
+    snapshot_rules = loaded.get('_default_rules_snapshot', None)
+
+    if loaded_rules is not None:
+        if loaded.get('rules_replace', False):
+            # Full replacement mode — user opted out of merging
+            merged['rules'] = loaded_rules
+        elif snapshot_rules is not None:
+            # ── Smart merge: snapshot tells us what the user changed ──
+            default_rules_by_name = {
+                r['name']: copy.deepcopy(r)
+                for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r
+            }
+            loaded_rules_by_name = {}
+            for rule in loaded_rules:
+                name = rule.get('name', '')
                 if name:
-                    default_rules[name] = user_rule
+                    loaded_rules_by_name[name] = rule
                 else:
-                    default_rules[f"_unnamed_{id(user_rule)}"] = user_rule
-            merged['rules'] = list(default_rules.values())
+                    loaded_rules_by_name[f"_unnamed_{id(rule)}"] = rule
+
+            result_rules = copy.deepcopy(default_rules_by_name)
+
+            for name, saved_rule in loaded_rules_by_name.items():
+                snap_rule = snapshot_rules.get(name)
+                if name in default_rules_by_name:
+                    # Rule exists in both saved and current defaults
+                    if snap_rule is not None and saved_rule == snap_rule:
+                        # User never touched it → current default already
+                        # in result_rules, nothing to do
+                        pass
+                    else:
+                        # User customised this rule → keep their version
+                        result_rules[name] = saved_rule
+                else:
+                    # Rule NOT in current defaults — either user-created
+                    # or a default that was removed
+                    if snap_rule is not None and saved_rule == snap_rule:
+                        # Was a default that got removed → drop it
+                        pass
+                    else:
+                        # User-created or user-modified → keep it
+                        result_rules[name] = saved_rule
+
+            merged['rules'] = list(result_rules.values())
+        else:
+            # ── Legacy name-based merge (no snapshot) ────────────
+            # Same approach as weights: if version is current, prefer
+            # DEFAULT_CONFIG rules so code edits take effect.
+            loaded_version = loaded.get('config_version', '0')
+            current_version = DEFAULT_CONFIG.get('config_version', '0')
+
+            if loaded_version >= current_version:
+                # Pre-snapshot config at current version — use defaults,
+                # but keep any user-added rules that aren't in defaults
+                default_rule_names = {
+                    r['name'] for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r
+                }
+                merged['rules'] = copy.deepcopy(DEFAULT_CONFIG.get('rules', []))
+                for user_rule in loaded_rules:
+                    name = user_rule.get('name', '')
+                    if name and name not in default_rule_names:
+                        # User-created rule — preserve it
+                        merged['rules'].append(user_rule)
+            else:
+                default_rules = {
+                    r['name']: copy.deepcopy(r)
+                    for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r
+                }
+                for user_rule in loaded_rules:
+                    name = user_rule.get('name', '')
+                    if name:
+                        default_rules[name] = user_rule
+                    else:
+                        default_rules[f"_unnamed_{id(user_rule)}"] = user_rule
+                merged['rules'] = list(default_rules.values())
+
+    # Strip snapshot keys from the returned config — they're internal
+    # bookkeeping for the merge logic, not runtime config.
+    merged.pop('_default_weights_snapshot', None)
+    merged.pop('_default_rules_snapshot', None)
 
     return merged
 
 
 def save_config(config: dict) -> bool:
-    """Save configuration to file."""
+    """Save configuration to file.
+
+    Alongside the live config, stores ``_default_weights_snapshot`` and
+    ``_default_rules_snapshot`` so that ``load_config`` can distinguish
+    user-customised values from unchanged defaults on the next load.
+    """
     ensure_config_dir()
-    
+
     try:
+        to_save = copy.deepcopy(config)
+
+        # Record current defaults so load_config can detect user edits
+        to_save['_default_weights_snapshot'] = copy.deepcopy(
+            DEFAULT_CONFIG.get('weights', {})
+        )
+        to_save['_default_rules_snapshot'] = {
+            r['name']: copy.deepcopy(r)
+            for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r
+        }
+
         with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, indent=2, fp=f)
+            json.dump(to_save, indent=2, fp=f)
         return True
     except Exception as e:
         print(f"Error saving config: {e}")
