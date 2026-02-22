@@ -483,12 +483,35 @@ def display_results(results: list):
                 issues_list = [i.strip() for i in all_issues_raw.split(';') if i.strip()]
                 with st.expander(f"📋 All Issues ({len(issues_list)})", expanded=False):
                     for issue in issues_list:
-                        if issue.startswith("🚨"):
-                            st.markdown(f"- {issue}")
-                        elif issue.startswith("RULE:"):
-                            st.markdown(f"- 📐 {issue}")
+                        # Parse points prefix: "[+25] ISSUE TEXT" or "[-5] ISSUE TEXT" or "[0] ISSUE TEXT"
+                        pts_str = ""
+                        display_text = issue
+                        if issue.startswith("["):
+                            bracket_end = issue.find("]")
+                            if bracket_end > 0:
+                                pts_str = issue[1:bracket_end]
+                                display_text = issue[bracket_end+1:].strip()
+                        
+                        # Format points badge
+                        try:
+                            pts_val = int(pts_str)
+                        except (ValueError, TypeError):
+                            pts_val = 0
+                        
+                        if pts_val > 0:
+                            pts_badge = f"**`+{pts_val}`**"
+                        elif pts_val < 0:
+                            pts_badge = f"**`{pts_val}`**"
                         else:
-                            st.markdown(f"- ⚡ {issue}")
+                            pts_badge = "`0`"
+                        
+                        # Icon based on issue type
+                        if "🚨" in display_text:
+                            st.markdown(f"- {pts_badge} {display_text}")
+                        elif display_text.startswith("RULE:"):
+                            st.markdown(f"- {pts_badge} 📐 {display_text}")
+                        else:
+                            st.markdown(f"- {pts_badge} {display_text}")
             
             st.markdown("---")
             
