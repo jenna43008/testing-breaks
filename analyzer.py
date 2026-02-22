@@ -361,6 +361,18 @@ class DomainApprovalResult:
     hosting_asn_org: str = ""                   # ASN organization name
     blocked_asn_org_match: str = ""             # Matched blocked ASN org pattern (if any)
     
+    # === NAMESERVER RISK DETECTION ===
+    ns_records: str = ""                         # Semicolon-separated NS records
+    ns_count: int = -1                           # Number of NS records (-1 = not checked)
+    ns_is_parking: bool = False                  # NS delegated to parking/placeholder service
+    ns_parking_match: str = ""                   # Which parking NS pattern matched
+    ns_is_dynamic_dns: bool = False              # NS delegated to dynamic DNS provider
+    ns_dynamic_dns_match: str = ""               # Which dynamic DNS NS pattern matched
+    ns_is_free_dns: bool = False                 # NS using free/anonymous authoritative DNS
+    ns_free_dns_match: str = ""                  # Which free DNS NS pattern matched
+    ns_is_lame_delegation: bool = False          # Zero NS records (broken/abandoned)
+    ns_is_single_ns: bool = False                # Only 1 NS record (fragile/temporary)
+    
     # === HIGH-RISK COMPOSITE INDICATORS ===
     high_risk_phish_infra: bool = False          # Render ASN + self-hosted MX + both phish rules fired
     high_risk_phish_infra_reason: str = ""       # Human-readable explanation
@@ -1299,6 +1311,85 @@ def check_hosting_provider(domain: str, ip: str, ns_records: List[str] = None,
         result["provider"] = best_match["provider"]
         result["provider_type"] = best_match["provider_type"]
         result["detected_via"] = best_match["detected_via"]
+    
+    return result
+
+
+# ============================================================================
+# NAMESERVER RISK DETECTION
+# ============================================================================
+
+def check_ns_risk(ns_records: List[str], ns_risk_config: dict) -> Dict:
+    """
+    Analyse NS records for risk indicators independent of hosting provider.
+    
+    Detects:
+      - Parking / placeholder nameservers (domain unused / for-sale)
+      - Dynamic DNS providers (rapid IP rotation, phishing infra)
+      - Free / anonymous authoritative DNS (minimal investment)
+      - Lame delegation (zero NS records — broken / abandoned)
+      - Single NS (fragile / hastily-set-up)
+    
+    Returns dict with boolean flags and the matched pattern strings.
+    """
+    result = {
+        "ns_count": len(ns_records),
+        "is_parking": False,
+        "parking_match": "",
+        "is_dynamic_dns": False,
+        "dynamic_dns_match": "",
+        "is_free_dns": False,
+        "free_dns_match": "",
+        "is_lame_delegation": False,
+        "is_single_ns": False,
+    }
+    
+    # Lame delegation: domain resolved (we have an IP) but zero NS records
+    if len(ns_records) == 0:
+        result["is_lame_delegation"] = True
+        return result
+    
+    if len(ns_records) == 1:
+        result["is_single_ns"] = True
+    
+    ns_lower = [ns.lower().rstrip('.') for ns in ns_records]
+    
+    # Check parking NS patterns
+    parking_patterns = ns_risk_config.get("parking_ns", [])
+    for pattern in parking_patterns:
+        pattern_lower = pattern.lower()
+        for ns in ns_lower:
+            if pattern_lower in ns:
+                result["is_parking"] = True
+                result["parking_match"] = pattern
+                break
+        if result["is_parking"]:
+            break
+    
+    # Check dynamic DNS NS patterns
+    dynamic_patterns = ns_risk_config.get("dynamic_dns_ns", [])
+    for pattern in dynamic_patterns:
+        pattern_lower = pattern.lower()
+        for ns in ns_lower:
+            if pattern_lower in ns:
+                result["is_dynamic_dns"] = True
+                result["dynamic_dns_match"] = pattern
+                break
+        if result["is_dynamic_dns"]:
+            break
+    
+    # Check free DNS NS patterns (skip if already flagged as parking or dynamic)
+    if not result["is_parking"] and not result["is_dynamic_dns"]:
+        free_patterns = ns_risk_config.get("free_dns_ns", [])
+        for pattern in free_patterns:
+            pattern_lower = pattern.lower()
+            for ns in ns_lower:
+                if pattern_lower in ns:
+                    result["is_free_dns"] = True
+                    result["free_dns_match"] = pattern
+                    break
+            if result["is_free_dns"]:
+                break
     
     return result
 
@@ -3271,6 +3362,22 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.blocked_asn_org_match:
         all_issues.append(f"BLOCKED ASN ORG ({res.blocked_asn_org_match} / {res.hosting_asn_org}) → Domain hosted on blocked network; ASN {res.hosting_asn}")
     
+    # === NAMESERVER RISK ISSUES ===
+    if res.ns_is_dynamic_dns:
+        all_issues.append(f"DYNAMIC DNS NAMESERVER ({res.ns_dynamic_dns_match}) → Domain delegated to dynamic DNS; almost exclusively phishing/malware infrastructure")
+    
+    if res.ns_is_parking:
+        all_issues.append(f"PARKING NAMESERVER ({res.ns_parking_match}) → Domain parked/unused/for-sale; not a legitimate sender")
+    
+    if res.ns_is_lame_delegation:
+        all_issues.append("LAME DELEGATION (0 NS RECORDS) → Broken or abandoned domain; no functioning DNS")
+    
+    if res.ns_is_free_dns:
+        all_issues.append(f"FREE DNS PROVIDER ({res.ns_free_dns_match}) → Minimal infrastructure investment; unusual for business senders")
+    
+    if res.ns_is_single_ns:
+        all_issues.append("SINGLE NAMESERVER → Only 1 NS record; fragile or hastily configured domain")
+    
     if res.is_free_email_domain:
         all_issues.append("FREE EMAIL PROVIDER DOMAIN → Cannot send bulk from consumer email domains")
     
@@ -3504,6 +3611,11 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('BUDGET SHARED HOST', weights.get('hosting_budget_shared', 8)),
             ('SUSPECT HOST', weights.get('hosting_suspect', 8)),
             ('DEV PLATFORM HOST', weights.get('hosting_platform', 4)),
+            ('DYNAMIC DNS NAMESERVER', weights.get('ns_dynamic_dns', 25)),
+            ('PARKING NAMESERVER', weights.get('ns_parking', 15)),
+            ('LAME DELEGATION', weights.get('ns_lame_delegation', 20)),
+            ('FREE DNS PROVIDER', weights.get('ns_free_dns', 8)),
+            ('SINGLE NAMESERVER', weights.get('ns_single_ns', 5)),
             ('NO VALID HTTPS', weights.get('no_https', 25)),
             ('HIGH-ABUSE TLD', weights.get('suspicious_tld', 6)),
             ('NO DKIM', weights.get('no_dkim', 6)),
@@ -3613,10 +3725,15 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('BUDGET SHARED HOST', ['hosting_budget_shared']),
         ('SUSPECT HOST', ['hosting_suspect']),
         ('DEV PLATFORM HOST', ['hosting_platform']),
+        ('DYNAMIC DNS NAMESERVER', ['ns_dynamic_dns']),
+        ('PARKING NAMESERVER', ['ns_parking']),
+        ('LAME DELEGATION', ['ns_lame_delegation']),
+        ('FREE DNS PROVIDER', ['ns_free_dns']),
+        ('SINGLE NAMESERVER', ['ns_single_ns']),
         ('CPANEL HOSTING', ['cpanel_detected']),
         ('BLOCKED ASN', ['blocked_asn']),
-        ('TRANSFER LOCK', ['transfer_lock_recent']),
-        ('WHOIS RECENTLY UPDATED', ['whois_recently_updated']),
+        ('TRANSFER LOCK', ['transfer_lock_recent', 'transfer_lock_with_risk']),
+        ('WHOIS RECENTLY UPDATED', ['whois_recently_updated', 'whois_updated_with_risk']),
         ('NO PTR', ['no_ptr']),
         ('PTR MISMATCH', ['ptr_mismatch']),
         ('CT RECENT ISSUANCE ON OLD', ['ct_recent_issuance']),
@@ -3885,6 +4002,18 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         # but custom domains on free-tier platforms sending email is a red flag
         add("hosting_platform", weights.get('hosting_platform', 4))
     
+    # === NAMESERVER RISK SIGNALS ===
+    if res.ns_is_dynamic_dns:
+        add("ns_dynamic_dns", weights.get('ns_dynamic_dns', 25))
+    if res.ns_is_parking:
+        add("ns_parking", weights.get('ns_parking', 15))
+    if res.ns_is_lame_delegation:
+        add("ns_lame_delegation", weights.get('ns_lame_delegation', 20))
+    if res.ns_is_free_dns:
+        add("ns_free_dns", weights.get('ns_free_dns', 8))
+    if res.ns_is_single_ns:
+        add("ns_single_ns", weights.get('ns_single_ns', 5))
+    
     # === DOMAIN NAME PATTERN DETECTION (Tech Support Scams) ===
     if res.has_suspicious_prefix:
         add("suspicious_prefix", weights.get('suspicious_prefix', 15))
@@ -3917,12 +4046,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if not res.https_valid:
         add("no_https", weights.get('no_https', 25))
     
-    # v4.4: TLS failure markers — explain WHY HTTPS failed.
-    # Scored from config weights (default: 40 handshake, 30 connection).
+    # v4.4: TLS failure markers — tracked for summary/rules but scored at 0.
+    # These explain WHY HTTPS failed, they're not additional risk on top of no_https.
     if res.tls_handshake_failed:
-        add("tls_handshake_failed", weights.get('tls_handshake_failed', 40))
+        add("tls_handshake_failed", 0)
     if res.tls_connection_failed:
-        add("tls_connection_failed", weights.get('tls_connection_failed', 30))
+        add("tls_connection_failed", 0)
     
     if res.cert_expired:
         add("cert_expired", weights.get('cert_expired', 15))
@@ -3963,7 +4092,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # Don't flag on empty pages — obviously an empty page has no /about etc.
     # Don't flag when TLS failed — can't find /about if the server is unreachable;
     # that's already covered by no_https / tls_connection_failed.
-    if res.missing_trust_signals and not res.is_empty_page:
+    if res.missing_trust_signals and not res.is_empty_page and not res.tls_connection_failed and not res.tls_handshake_failed:
         add("missing_trust_signals", weights.get('missing_trust_signals', 8))
     
     # Opaque entity - access blocked AND no corporate footprint
@@ -4072,12 +4201,34 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("cpanel_detected", weights.get('cpanel_detected', 8))
     
     # === TRANSFER LOCK / WHOIS ENRICHMENT ===
-    # Scored directly from config weights.  The rule engine handles
-    # amplification when combined with content-risk signals.
+    # Transfer lock and WHOIS updates are tracked as zero-point markers.
+    # Like domain age, they only add points when actual content/infrastructure
+    # risk signals are present — a WHOIS update alone could be auto-renewal,
+    # contact info change, privacy protection, registrar migration, etc.
     if res.domain_transfer_lock_recent:
-        add("transfer_lock_recent", weights.get('transfer_lock_recent', 35))
-    if res.whois_recently_updated:
-        add("whois_recently_updated", weights.get('whois_recently_updated', 10))
+        add("transfer_lock_recent", 0)
+    elif res.whois_recently_updated:
+        add("whois_recently_updated", 0)
+    
+    # Only score transfer lock / WHOIS update when content risk is present
+    _TRANSFER_RISK_SIGNALS = {
+        "hacklink_keywords", "hidden_injection", "hacklink_wp_compromised",
+        "hacklink_spam_links", "hacklink_vulnerable_plugins", "malicious_script",
+        "js_redirect", "minimal_shell", "empty_page",
+        "hosting_suspect", "hosting_free", "typosquat_detected",
+        "redirect_cross_domain", "cross_domain_brand_link",
+        "tld_variant_spoof", "domain_brand_impersonation",
+        "opaque_entity", "sensitive_fields", "phishing_js", "doc_lure",
+        "vt_malicious", "vt_malicious_medium", "vt_suspicious",
+        "blocked_asn",
+    }
+    if (res.domain_transfer_lock_recent or res.whois_recently_updated):
+        has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
+        if has_transfer_risk:
+            if res.domain_transfer_lock_recent:
+                add("transfer_lock_with_risk", weights.get('transfer_lock_recent', 15))
+            else:
+                add("whois_updated_with_risk", weights.get('whois_recently_updated', 10))
     
     # === EMPTY PAGE ===
     if res.is_empty_page:
@@ -4290,6 +4441,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         'domain_blacklists': src.get('domain_blacklists', DEFAULT_CONFIG.get('domain_blacklists', [])),
         'ip_blacklists': src.get('ip_blacklists', DEFAULT_CONFIG.get('ip_blacklists', [])),
         'hosting_providers': src.get('hosting_providers', DEFAULT_CONFIG.get('hosting_providers', {})),
+        'ns_risk_patterns': src.get('ns_risk_patterns', DEFAULT_CONFIG.get('ns_risk_patterns', {})),
         'tld_variant_allowlist': src.get('tld_variant_allowlist', DEFAULT_CONFIG.get('tld_variant_allowlist', [])),
         'spoofing_allowlist': src.get('spoofing_allowlist', DEFAULT_CONFIG.get('spoofing_allowlist', [])),
         'blocked_asn_orgs': src.get('blocked_asn_orgs', DEFAULT_CONFIG.get('blocked_asn_orgs', [])),
@@ -4434,6 +4586,20 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.hosting_detected_via = hosting_result["detected_via"]
     res.hosting_asn = hosting_result["asn"]
     res.hosting_asn_org = hosting_result["asn_org"]
+    
+    # Nameserver Risk Detection
+    ns_risk_config = config.get("ns_risk_patterns", {})
+    ns_risk = check_ns_risk(ns_records, ns_risk_config)
+    res.ns_records = ";".join(ns_records)
+    res.ns_count = ns_risk["ns_count"]
+    res.ns_is_parking = ns_risk["is_parking"]
+    res.ns_parking_match = ns_risk["parking_match"]
+    res.ns_is_dynamic_dns = ns_risk["is_dynamic_dns"]
+    res.ns_dynamic_dns_match = ns_risk["dynamic_dns_match"]
+    res.ns_is_free_dns = ns_risk["is_free_dns"]
+    res.ns_free_dns_match = ns_risk["free_dns_match"]
+    res.ns_is_lame_delegation = ns_risk["is_lame_delegation"]
+    res.ns_is_single_ns = ns_risk["is_single_ns"]
     
     # TLS — v4.4: now captures handshake_failed and connection_failed separately
     tls = check_tls(domain, timeout)
