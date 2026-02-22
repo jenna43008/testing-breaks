@@ -52,6 +52,7 @@ DEFAULT_CONFIG = {
         "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — HIGH confidence (5+ multi-signal score)
         "malicious_script_medium": 25,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — log + moderate penalty
         "hidden_injection": 100,            # CSS-hidden content injection (hacklink fingerprint) — confirmed compromise
+        "hidden_injection_css_only": 0,     # CSS hiding patterns (display:none etc.) without confirmed injection — too common on legitimate sites
         "cpanel_detected": 25,              # cPanel hosting (common hacklink target, not malicious alone)
         
         # === TRANSFER LOCK / DOMAIN TAKEOVER ===
