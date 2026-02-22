@@ -3615,8 +3615,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('DEV PLATFORM HOST', ['hosting_platform']),
         ('CPANEL HOSTING', ['cpanel_detected']),
         ('BLOCKED ASN', ['blocked_asn']),
-        ('TRANSFER LOCK', ['transfer_lock_recent', 'transfer_lock_with_risk']),
-        ('WHOIS RECENTLY UPDATED', ['whois_recently_updated', 'whois_updated_with_risk']),
+        ('TRANSFER LOCK', ['transfer_lock_recent']),
+        ('WHOIS RECENTLY UPDATED', ['whois_recently_updated']),
         ('NO PTR', ['no_ptr']),
         ('PTR MISMATCH', ['ptr_mismatch']),
         ('CT RECENT ISSUANCE ON OLD', ['ct_recent_issuance']),
@@ -3917,12 +3917,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if not res.https_valid:
         add("no_https", weights.get('no_https', 25))
     
-    # v4.4: TLS failure markers — tracked for summary/rules but scored at 0.
-    # These explain WHY HTTPS failed, they're not additional risk on top of no_https.
+    # v4.4: TLS failure markers — explain WHY HTTPS failed.
+    # Scored from config weights (default: 40 handshake, 30 connection).
     if res.tls_handshake_failed:
-        add("tls_handshake_failed", 0)
+        add("tls_handshake_failed", weights.get('tls_handshake_failed', 40))
     if res.tls_connection_failed:
-        add("tls_connection_failed", 0)
+        add("tls_connection_failed", weights.get('tls_connection_failed', 30))
     
     if res.cert_expired:
         add("cert_expired", weights.get('cert_expired', 15))
@@ -3963,7 +3963,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # Don't flag on empty pages — obviously an empty page has no /about etc.
     # Don't flag when TLS failed — can't find /about if the server is unreachable;
     # that's already covered by no_https / tls_connection_failed.
-    if res.missing_trust_signals and not res.is_empty_page and not res.tls_connection_failed and not res.tls_handshake_failed:
+    if res.missing_trust_signals and not res.is_empty_page:
         add("missing_trust_signals", weights.get('missing_trust_signals', 8))
     
     # Opaque entity - access blocked AND no corporate footprint
@@ -4072,34 +4072,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("cpanel_detected", weights.get('cpanel_detected', 8))
     
     # === TRANSFER LOCK / WHOIS ENRICHMENT ===
-    # Transfer lock and WHOIS updates are tracked as zero-point markers.
-    # Like domain age, they only add points when actual content/infrastructure
-    # risk signals are present — a WHOIS update alone could be auto-renewal,
-    # contact info change, privacy protection, registrar migration, etc.
+    # Scored directly from config weights.  The rule engine handles
+    # amplification when combined with content-risk signals.
     if res.domain_transfer_lock_recent:
-        add("transfer_lock_recent", 0)
-    elif res.whois_recently_updated:
-        add("whois_recently_updated", 0)
-    
-    # Only score transfer lock / WHOIS update when content risk is present
-    _TRANSFER_RISK_SIGNALS = {
-        "hacklink_keywords", "hidden_injection", "hacklink_wp_compromised",
-        "hacklink_spam_links", "hacklink_vulnerable_plugins", "malicious_script",
-        "js_redirect", "minimal_shell", "empty_page",
-        "hosting_suspect", "hosting_free", "typosquat_detected",
-        "redirect_cross_domain", "cross_domain_brand_link",
-        "tld_variant_spoof", "domain_brand_impersonation",
-        "opaque_entity", "sensitive_fields", "phishing_js", "doc_lure",
-        "vt_malicious", "vt_malicious_medium", "vt_suspicious",
-        "blocked_asn",
-    }
-    if (res.domain_transfer_lock_recent or res.whois_recently_updated):
-        has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
-        if has_transfer_risk:
-            if res.domain_transfer_lock_recent:
-                add("transfer_lock_with_risk", weights.get('transfer_lock_recent', 15))
-            else:
-                add("whois_updated_with_risk", weights.get('whois_recently_updated', 10))
+        add("transfer_lock_recent", weights.get('transfer_lock_recent', 35))
+    if res.whois_recently_updated:
+        add("whois_recently_updated", weights.get('whois_recently_updated', 10))
     
     # === EMPTY PAGE ===
     if res.is_empty_page:
