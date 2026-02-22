@@ -935,107 +935,152 @@ def ensure_config_dir():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _deep_merge(default: dict, override: dict) -> dict:
+    """Recursively merge *override* into a deep copy of *default*.
+
+    • dict values are merged recursively (new default keys propagate).
+    • list values are REPLACED by the override (user's saved list wins).
+    • scalar values are REPLACED by the override.
+    • Keys present in *default* but absent in *override* are kept.
+    • Keys present in *override* but absent in *default* are kept.
+
+    Special-cased keys ('weights', 'rules') are handled by load_config
+    itself, so they are NOT recursed into here — the caller passes them
+    through its own dedicated merge/migration logic.
+    """
+    merged = copy.deepcopy(default)
+    for key, override_val in override.items():
+        if key in ('weights', 'rules'):
+            # Handled separately by load_config — just copy the override
+            # through so the caller's dedicated logic can operate on it.
+            merged[key] = copy.deepcopy(override_val)
+        elif (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(override_val, dict)
+        ):
+            merged[key] = _deep_merge(merged[key], override_val)
+        else:
+            merged[key] = copy.deepcopy(override_val)
+    return merged
+
+
 def load_config() -> dict:
-    """Load configuration from file, or return defaults."""
+    """Load configuration from file, or return defaults.
+
+    Merge strategy
+    ──────────────
+    • Scalar / top-level keys: saved value wins; new defaults propagate.
+    • Nested dicts (hosting_providers, mx_providers, brand_impersonation,
+      etc.): recursively merged so new sub-keys from DEFAULT_CONFIG appear
+      even when config.json has an older snapshot.
+    • Weights: flat {signal: int} merge — saved values win per-key, new
+      default signals propagate.  Version-gated migrations bump values
+      that haven't been user-customised above the old default.
+    • Rules: name-based merge — user rules override defaults with the
+      same name, new default rules propagate, user-added rules are kept.
+      Set "rules_replace": true in config.json for full replacement.
+    • Lists (suspicious_tlds, protected_brands, blocked_asn_orgs, …):
+      saved list replaces the default.  To pick up new default entries
+      you must either delete the key from config.json or add them
+      manually.
+    """
     ensure_config_dir()
-    
-    if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                loaded = json.load(f)
-                # Merge with defaults to ensure all keys exist
-                merged = copy.deepcopy(DEFAULT_CONFIG)
-                merged.update(loaded)
-                # Ensure nested dicts are merged properly
-                if 'weights' in loaded:
-                    default_weights = copy.deepcopy(DEFAULT_CONFIG.get('weights', {}))
-                    merged['weights'] = {**default_weights, **loaded['weights']}
-                    
-                    # Rename migration: transfer_lock_missing → transfer_lock_recent
-                    if 'transfer_lock_missing' in merged['weights'] and 'transfer_lock_recent' not in loaded.get('weights', {}):
-                        merged['weights']['transfer_lock_recent'] = merged['weights'].pop('transfer_lock_missing')
-                    elif 'transfer_lock_missing' in merged['weights']:
-                        merged['weights'].pop('transfer_lock_missing', None)
-                    
-                    # Migrate rules referencing the old signal name
-                    if 'rules' in loaded:
-                        for rule in loaded['rules']:
-                            for key in ('if_all', 'if_any', 'if_not'):
-                                if key in rule:
-                                    rule[key] = ['transfer_lock_recent' if s == 'transfer_lock_missing' else s for s in rule[key]]
-                    
-                    # v7.1 weight migration: if saved config has old (lower) weights for
-                    # signals that were bumped in v7.1, upgrade them to new defaults.
-                    # Only applies if user hasn't explicitly customized them above the old defaults.
-                    saved_version = loaded.get('config_version', '0')
-                    if saved_version < '7.1':
-                        v71_bumps = {
-                            # signal: (old_default, new_default) — only upgrade if saved == old
-                            'malicious_script': (40, 65),
-                            'hidden_injection': (35, 55),
-                            'hacklink_detected': (35, 50),
-                            'hacklink_wp_compromised': (30, 45),
-                            'hacklink_spam_links': (25, 35),
-                            'hacklink_vulnerable_plugins': (20, 25),
-                            'hacklink_keywords': (12, 15),
-                            'vt_malicious_high': (45, 65),
-                            'vt_malicious_medium': (30, 40),
-                            'vt_malicious_low': (18, 22),
-                            'vt_suspicious': (12, 15),
-                            'empty_page': (15, 20),
-                            'transfer_lock_recent': (12, 15),
-                            'ct_no_history': (12, 15),
-                            'whois_recently_updated': (8, 10),
-                            'ct_recent_issuance': (8, 10),
-                            'cpanel_detected': (6, 8),
-                        }
-                        for signal, (old_val, new_val) in v71_bumps.items():
-                            saved_val = loaded['weights'].get(signal, old_val)
-                            if saved_val <= old_val:  # User hasn't bumped it above old default
-                                merged['weights'][signal] = new_val
-                        merged['config_version'] = '7.1'
-                    
-                    # v7.2 migration: malicious_script raised to 100 (instant deny for HIGH
-                    # confidence), new malicious_script_medium signal added at 25 for MEDIUM.
-                    if saved_version < '7.2':
-                        v72_bumps = {
-                            'malicious_script': (65, 100),
-                            'hidden_injection': (55, 100),
-                            'hacklink_detected': (50, 100),
-                        }
-                        for signal, (old_val, new_val) in v72_bumps.items():
-                            saved_val = loaded['weights'].get(signal, old_val)
-                            if saved_val <= old_val:
-                                merged['weights'][signal] = new_val
-                        # Ensure new signal exists
-                        if 'malicious_script_medium' not in merged['weights']:
-                            merged['weights']['malicious_script_medium'] = 25
-                        merged['config_version'] = '7.2'
-                # Legacy: if old config has combos, ignore them (now in rules)
-                loaded.pop('combos', None)
-                loaded.pop('disabled_combos', None)
-                # Rules: merge by name (user rules override defaults with same name,
-                # new user rules are added). Set "rules_replace": true in config.json
-                # to completely replace defaults instead of merging.
-                if 'rules' in loaded:
-                    if loaded.get('rules_replace', False):
-                        # Full replacement mode
-                        merged['rules'] = loaded['rules']
-                    else:
-                        # Merge mode: start with deep copy of defaults, override by name, add new
-                        default_rules = {r['name']: copy.deepcopy(r) for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r}
-                        for user_rule in loaded['rules']:
-                            name = user_rule.get('name', '')
-                            if name:
-                                default_rules[name] = user_rule  # Override or add
-                            else:
-                                default_rules[f"_unnamed_{id(user_rule)}"] = user_rule
-                        merged['rules'] = list(default_rules.values())
-                return merged
-        except Exception as e:
-            print(f"Error loading config: {e}")
-    
-    return copy.deepcopy(DEFAULT_CONFIG)
+
+    if not CONFIG_FILE.exists():
+        return copy.deepcopy(DEFAULT_CONFIG)
+
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            loaded = json.load(f)
+    except Exception as e:
+        print(f"Error loading config: {e}")
+        return copy.deepcopy(DEFAULT_CONFIG)
+
+    # ── Legacy cleanup (strip before merge) ──────────────────────
+    loaded.pop('combos', None)
+    loaded.pop('disabled_combos', None)
+
+    # ── Deep-merge everything except weights & rules ─────────────
+    merged = _deep_merge(DEFAULT_CONFIG, loaded)
+
+    # ── Weights: flat per-key merge ──────────────────────────────
+    default_weights = copy.deepcopy(DEFAULT_CONFIG.get('weights', {}))
+    loaded_weights = loaded.get('weights', {})
+    merged['weights'] = {**default_weights, **loaded_weights}
+
+    # Rename migration: transfer_lock_missing → transfer_lock_recent
+    if 'transfer_lock_missing' in merged['weights'] and 'transfer_lock_recent' not in loaded_weights:
+        merged['weights']['transfer_lock_recent'] = merged['weights'].pop('transfer_lock_missing')
+    elif 'transfer_lock_missing' in merged['weights']:
+        merged['weights'].pop('transfer_lock_missing', None)
+
+    # Migrate rules referencing the old signal name
+    if 'rules' in loaded:
+        for rule in loaded['rules']:
+            for key in ('if_all', 'if_any', 'if_not'):
+                if key in rule:
+                    rule[key] = ['transfer_lock_recent' if s == 'transfer_lock_missing' else s for s in rule[key]]
+
+    # ── Version-gated weight migrations ──────────────────────────
+    saved_version = loaded.get('config_version', '0')
+
+    if saved_version < '7.1':
+        v71_bumps = {
+            # signal: (old_default, new_default) — only upgrade if saved == old
+            'malicious_script': (40, 65),
+            'hidden_injection': (35, 55),
+            'hacklink_detected': (35, 50),
+            'hacklink_wp_compromised': (30, 45),
+            'hacklink_spam_links': (25, 35),
+            'hacklink_vulnerable_plugins': (20, 25),
+            'hacklink_keywords': (12, 15),
+            'vt_malicious_high': (45, 65),
+            'vt_malicious_medium': (30, 40),
+            'vt_malicious_low': (18, 22),
+            'vt_suspicious': (12, 15),
+            'empty_page': (15, 20),
+            'transfer_lock_recent': (12, 15),
+            'ct_no_history': (12, 15),
+            'whois_recently_updated': (8, 10),
+            'ct_recent_issuance': (8, 10),
+            'cpanel_detected': (6, 8),
+        }
+        for signal, (old_val, new_val) in v71_bumps.items():
+            saved_val = loaded_weights.get(signal, old_val)
+            if saved_val <= old_val:
+                merged['weights'][signal] = new_val
+        merged['config_version'] = '7.1'
+
+    if saved_version < '7.2':
+        v72_bumps = {
+            'malicious_script': (65, 100),
+            'hidden_injection': (55, 100),
+            'hacklink_detected': (50, 100),
+        }
+        for signal, (old_val, new_val) in v72_bumps.items():
+            saved_val = loaded_weights.get(signal, old_val)
+            if saved_val <= old_val:
+                merged['weights'][signal] = new_val
+        if 'malicious_script_medium' not in merged['weights']:
+            merged['weights']['malicious_script_medium'] = 25
+        merged['config_version'] = '7.2'
+
+    # ── Rules: name-based merge ──────────────────────────────────
+    if 'rules' in loaded:
+        if loaded.get('rules_replace', False):
+            merged['rules'] = loaded['rules']
+        else:
+            default_rules = {r['name']: copy.deepcopy(r) for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r}
+            for user_rule in loaded['rules']:
+                name = user_rule.get('name', '')
+                if name:
+                    default_rules[name] = user_rule
+                else:
+                    default_rules[f"_unnamed_{id(user_rule)}"] = user_rule
+            merged['rules'] = list(default_rules.values())
+
+    return merged
 
 
 def save_config(config: dict) -> bool:
