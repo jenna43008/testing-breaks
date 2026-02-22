@@ -182,6 +182,13 @@ DEFAULT_CONFIG = {
         "hosting_suspect": 20,        # Known bulletproof / abuse-tolerant hosts
         "hosting_platform": 20,        # v6.2: Dev platforms (Render, Netlify, Vercel) — mild signal
         
+        # === NAMESERVER RISK SIGNALS ===
+        "ns_parking": 15,             # Domain delegated to parking/placeholder NS (sedoparking, bodis, etc.)
+        "ns_dynamic_dns": 25,         # Domain delegated to dynamic DNS provider (noip, dyndns, etc.)
+        "ns_free_dns": 8,             # Domain using free/anonymous authoritative DNS
+        "ns_lame_delegation": 20,     # Zero NS records — broken/abandoned domain
+        "ns_single_ns": 5,            # Only 1 NS record — unusual, possible fragile/temporary setup
+        
         # === MX PROVIDER SCORING (v4.7) ===
         "mx_disposable": 20,          # Disposable/cheap MX (Titan, ImprovMX, Hostinger email, etc.)
         "mx_selfhosted": 20,           # Self-hosted MX on same domain/IP - no provider oversight
@@ -335,6 +342,16 @@ DEFAULT_CONFIG = {
         {"name": "combo_suspect_host_new_30d", "score": 22, "label": "hosting suspect + domain <30d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_suspect_host_new_7d", "score": 28, "label": "hosting suspect + domain <7d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "domain_lt_7d"], "if_any": [], "if_not": []},
         {"name": "combo_suspect_host_no_https", "score": 18, "label": "hosting suspect + no https", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "no_https"], "if_any": [], "if_not": []},
+
+        # --- Nameserver Risk (8 rules) ---
+        {"name": "combo_ns_dynamic_new_30d", "score": 20, "label": "dynamic DNS NS + domain <30d", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_dynamic_dns", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_ns_dynamic_cred_form", "score": 22, "label": "dynamic DNS NS + credential form", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_dynamic_dns", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_ns_dynamic_no_mx", "score": 10, "label": "dynamic DNS NS + no MX", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_dynamic_dns", "no_mx"], "if_any": [], "if_not": []},
+        {"name": "combo_ns_parking_new_90d", "score": 12, "label": "parking NS + domain <90d", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_parking", "domain_lt_90d"], "if_any": [], "if_not": []},
+        {"name": "combo_ns_parking_no_trust", "score": 10, "label": "parking NS + missing trust signals", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_parking", "missing_trust_signals"], "if_any": [], "if_not": []},
+        {"name": "combo_ns_lame_no_mx", "score": 15, "label": "lame delegation + no MX", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_lame_delegation", "no_mx"], "if_any": [], "if_not": []},
+        {"name": "combo_ns_free_no_dkim", "score": 6, "label": "free DNS NS + no DKIM", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_free_dns", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_ns_single_new_30d", "score": 8, "label": "single NS + domain <30d", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_single_ns", "domain_lt_30d"], "if_any": [], "if_not": []},
 
         # --- MX Provider Risk (9 rules) ---
         {"name": "combo_disposable_mx_budget_host", "score": 8, "label": "mx disposable + hosting budget shared", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_disposable", "hosting_budget_shared"], "if_any": [], "if_not": []},
@@ -828,6 +845,62 @@ DEFAULT_CONFIG = {
             "asn_org_patterns": ["shinjiru"],
             "ptr_patterns": ["shinjiru"],
         },
+        "zservers": {
+            "name": "Zservers",
+            "type": "suspect",
+            "ns_patterns": ["zservers.com"],
+            "asn_numbers": [],
+            "asn_org_patterns": ["zservers", "xhost"],
+            "ptr_patterns": ["zservers"],
+        },
+        "stark_industries": {
+            "name": "Stark Industries (PQ Hosting)",
+            "type": "suspect",
+            "ns_patterns": [],
+            "asn_numbers": [44477, 213373],
+            "asn_org_patterns": ["stark industries", "pq hosting"],
+            "ptr_patterns": ["stark-industries", "pqhosting"],
+        },
+        "marosnet": {
+            "name": "MAROSNET",
+            "type": "suspect",
+            "ns_patterns": [],
+            "asn_numbers": [48166],
+            "asn_org_patterns": ["marosnet"],
+            "ptr_patterns": ["marosnet"],
+        },
+        "selectel_ru": {
+            "name": "Selectel (Russia)",
+            "type": "suspect",
+            "ns_patterns": [],
+            "asn_numbers": [49505],
+            "asn_org_patterns": ["selectel"],
+            "ptr_patterns": ["selectel.ru"],
+        },
+        "global_secure_layer": {
+            "name": "Global Secure Layer",
+            "type": "suspect",
+            "ns_patterns": [],
+            "asn_numbers": [398989],
+            "asn_org_patterns": ["global secure layer"],
+            "ptr_patterns": [],
+        },
+        "eliteteam": {
+            "name": "ELITETEAM",
+            "type": "suspect",
+            "ns_patterns": [],
+            "asn_numbers": [57523],
+            "asn_org_patterns": ["eliteteam", "chang way"],
+            "ptr_patterns": [],
+        },
+        "heymman": {
+            "name": "Heymman Servers",
+            "type": "suspect",
+            "ns_patterns": [],
+            "asn_numbers": [],
+            "asn_org_patterns": ["heymman"],
+            "ptr_patterns": ["heymman"],
+        },
         
         # =============================================================
         # DEVELOPER PLATFORM HOSTING (type: "platform")
@@ -883,6 +956,78 @@ DEFAULT_CONFIG = {
         },
     },
     
+    # =================================================================
+    # NAMESERVER RISK PATTERNS
+    # Detect suspicious NS delegation independent of hosting provider.
+    # Each list contains substrings matched against the FQDN of every
+    # NS record (case-insensitive).  A single match fires the signal.
+    # =================================================================
+    "ns_risk_patterns": {
+        # --- Parking / placeholder nameservers ---
+        # Domain is parked, unused, or pending deletion.
+        # A parked domain requesting sender approval is a strong red flag.
+        "parking_ns": [
+            "sedoparking.com",
+            "parkingcrew.net",
+            "above.com",
+            "bodis.com",
+            "parklogic.com",
+            "pendingrenewaldeletion",
+            "afternic.com",
+            "hugedomains.com",
+            "dan.com",
+            "undeveloped.com",
+            "domainparking",
+            "parkeddomain",
+            "dns-parking.com",       # Hostinger parking (before setup)
+            "domainnameshop.com",    # Often seen on parked domains
+            "expired-domain",
+        ],
+        
+        # --- Dynamic DNS providers (authoritative NS) ---
+        # Legitimate businesses never delegate their domain to dynamic
+        # DNS services.  This is almost exclusively phishing/malware
+        # infrastructure enabling rapid IP rotation.
+        "dynamic_dns_ns": [
+            "noip.com",
+            "no-ip.com",
+            "dyndns.org",
+            "dyndns.com",
+            "dynu.com",
+            "changeip.com",
+            "ddns.net",
+            "duckdns.org",
+            "freedns.afraid.org",
+            "nsupdate.info",
+            "dynv6.com",
+            "spdyn.de",
+            "dtdns.com",
+            "tzo.com",
+            "zoneedit.com",
+            "dyn.com",               # Legacy DynDNS (now Oracle Dyn)
+            "dnsdynamic.org",
+            "3322.org",              # Chinese dynamic DNS, heavily abused
+            "oray.com",              # Peanut shell dynamic DNS (China)
+            "vicp.net",              # Oray dynamic DNS variant
+        ],
+        
+        # --- Free / anonymous authoritative DNS providers ---
+        # Minimal infrastructure investment.  Legitimate businesses
+        # overwhelmingly use registrar NS, their host's NS, or a paid
+        # service (Cloudflare, Route 53, DNSimple, etc.).
+        "free_dns_ns": [
+            "cloudns.net",           # Free tier authoritative DNS
+            "desec.io",              # Free encrypted DNS
+            "he.net",                # Hurricane Electric free DNS
+            "porkbun.com",           # Free with registration (low signal)
+            "luadns.com",            # Free tier
+            "buddyns.com",           # Free secondary DNS
+            "zilore.com",            # Free tier DNS
+            "rage4.com",             # Free tier
+            "1984hosting.com",       # Icelandic free DNS
+        ],
+    },
+    
     "mx_providers": {
         "enterprise": {
             # Enterprise MX = strong legitimacy signal
@@ -935,326 +1080,116 @@ def ensure_config_dir():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _deep_merge(default: dict, override: dict) -> dict:
-    """Recursively merge *override* into a deep copy of *default*.
-
-    • dict values are merged recursively (new default keys propagate).
-    • list values are REPLACED by the override (user's saved list wins).
-    • scalar values are REPLACED by the override.
-    • Keys present in *default* but absent in *override* are kept.
-    • Keys present in *override* but absent in *default* are kept.
-
-    Keys handled by dedicated merge logic in load_config are passed
-    through without recursion.
-    """
-    # Keys whose merge semantics are handled by load_config itself.
-    _SKIP_RECURSE = {'weights', 'rules',
-                     '_default_weights_snapshot', '_default_rules_snapshot'}
-    merged = copy.deepcopy(default)
-    for key, override_val in override.items():
-        if key in _SKIP_RECURSE:
-            merged[key] = copy.deepcopy(override_val)
-        elif (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(override_val, dict)
-        ):
-            merged[key] = _deep_merge(merged[key], override_val)
-        else:
-            merged[key] = copy.deepcopy(override_val)
-    return merged
-
-
 def load_config() -> dict:
-    """Load configuration from file, or return defaults.
-
-    Merge strategy
-    ──────────────
-    Scalar / top-level keys
-        Saved value wins; new defaults propagate for missing keys.
-
-    Nested dicts (hosting_providers, mx_providers, brand_impersonation…)
-        Recursively merged — new sub-keys from DEFAULT_CONFIG appear even
-        when config.json has an older snapshot of that dict.
-
-    Weights  (snapshot-aware)
-        If config.json contains ``_default_weights_snapshot`` (written by
-        ``save_config``), each weight is compared to the snapshot:
-        • saved == snapshot  →  user never customised it  →  use current
-          DEFAULT_CONFIG value  (your code edits propagate automatically)
-        • saved != snapshot  →  user explicitly changed it via the UI  →
-          keep the user's value
-        • key missing in saved  →  new signal  →  use DEFAULT_CONFIG
-        If no snapshot exists (legacy config), falls back to the old
-        behaviour: saved values win per-key, version-gated migrations
-        bump values that haven't been raised above the old default.
-
-    Rules  (snapshot-aware, name-keyed)
-        Same principle as weights.  If ``_default_rules_snapshot`` exists,
-        unchanged rules pick up the current DEFAULT_CONFIG version; user-
-        customised rules are preserved.  New default rules propagate; rules
-        removed from DEFAULT_CONFIG are dropped unless the user edited them.
-        Set ``"rules_replace": true`` in config.json to skip merge logic
-        entirely.
-
-    Lists (suspicious_tlds, protected_brands, blocked_asn_orgs…)
-        Saved list replaces the default.  To pick up new default entries
-        you must either delete the key from config.json or add them
-        manually.
-    """
+    """Load configuration from file, or return defaults."""
     ensure_config_dir()
-
-    if not CONFIG_FILE.exists():
-        return copy.deepcopy(DEFAULT_CONFIG)
-
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            loaded = json.load(f)
-    except Exception as e:
-        print(f"Error loading config: {e}")
-        return copy.deepcopy(DEFAULT_CONFIG)
-
-    # ── Legacy cleanup (strip before merge) ──────────────────────
-    loaded.pop('combos', None)
-    loaded.pop('disabled_combos', None)
-
-    # ── Deep-merge everything except weights, rules & snapshots ──
-    merged = _deep_merge(DEFAULT_CONFIG, loaded)
-
-    # ── Rename migration: transfer_lock_missing → transfer_lock_recent
-    loaded_weights = loaded.get('weights', {})
-    if 'rules' in loaded:
-        for rule in loaded['rules']:
-            for key in ('if_all', 'if_any', 'if_not'):
-                if key in rule:
-                    rule[key] = [
-                        'transfer_lock_recent' if s == 'transfer_lock_missing' else s
-                        for s in rule[key]
-                    ]
-
-    # ==================================================================
-    # WEIGHTS MERGE
-    # ==================================================================
-    default_weights = copy.deepcopy(DEFAULT_CONFIG.get('weights', {}))
-    snapshot_weights = loaded.get('_default_weights_snapshot', None)
-
-    # Handle rename in loaded weights
-    if 'transfer_lock_missing' in loaded_weights:
-        if 'transfer_lock_recent' not in loaded_weights:
-            loaded_weights['transfer_lock_recent'] = loaded_weights.pop('transfer_lock_missing')
-        else:
-            loaded_weights.pop('transfer_lock_missing', None)
-    if snapshot_weights and 'transfer_lock_missing' in snapshot_weights:
-        if 'transfer_lock_recent' not in snapshot_weights:
-            snapshot_weights['transfer_lock_recent'] = snapshot_weights.pop('transfer_lock_missing')
-        else:
-            snapshot_weights.pop('transfer_lock_missing', None)
-
-    if snapshot_weights is not None:
-        # ── Smart merge: detect user customisations via snapshot ──
-        merged_weights = {}
-        all_weight_keys = set(default_weights) | set(loaded_weights)
-        for wkey in all_weight_keys:
-            saved  = loaded_weights.get(wkey)       # what config.json has
-            snap   = snapshot_weights.get(wkey)      # default at last save
-            cur    = default_weights.get(wkey)       # current DEFAULT_CONFIG
-
-            if saved is None:
-                # New signal added in DEFAULT_CONFIG → use it
-                merged_weights[wkey] = cur if cur is not None else 0
-            elif snap is not None and saved == snap:
-                # User never changed this weight → pick up current default
-                merged_weights[wkey] = cur if cur is not None else saved
-            else:
-                # User explicitly customised via UI → preserve their value
-                merged_weights[wkey] = saved
-        merged['weights'] = merged_weights
-    else:
-        # ── Legacy config (no snapshot) ──────────────────────────
-        # Without a snapshot we cannot distinguish "user customised
-        # this via the UI" from "stale copy of an old default".
-        #
-        # Strategy:
-        #   • Old configs (saved_version < current): apply version-
-        #     gated migrations as before — they upgrade known old
-        #     defaults while preserving user bumps.
-        #   • Current-version configs (no snapshot, version matches):
-        #     use DEFAULT_CONFIG for all weights.  This is a one-time
-        #     reset that picks up your code edits.  Any weights the
-        #     user changed via the UI will need to be re-applied once
-        #     (after the next save, the snapshot prevents this from
-        #     happening again).
-        saved_version = loaded.get('config_version', '0')
-        current_version = DEFAULT_CONFIG.get('config_version', '0')
-
-        if saved_version < '7.1':
-            merged['weights'] = {**default_weights, **loaded_weights}
-            v71_bumps = {
-                'malicious_script': (40, 65),
-                'hidden_injection': (35, 55),
-                'hacklink_detected': (35, 50),
-                'hacklink_wp_compromised': (30, 45),
-                'hacklink_spam_links': (25, 35),
-                'hacklink_vulnerable_plugins': (20, 25),
-                'hacklink_keywords': (12, 15),
-                'vt_malicious_high': (45, 65),
-                'vt_malicious_medium': (30, 40),
-                'vt_malicious_low': (18, 22),
-                'vt_suspicious': (12, 15),
-                'empty_page': (15, 20),
-                'transfer_lock_recent': (12, 15),
-                'ct_no_history': (12, 15),
-                'whois_recently_updated': (8, 10),
-                'ct_recent_issuance': (8, 10),
-                'cpanel_detected': (6, 8),
-            }
-            for signal, (old_val, new_val) in v71_bumps.items():
-                saved_val = loaded_weights.get(signal, old_val)
-                if saved_val <= old_val:
-                    merged['weights'][signal] = new_val
-            merged['config_version'] = '7.1'
-            saved_version = '7.1'  # allow fall-through to 7.2
-
-        if saved_version < '7.2':
-            if 'weights' not in merged or merged.get('config_version', '0') < '7.1':
-                merged['weights'] = {**default_weights, **loaded_weights}
-            v72_bumps = {
-                'malicious_script': (65, 100),
-                'hidden_injection': (55, 100),
-                'hacklink_detected': (50, 100),
-            }
-            for signal, (old_val, new_val) in v72_bumps.items():
-                saved_val = loaded_weights.get(signal, old_val)
-                if saved_val <= old_val:
-                    merged['weights'][signal] = new_val
-            if 'malicious_script_medium' not in merged['weights']:
-                merged['weights']['malicious_script_medium'] = 25
-            merged['config_version'] = '7.2'
-            saved_version = '7.2'
-
-        if saved_version >= current_version:
-            # Config is already at (or beyond) the current version but
-            # has no snapshot — this is a pre-snapshot config.json.
-            # Use DEFAULT_CONFIG values so code edits take effect.
-            # User-only keys (not in defaults) are preserved.
-            merged_weights = copy.deepcopy(default_weights)
-            for wkey, wval in loaded_weights.items():
-                if wkey not in default_weights:
-                    # User added a signal that's not in DEFAULT_CONFIG
-                    merged_weights[wkey] = wval
-            merged['weights'] = merged_weights
-
-    # ==================================================================
-    # RULES MERGE
-    # ==================================================================
-    loaded_rules = loaded.get('rules', None)
-    snapshot_rules = loaded.get('_default_rules_snapshot', None)
-
-    if loaded_rules is not None:
-        if loaded.get('rules_replace', False):
-            # Full replacement mode — user opted out of merging
-            merged['rules'] = loaded_rules
-        elif snapshot_rules is not None:
-            # ── Smart merge: snapshot tells us what the user changed ──
-            default_rules_by_name = {
-                r['name']: copy.deepcopy(r)
-                for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r
-            }
-            loaded_rules_by_name = {}
-            for rule in loaded_rules:
-                name = rule.get('name', '')
-                if name:
-                    loaded_rules_by_name[name] = rule
-                else:
-                    loaded_rules_by_name[f"_unnamed_{id(rule)}"] = rule
-
-            result_rules = copy.deepcopy(default_rules_by_name)
-
-            for name, saved_rule in loaded_rules_by_name.items():
-                snap_rule = snapshot_rules.get(name)
-                if name in default_rules_by_name:
-                    # Rule exists in both saved and current defaults
-                    if snap_rule is not None and saved_rule == snap_rule:
-                        # User never touched it → current default already
-                        # in result_rules, nothing to do
-                        pass
+    
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                loaded = json.load(f)
+                # Merge with defaults to ensure all keys exist
+                merged = copy.deepcopy(DEFAULT_CONFIG)
+                merged.update(loaded)
+                # Ensure nested dicts are merged properly
+                if 'weights' in loaded:
+                    default_weights = copy.deepcopy(DEFAULT_CONFIG.get('weights', {}))
+                    merged['weights'] = {**default_weights, **loaded['weights']}
+                    
+                    # Rename migration: transfer_lock_missing → transfer_lock_recent
+                    if 'transfer_lock_missing' in merged['weights'] and 'transfer_lock_recent' not in loaded.get('weights', {}):
+                        merged['weights']['transfer_lock_recent'] = merged['weights'].pop('transfer_lock_missing')
+                    elif 'transfer_lock_missing' in merged['weights']:
+                        merged['weights'].pop('transfer_lock_missing', None)
+                    
+                    # Migrate rules referencing the old signal name
+                    if 'rules' in loaded:
+                        for rule in loaded['rules']:
+                            for key in ('if_all', 'if_any', 'if_not'):
+                                if key in rule:
+                                    rule[key] = ['transfer_lock_recent' if s == 'transfer_lock_missing' else s for s in rule[key]]
+                    
+                    # v7.1 weight migration: if saved config has old (lower) weights for
+                    # signals that were bumped in v7.1, upgrade them to new defaults.
+                    # Only applies if user hasn't explicitly customized them above the old defaults.
+                    saved_version = loaded.get('config_version', '0')
+                    if saved_version < '7.1':
+                        v71_bumps = {
+                            # signal: (old_default, new_default) — only upgrade if saved == old
+                            'malicious_script': (40, 65),
+                            'hidden_injection': (35, 55),
+                            'hacklink_detected': (35, 50),
+                            'hacklink_wp_compromised': (30, 45),
+                            'hacklink_spam_links': (25, 35),
+                            'hacklink_vulnerable_plugins': (20, 25),
+                            'hacklink_keywords': (12, 15),
+                            'vt_malicious_high': (45, 65),
+                            'vt_malicious_medium': (30, 40),
+                            'vt_malicious_low': (18, 22),
+                            'vt_suspicious': (12, 15),
+                            'empty_page': (15, 20),
+                            'transfer_lock_recent': (12, 15),
+                            'ct_no_history': (12, 15),
+                            'whois_recently_updated': (8, 10),
+                            'ct_recent_issuance': (8, 10),
+                            'cpanel_detected': (6, 8),
+                        }
+                        for signal, (old_val, new_val) in v71_bumps.items():
+                            saved_val = loaded['weights'].get(signal, old_val)
+                            if saved_val <= old_val:  # User hasn't bumped it above old default
+                                merged['weights'][signal] = new_val
+                        merged['config_version'] = '7.1'
+                    
+                    # v7.2 migration: malicious_script raised to 100 (instant deny for HIGH
+                    # confidence), new malicious_script_medium signal added at 25 for MEDIUM.
+                    if saved_version < '7.2':
+                        v72_bumps = {
+                            'malicious_script': (65, 100),
+                            'hidden_injection': (55, 100),
+                            'hacklink_detected': (50, 100),
+                        }
+                        for signal, (old_val, new_val) in v72_bumps.items():
+                            saved_val = loaded['weights'].get(signal, old_val)
+                            if saved_val <= old_val:
+                                merged['weights'][signal] = new_val
+                        # Ensure new signal exists
+                        if 'malicious_script_medium' not in merged['weights']:
+                            merged['weights']['malicious_script_medium'] = 25
+                        merged['config_version'] = '7.2'
+                # Legacy: if old config has combos, ignore them (now in rules)
+                loaded.pop('combos', None)
+                loaded.pop('disabled_combos', None)
+                # Rules: merge by name (user rules override defaults with same name,
+                # new user rules are added). Set "rules_replace": true in config.json
+                # to completely replace defaults instead of merging.
+                if 'rules' in loaded:
+                    if loaded.get('rules_replace', False):
+                        # Full replacement mode
+                        merged['rules'] = loaded['rules']
                     else:
-                        # User customised this rule → keep their version
-                        result_rules[name] = saved_rule
-                else:
-                    # Rule NOT in current defaults — either user-created
-                    # or a default that was removed
-                    if snap_rule is not None and saved_rule == snap_rule:
-                        # Was a default that got removed → drop it
-                        pass
-                    else:
-                        # User-created or user-modified → keep it
-                        result_rules[name] = saved_rule
-
-            merged['rules'] = list(result_rules.values())
-        else:
-            # ── Legacy name-based merge (no snapshot) ────────────
-            # Same approach as weights: if version is current, prefer
-            # DEFAULT_CONFIG rules so code edits take effect.
-            loaded_version = loaded.get('config_version', '0')
-            current_version = DEFAULT_CONFIG.get('config_version', '0')
-
-            if loaded_version >= current_version:
-                # Pre-snapshot config at current version — use defaults,
-                # but keep any user-added rules that aren't in defaults
-                default_rule_names = {
-                    r['name'] for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r
-                }
-                merged['rules'] = copy.deepcopy(DEFAULT_CONFIG.get('rules', []))
-                for user_rule in loaded_rules:
-                    name = user_rule.get('name', '')
-                    if name and name not in default_rule_names:
-                        # User-created rule — preserve it
-                        merged['rules'].append(user_rule)
-            else:
-                default_rules = {
-                    r['name']: copy.deepcopy(r)
-                    for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r
-                }
-                for user_rule in loaded_rules:
-                    name = user_rule.get('name', '')
-                    if name:
-                        default_rules[name] = user_rule
-                    else:
-                        default_rules[f"_unnamed_{id(user_rule)}"] = user_rule
-                merged['rules'] = list(default_rules.values())
-
-    # Strip snapshot keys from the returned config — they're internal
-    # bookkeeping for the merge logic, not runtime config.
-    merged.pop('_default_weights_snapshot', None)
-    merged.pop('_default_rules_snapshot', None)
-
-    return merged
+                        # Merge mode: start with deep copy of defaults, override by name, add new
+                        default_rules = {r['name']: copy.deepcopy(r) for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r}
+                        for user_rule in loaded['rules']:
+                            name = user_rule.get('name', '')
+                            if name:
+                                default_rules[name] = user_rule  # Override or add
+                            else:
+                                default_rules[f"_unnamed_{id(user_rule)}"] = user_rule
+                        merged['rules'] = list(default_rules.values())
+                return merged
+        except Exception as e:
+            print(f"Error loading config: {e}")
+    
+    return copy.deepcopy(DEFAULT_CONFIG)
 
 
 def save_config(config: dict) -> bool:
-    """Save configuration to file.
-
-    Alongside the live config, stores ``_default_weights_snapshot`` and
-    ``_default_rules_snapshot`` so that ``load_config`` can distinguish
-    user-customised values from unchanged defaults on the next load.
-    """
+    """Save configuration to file."""
     ensure_config_dir()
-
+    
     try:
-        to_save = copy.deepcopy(config)
-
-        # Record current defaults so load_config can detect user edits
-        to_save['_default_weights_snapshot'] = copy.deepcopy(
-            DEFAULT_CONFIG.get('weights', {})
-        )
-        to_save['_default_rules_snapshot'] = {
-            r['name']: copy.deepcopy(r)
-            for r in DEFAULT_CONFIG.get('rules', []) if 'name' in r
-        }
-
         with open(CONFIG_FILE, 'w') as f:
-            json.dump(to_save, indent=2, fp=f)
+            json.dump(config, indent=2, fp=f)
         return True
     except Exception as e:
         print(f"Error saving config: {e}")
