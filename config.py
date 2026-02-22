@@ -31,7 +31,7 @@ DEFAULT_CONFIG = {
         "disposable_email": 40,
         "spf_pass_all": 0,           # +all allows anyone to spoof - security risk
         "domain_lt_7d": 0,           # Brand new domain - high risk
-        "credential_form": 25,        # Only concerning if combined with other signals
+        "credential_form": 8,         # Building block — real risk comes from combo rules (20+ rules amplify this)
         "sensitive_fields": 10,
         
         # === VIRUSTOTAL REPUTATION ===
@@ -148,11 +148,11 @@ DEFAULT_CONFIG = {
         "status_5xx_errors": 10,
         "access_restricted": 15,          # 401 or 403 on what should be public domain
         "minimal_shell": 15,
-        "js_redirect": 10,
+        "js_redirect": 3,             # Ubiquitous in modern web — combo fuel only (shell+redirect, cloaking+redirect)
         
         # Mitigations (negative weights — reduce score when strong email auth present)
         "minimal_shell_email_auth_mitigated": -8,   # Shell site with SPF -all + DMARC reject — less likely phishing
-        "js_redirect_email_auth_mitigated": -8,      # JS redirect with SPF -all + DMARC reject — less likely phishing
+        "js_redirect_email_auth_mitigated": -3,      # JS redirect with SPF -all + DMARC reject — nets to ~0
         "meta_refresh": 5,
         "external_js_loader": 6,
         "obfuscated_js": 15,
@@ -160,6 +160,9 @@ DEFAULT_CONFIG = {
         "phishing_kit_filename_strong": 22,   # gate.php, process.php — almost never legitimate
         "phishing_kit_detected": 15,          # Composite: multiple kit signals confirm a live kit
         "exfil_drop_script": 30,              # Telegram/Discord/base64 exfil in page source
+        "form_action_kit_strong": 25,         # v7.4: <form action="gate.php"> — near-certain kit
+        "suspicious_page_title": 5,           # v7.4: "Verify Your Identity" etc — combo fuel
+        "whois_privacy": 0,                   # v7.4: Privacy service — no standalone value, combo fuel
         "form_posts_external": 10,
         "suspicious_iframe": 15,
         "parking_page": 20,
@@ -367,6 +370,29 @@ DEFAULT_CONFIG = {
         {"name": "combo_kit_strong_brand", "score": 22, "label": "kit filename (strong) + brand impersonation", "category": "Phishing Kit", "enabled": True, "if_all": ["phishing_kit_filename_strong", "brand_impersonation"], "if_any": [], "if_not": []},
         {"name": "combo_exfil_cred_form", "score": 25, "label": "exfil drop script + credential form", "category": "Phishing Kit", "enabled": True, "if_all": ["exfil_drop_script", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_exfil_brand", "score": 25, "label": "exfil drop script + brand impersonation", "category": "Phishing Kit", "enabled": True, "if_all": ["exfil_drop_script", "brand_impersonation"], "if_any": [], "if_not": []},
+
+        # --- v7.4: Form Action → Kit Filename (4 rules) ---
+        # <form action="gate.php"> is the most common phishing kit pattern.
+        # Strong targets (gate.php, post.php) already score 25; combos stack.
+        # Weak targets (login.php, verify.php) only fire with corroboration.
+        {"name": "combo_form_kit_strong_cred", "score": 20, "label": "form action (strong kit) + credential form", "category": "Phishing Kit", "enabled": True, "if_all": ["form_action_kit_strong", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_form_kit_strong_brand", "score": 22, "label": "form action (strong kit) + brand impersonation", "category": "Phishing Kit", "enabled": True, "if_all": ["form_action_kit_strong", "brand_impersonation"], "if_any": [], "if_not": []},
+        {"name": "combo_form_kit_weak_cred", "score": 18, "label": "form action (weak kit) + credential form", "category": "Phishing Kit", "enabled": True, "if_all": ["form_action_kit_weak", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_form_kit_weak_brand", "score": 18, "label": "form action (weak kit) + brand impersonation", "category": "Phishing Kit", "enabled": True, "if_all": ["form_action_kit_weak", "brand_impersonation"], "if_any": [], "if_not": []},
+
+        # --- v7.4: Suspicious Page Title (3 rules) ---
+        # Lure titles like "Verify Your Identity" are weak standalone (5 pts) —
+        # only dangerous when combined with credential harvesting or brand impersonation.
+        {"name": "combo_lure_title_cred_form", "score": 12, "label": "suspicious page title + credential form", "category": "Phishing Kit", "enabled": True, "if_all": ["suspicious_page_title", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_lure_title_brand", "score": 15, "label": "suspicious page title + brand impersonation", "category": "Phishing Kit", "enabled": True, "if_all": ["suspicious_page_title", "brand_impersonation"], "if_any": [], "if_not": []},
+        {"name": "combo_lure_title_new_30d", "score": 10, "label": "suspicious page title + domain <30d", "category": "Phishing Kit", "enabled": True, "if_all": ["suspicious_page_title", "domain_lt_30d"], "if_any": [], "if_not": []},
+
+        # --- v7.4: WHOIS Privacy (3 rules) ---
+        # Privacy services are legitimate and common — only meaningful as combo fuel
+        # when paired with young domain + phishing infrastructure signals.
+        {"name": "combo_privacy_new_30d_cred", "score": 10, "label": "whois privacy + domain <30d + credential form", "category": "WHOIS Risk", "enabled": True, "if_all": ["whois_privacy", "domain_lt_30d", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_privacy_new_30d_selfmx", "score": 10, "label": "whois privacy + domain <30d + self-hosted MX", "category": "WHOIS Risk", "enabled": True, "if_all": ["whois_privacy", "domain_lt_30d", "mx_selfhosted"], "if_any": [], "if_not": []},
+        {"name": "combo_privacy_new_7d", "score": 8, "label": "whois privacy + domain <7d", "category": "WHOIS Risk", "enabled": True, "if_all": ["whois_privacy", "domain_lt_7d"], "if_any": [], "if_not": []},
 
         # --- MX Provider Risk (9 rules) ---
         {"name": "combo_disposable_mx_budget_host", "score": 8, "label": "mx disposable + hosting budget shared", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_disposable", "hosting_budget_shared"], "if_any": [], "if_not": []},
