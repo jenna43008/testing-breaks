@@ -365,6 +365,7 @@ class DomainApprovalResult:
     high_risk_phish_infra: bool = False          # Render ASN + self-hosted MX + both phish rules fired
     high_risk_phish_infra_reason: str = ""       # Human-readable explanation
     pattern_match: str = ""                      # Known attack pattern identifier (e.g. "Swedish Invoice Phish", "Hacklink/SEO Spam")
+    all_issues_text: str = ""                     # Full semicolon-separated list of all issues found
     asn_display: str = ""                        # Formatted "AS{number} ({org})" for results display
     
     # === SCORING DETAILS ===
@@ -3469,6 +3470,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     # Score, filter zeros, sort by weight descending
     scored_issues = [((_issue_weight(t), t)) for t in all_issues]
+    # Store ALL issues on the result for the detail view
+    res.all_issues_text = ";".join([t for _, t in sorted(scored_issues, key=lambda x: x[0], reverse=True)])
+    # For summary, only show scored issues
     scored_issues = [(w, t) for w, t in scored_issues if w > 0]
     scored_issues.sort(key=lambda x: x[0], reverse=True)
     
