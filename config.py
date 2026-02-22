@@ -157,6 +157,9 @@ DEFAULT_CONFIG = {
         "external_js_loader": 6,
         "obfuscated_js": 15,
         "phishing_paths": 25,
+        "phishing_kit_filename_strong": 22,   # gate.php, process.php — almost never legitimate
+        "phishing_kit_detected": 15,          # Composite: multiple kit signals confirm a live kit
+        "exfil_drop_script": 30,              # Telegram/Discord/base64 exfil in page source
         "form_posts_external": 10,
         "suspicious_iframe": 15,
         "parking_page": 20,
@@ -352,6 +355,18 @@ DEFAULT_CONFIG = {
         {"name": "combo_ns_lame_no_mx", "score": 15, "label": "lame delegation + no MX", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_lame_delegation", "no_mx"], "if_any": [], "if_not": []},
         {"name": "combo_ns_free_no_dkim", "score": 6, "label": "free DNS NS + no DKIM", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_free_dns", "no_dkim"], "if_any": [], "if_not": []},
         {"name": "combo_ns_single_new_30d", "score": 8, "label": "single NS + domain <30d", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_single_ns", "domain_lt_30d"], "if_any": [], "if_not": []},
+
+        # --- Phishing Kit Detection (8 rules) ---
+        # Weak kit filenames (login.php, verify.php) are zero-scored alone —
+        # only combo rules give them weight, requiring a second corroborating signal.
+        {"name": "combo_kit_weak_cred_form", "score": 18, "label": "kit filename (weak) + credential form", "category": "Phishing Kit", "enabled": True, "if_all": ["phishing_kit_filename_weak", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_kit_weak_brand", "score": 18, "label": "kit filename (weak) + brand impersonation", "category": "Phishing Kit", "enabled": True, "if_all": ["phishing_kit_filename_weak", "brand_impersonation"], "if_any": [], "if_not": []},
+        {"name": "combo_kit_weak_phish_path", "score": 15, "label": "kit filename (weak) + phishing path", "category": "Phishing Kit", "enabled": True, "if_all": ["phishing_kit_filename_weak", "phishing_paths"], "if_any": [], "if_not": []},
+        {"name": "combo_kit_weak_exfil", "score": 25, "label": "kit filename (weak) + exfil drop script", "category": "Phishing Kit", "enabled": True, "if_all": ["phishing_kit_filename_weak", "exfil_drop_script"], "if_any": [], "if_not": []},
+        {"name": "combo_kit_strong_cred_form", "score": 20, "label": "kit filename (strong) + credential form", "category": "Phishing Kit", "enabled": True, "if_all": ["phishing_kit_filename_strong", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_kit_strong_brand", "score": 22, "label": "kit filename (strong) + brand impersonation", "category": "Phishing Kit", "enabled": True, "if_all": ["phishing_kit_filename_strong", "brand_impersonation"], "if_any": [], "if_not": []},
+        {"name": "combo_exfil_cred_form", "score": 25, "label": "exfil drop script + credential form", "category": "Phishing Kit", "enabled": True, "if_all": ["exfil_drop_script", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_exfil_brand", "score": 25, "label": "exfil drop script + brand impersonation", "category": "Phishing Kit", "enabled": True, "if_all": ["exfil_drop_script", "brand_impersonation"], "if_any": [], "if_not": []},
 
         # --- MX Provider Risk (9 rules) ---
         {"name": "combo_disposable_mx_budget_host", "score": 8, "label": "mx disposable + hosting budget shared", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_disposable", "hosting_budget_shared"], "if_any": [], "if_not": []},
