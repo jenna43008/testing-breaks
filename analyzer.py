@@ -3533,9 +3533,137 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     # Score, filter zeros, sort by weight descending
     scored_issues = [((_issue_weight(t), t)) for t in all_issues]
-    # Store ALL issues on the result for the detail view
-    res.all_issues_text = ";".join([t for _, t in sorted(scored_issues, key=lambda x: x[0], reverse=True)])
-    # For summary, only show scored issues
+    
+    # Look up ACTUAL scored points from the breakdown for each issue
+    breakdown = {}
+    if res.score_breakdown:
+        try:
+            breakdown = json.loads(res.score_breakdown)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    
+    # Map issue text prefix → breakdown signal key(s)
+    _ISSUE_TO_SIGNAL = [
+        ('🚨 HIGH-RISK PHISHING INFRA', ['high_risk_phish_infra']),
+        ('SPF +all', ['spf_pass_all']),
+        ('ZERO EMAIL AUTH', ['no_spf', 'no_dkim', 'no_dmarc']),
+        ('DISPOSABLE EMAIL', ['disposable_email']),
+        ('TYPOSQUAT', ['typosquat_detected']),
+        ('BRAND + SPOOFING KEYWORD', ['brand_spoofing_keyword']),
+        ('DOMAIN IMPERSONATES', ['domain_brand_impersonation']),
+        ('TLD VARIANT SPOOF', ['tld_variant_spoofing']),
+        ('SUSPICIOUS PREFIX', ['suspicious_prefix']),
+        ('SUSPICIOUS SUFFIX', ['suspicious_suffix']),
+        ('TECH SUPPORT SCAM TLD', ['tech_support_tld']),
+        ('RETAIL SCAM TLD', ['retail_scam_tld']),
+        ('CROSS-DOMAIN BRAND', ['cross_domain_brand_link']),
+        ('E-COMMERCE WITHOUT', ['ecommerce_no_identity']),
+        ('NO VALID HTTPS', ['no_https']),
+        ('NO HTTPS', ['no_https']),
+        ('TLS HANDSHAKE FAILED', ['tls_handshake_failed']),
+        ('TLS CONNECTION FAILED', ['tls_connection_failed']),
+        ('REDIRECT CHAIN', ['redirect_chain_2plus']),
+        ('CROSS-DOMAIN REDIRECT', ['redirect_cross_domain']),
+        ('TEMP REDIRECTS', ['redirect_temp']),
+        ('MINIMAL/SHELL', ['minimal_shell', 'minimal_shell_email_auth_mitigated']),
+        ('JAVASCRIPT REDIRECT', ['js_redirect', 'js_redirect_email_auth_mitigated']),
+        ('META REFRESH', ['meta_refresh']),
+        ('EXTERNAL JS LOADER', ['external_js']),
+        ('HIDDEN IFRAME', ['suspicious_iframe']),
+        ('PARKING PAGE', ['parking_page']),
+        ('FORM POSTS EXTERNALLY', ['form_posts_external']),
+        ('SENSITIVE FORM', ['sensitive_fields']),
+        ('CREDENTIAL FORM', ['credential_form']),
+        ('401 UNAUTHORIZED', ['access_restricted']),
+        ('403 FORBIDDEN', ['access_restricted']),
+        ('429 RATE LIMITED', ['status_429_throttling']),
+        ('503 UNAVAILABLE', ['status_503_disposable']),
+        ('OPAQUE ENTITY', ['opaque_entity']),
+        ('ACCESS RESTRICTED', ['access_restricted']),
+        ('NO CORPORATE FOOTPRINT', ['missing_trust_signals']),
+        ('BRAND IMPERSONATION', ['brand_impersonation']),
+        ('REDIRECTS TO PHISHING', ['phishing_infra_redirect']),
+        ('DOCUMENT SHARING LURE', ['doc_lure']),
+        ('PHISHING KIT JS', ['phishing_js']),
+        ('EMAIL TRACKING', ['email_in_url']),
+        ('SUSPICIOUS URL PATH', ['hijack_path_pattern']),
+        ('DOMAIN CREATED TODAY + RISK', ['new_domain_with_risk']),
+        ('DOMAIN CREATED TODAY', ['new_domain_with_risk']),
+        ('DOMAIN ONLY', ['new_domain_with_risk']),
+        ('BLACKLISTED DOMAIN', ['domain_blacklisted']),
+        ('BLACKLISTED IP', ['ip_blacklisted']),
+        ('BLACKLIST CHECK INCONCLUSIVE', ['blacklist_inconclusive']),
+        ('VT MALICIOUS', ['vt_malicious', 'vt_malicious_medium']),
+        ('VT SUSPICIOUS', ['vt_suspicious']),
+        ('NO SPF', ['no_spf']),
+        ('NO DKIM', ['no_dkim']),
+        ('NO MX', ['no_mx']),
+        ('NO DMARC', ['no_dmarc']),
+        ('DMARC p=none', ['dmarc_p_none']),
+        ('DMARC NO REPORTING', ['dmarc_no_rua']),
+        ('SPF ~all', ['spf_softfail_all']),
+        ('SPF ?all', ['spf_neutral_all']),
+        ('NULL MX', ['null_mx']),
+        ('SELF-HOSTED MX', ['mx_selfhosted']),
+        ('DISPOSABLE MX', ['mx_disposable']),
+        ('FREE EMAIL PROVIDER', ['free_email_domain']),
+        ('HIGH-ABUSE TLD', ['suspicious_tld']),
+        ('FREE HOSTING', ['hosting_free']),
+        ('BUDGET SHARED HOST', ['hosting_budget_shared']),
+        ('SUSPECT HOST', ['hosting_suspect']),
+        ('DEV PLATFORM HOST', ['hosting_platform']),
+        ('CPANEL HOSTING', ['cpanel_detected']),
+        ('BLOCKED ASN', ['blocked_asn']),
+        ('TRANSFER LOCK', ['transfer_lock_recent', 'transfer_lock_with_risk']),
+        ('WHOIS RECENTLY UPDATED', ['whois_recently_updated', 'whois_updated_with_risk']),
+        ('NO PTR', ['no_ptr']),
+        ('PTR MISMATCH', ['ptr_mismatch']),
+        ('CT RECENT ISSUANCE ON OLD', ['ct_recent_issuance']),
+        ('CT RECENT CERT ISSUANCE', ['ct_recent_issuance']),
+        ('NO CT HISTORY', ['ct_no_history']),
+        ('VULNERABLE WP PLUGINS', ['hacklink_vulnerable_plugins', 'vuln_plugins_no_compromise_mitigated']),
+        ('HIDDEN CONTENT INJECTION', ['hidden_injection']),
+        ('HACKLINK', ['hacklink_keywords']),
+        ('COMPROMISED WP', ['hacklink_wp_compromised']),
+        ('SPAM LINKS', ['hacklink_spam_links']),
+        ('MALICIOUS SCRIPT', ['malicious_script']),
+        ('CSS HIDING PATTERNS', ['hidden_injection']),
+        # Catch-all for domain age (must be LAST — "DOMAIN" matches broadly)
+        ('DOMAIN', ['new_domain_with_risk']),
+    ]
+    
+    def _lookup_pts(text):
+        """Look up actual scored points from breakdown for an issue."""
+        # Check RULE: issues first
+        if text.startswith("RULE:"):
+            rule_label = text[5:].strip()
+            # Build label→name mapping from res
+            if res.rules_triggered and res.rules_labels:
+                names = res.rules_triggered.split(';')
+                labels = res.rules_labels.split(';')
+                for i, lbl in enumerate(labels):
+                    if lbl.strip() == rule_label and i < len(names):
+                        rule_key = f"rule:{names[i].strip()}"
+                        return breakdown.get(rule_key, 0)
+            return 0
+        # Match by prefix
+        for prefix, signal_keys in _ISSUE_TO_SIGNAL:
+            if prefix in text:
+                total = sum(breakdown.get(k, 0) for k in signal_keys)
+                return total
+        return 0
+    
+    # Store ALL issues on the result with actual points
+    all_with_pts = []
+    for w, t in sorted(scored_issues, key=lambda x: x[0], reverse=True):
+        pts = _lookup_pts(t)
+        if pts != 0:
+            all_with_pts.append(f"[{pts:+d}] {t}")
+        else:
+            all_with_pts.append(f"[0] {t}")
+    res.all_issues_text = ";".join(all_with_pts)
+    
+    # For summary, only show scored issues (by approximate weight)
     scored_issues = [(w, t) for w, t in scored_issues if w > 0]
     scored_issues.sort(key=lambda x: x[0], reverse=True)
     
