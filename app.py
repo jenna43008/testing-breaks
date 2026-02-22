@@ -304,6 +304,7 @@ def display_results(results: list):
             "risk_score": st.column_config.NumberColumn("Score", width="small"),
             "recommendation": st.column_config.TextColumn("Result", width="small"),
             "high_risk_phish_infra": st.column_config.CheckboxColumn("🚨 Phish Infra", width="small"),
+            "phishing_kit_detected": st.column_config.CheckboxColumn("🎣 Kit", width="small"),
             "vt_malicious_count": st.column_config.NumberColumn("🛡️ VT Mal", width="small"),
             "hacklink_detected": st.column_config.CheckboxColumn("🕷️ Hacklink", width="small"),
             "hacklink_malicious_script": st.column_config.CheckboxColumn("💀 Mal Script", width="small"),
@@ -407,6 +408,15 @@ def display_results(results: list):
             if domain_data.get('high_risk_phish_infra'):
                 st.error(f"### 🚨 HIGH-RISK PHISHING INFRA")
                 st.caption(domain_data.get('high_risk_phish_infra_reason', ''))
+            
+            # Phishing Kit detection banner (v7.3)
+            if domain_data.get('phishing_kit_detected'):
+                st.error("### 🎣 PHISHING KIT DETECTED")
+                st.caption(domain_data.get('phishing_kit_reason', ''))
+            elif domain_data.get('has_exfil_drop_script'):
+                # Show exfil banner only if kit composite didn't already fire
+                st.error("### 📡 EXFIL DROP SCRIPT")
+                st.caption(domain_data.get('exfil_drop_details', '').replace(';', ' · '))
             
             # ASN display
             asn_display = domain_data.get('asn_display', '')
@@ -560,6 +570,50 @@ def display_results(results: list):
                 }
                 mx_icon = mx_icons.get(mx_ptype, 'ℹ️')
                 st.markdown(f"**MX Provider:** {mx_icon} {mx_ptype} ({mx_primary})")
+            
+            # NS Records display (v7.3)
+            ns_records = domain_data.get('ns_records', '')
+            if ns_records:
+                ns_list = ns_records.split(';')
+                ns_count = domain_data.get('ns_count', len(ns_list))
+                ns_flags = []
+                if domain_data.get('ns_is_dynamic_dns'):
+                    ns_flags.append(f"🔴 Dynamic DNS ({domain_data.get('ns_dynamic_dns_match', '')})")
+                if domain_data.get('ns_is_parking'):
+                    ns_flags.append(f"🟡 Parking NS ({domain_data.get('ns_parking_match', '')})")
+                if domain_data.get('ns_is_lame_delegation'):
+                    ns_flags.append("🔴 Lame delegation")
+                if domain_data.get('ns_is_free_dns'):
+                    ns_flags.append(f"⚠️ Free DNS ({domain_data.get('ns_free_dns_match', '')})")
+                if domain_data.get('ns_is_single_ns'):
+                    ns_flags.append("⚠️ Single NS")
+                flag_str = " · ".join(ns_flags) if ns_flags else "✅"
+                st.markdown(f"**NS Records ({ns_count}):** {', '.join(ns_list[:4])} {flag_str}")
+            elif domain_data.get('ns_is_lame_delegation'):
+                st.markdown("**NS Records:** 🔴 Lame delegation (0 NS records)")
+        
+        # === PHISHING KIT DETAILS (v7.3) ===
+        has_any_kit = (
+            domain_data.get('phishing_kit_detected')
+            or domain_data.get('has_phishing_kit_filename')
+            or domain_data.get('has_exfil_drop_script')
+        )
+        if has_any_kit:
+            with st.expander("🎣 Phishing Kit Detection", expanded=True):
+                kit_col1, kit_col2 = st.columns(2)
+                with kit_col1:
+                    if domain_data.get('phishing_kit_detected'):
+                        st.error(f"**Kit Confirmed:** {domain_data.get('phishing_kit_reason', '')}")
+                    if domain_data.get('has_phishing_kit_filename'):
+                        fn = domain_data.get('phishing_kit_filename', '')
+                        strength = "🔴 STRONG" if domain_data.get('phishing_kit_filename_strong') else "🟡 WEAK (needs combo)"
+                        st.markdown(f"**Kit Filename:** `{fn}` ({strength})")
+                with kit_col2:
+                    if domain_data.get('has_exfil_drop_script'):
+                        signals = domain_data.get('exfil_drop_signals', '').replace(';', ', ')
+                        details = domain_data.get('exfil_drop_details', '').replace(';', '\n- ')
+                        st.markdown(f"**Exfil Signals:** {signals}")
+                        st.markdown(f"- {details}")
         
         # === VIRUSTOTAL REPUTATION ===
         if domain_data.get('vt_available'):
@@ -785,12 +839,14 @@ def admin_view():
                        'cert_expired', 'cert_self_signed', 'redirect_chain_2plus',
                        'redirect_cross_domain', 'redirect_temp_302_307'],
             "Content/Phishing": ['credential_form', 'brand_impersonation', 'phishing_paths',
-                                'malware_links', 'minimal_shell', 'js_redirect'],
+                                'malware_links', 'minimal_shell', 'js_redirect',
+                                'phishing_kit_filename_strong', 'phishing_kit_detected', 'exfil_drop_script'],
             "Domain Name Patterns": ['suspicious_prefix', 'suspicious_suffix', 
                                      'tech_support_tld', 'domain_brand_impersonation',
                                      'brand_spoofing_keyword',
                                      'tld_variant_spoofing'],
             "Hosting Provider": ['hosting_budget_shared', 'hosting_free', 'hosting_suspect'],
+            "Nameserver Risk": ['ns_dynamic_dns', 'ns_parking', 'ns_lame_delegation', 'ns_free_dns', 'ns_single_ns'],
             "Bonuses (Reduce Score)": ['has_bimi', 'has_mta_sts'],
             "VirusTotal": ['vt_malicious_high', 'vt_malicious_medium', 'vt_malicious_low',
                           'vt_suspicious', 'vt_suspicious_low', 'vt_negative_community', 'vt_clean'],
@@ -956,6 +1012,19 @@ def admin_view():
                 "email_tracking_url": "Email/victim tracking URL parameters detected",
                 "phishing_paths": "Known phishing URL paths detected",
             },
+            "Phishing Kit Detection": {
+                "phishing_kit_filename_strong": "URL ends with high-confidence kit filename (gate.php, process.php, submit.php, index2.php) — almost never legitimate",
+                "phishing_kit_filename_weak": "URL ends with kit-common filename (login.php, verify.php) — only scored with a second corroborating signal",
+                "exfil_drop_script": "Credential exfiltration code in page source (Telegram bot tokens, Discord webhooks, base64 payloads, hardcoded email recipients)",
+                "phishing_kit_detected": "Composite: multiple phishing kit indicators confirmed — live kit running on this domain",
+            },
+            "Nameserver Risk": {
+                "ns_dynamic_dns": "Domain delegated to dynamic DNS provider (noip, dyndns, duckdns) — almost exclusively phishing/malware",
+                "ns_parking": "Domain delegated to parking nameserver (sedoparking, bodis, afternic) — parked or for-sale domain",
+                "ns_lame_delegation": "Zero NS records found — broken or abandoned domain with no functioning DNS",
+                "ns_free_dns": "Free/anonymous authoritative DNS — minimal infrastructure investment; unusual for business senders",
+                "ns_single_ns": "Only 1 NS record — fragile or hastily configured; legitimate domains use 2-4 NS",
+            },
             "E-commerce": {
                 "retail_scam_tld": ".shop/.store TLD — heavily abused for fake stores",
                 "cross_domain_brand_link": "Links to same brand on different TLD — clone store pattern",
@@ -1018,6 +1087,8 @@ def admin_view():
         cat_icons = {
             'Positive Signals': '✅',
             'Phishing Templates': '🎯',
+            'Phishing Kit': '🎣',
+            'Nameserver Risk': '🔤',
             'Email Auth Weakness': '📧',
             'MX Provider Risk': '📬',
             'Brand Impersonation': '🛡️',
