@@ -477,6 +477,19 @@ def display_results(results: list):
                 
                 st.caption(f"Net score: {total_penalty + total_bonus} → clamped to {domain_data['risk_score']}")
             
+            # === ALL ISSUES LIST ===
+            all_issues_raw = domain_data.get('all_issues_text', '')
+            if all_issues_raw:
+                issues_list = [i.strip() for i in all_issues_raw.split(';') if i.strip()]
+                with st.expander(f"📋 All Issues ({len(issues_list)})", expanded=False):
+                    for issue in issues_list:
+                        if issue.startswith("🚨"):
+                            st.markdown(f"- {issue}")
+                        elif issue.startswith("RULE:"):
+                            st.markdown(f"- 📐 {issue}")
+                        else:
+                            st.markdown(f"- ⚡ {issue}")
+            
             st.markdown("---")
             
             # Key signals
