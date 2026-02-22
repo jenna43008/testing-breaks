@@ -3435,6 +3435,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     def _issue_weight(text):
         """Map issue text to its config weight for sorting/filtering."""
         # Ordered by severity — first match wins
+        # All weights.get() names MUST match config keys exactly
         _map = [
             ('HIGH-RISK PHISHING INFRA', 100),
             ('MALICIOUS SCRIPT INJECTION (HIGH', weights.get('malicious_script', 100)),
@@ -3449,19 +3450,19 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('SPF +all', weights.get('spf_pass_all', 40)),
             ('DOMAIN CREATED TODAY + RISK', weights.get('new_domain_with_risk', 40)),
             ('SPAM LINKS', weights.get('hacklink_spam_links', 35)),
-            ('DISPOSABLE EMAIL', weights.get('disposable_domain', 35)),
-            ('TYPOSQUAT', weights.get('typosquat', 30)),
-            ('BRAND + SPOOFING', weights.get('brand_keyword_domain', 30)),
+            ('DISPOSABLE EMAIL', weights.get('disposable_email', 30)),
+            ('TYPOSQUAT', weights.get('typosquat_detected', 25)),
+            ('BRAND + SPOOFING', weights.get('brand_spoofing_keyword', 20)),
             ('DOMAIN IMPERSONATES', weights.get('domain_brand_impersonation', 25)),
             ('MALWARE LINKS', weights.get('malware_links', 25)),
-            ('CREDENTIAL FORM + BRAND', 25),
+            ('CREDENTIAL FORM + BRAND', weights.get('credential_form', 10)),
             ('VULNERABLE WP PLUGINS', weights.get('hacklink_vulnerable_plugins', 25)),
             ('YOUNG DOMAIN + RISK', weights.get('young_domain_with_risk_7d', 25)),
-            ('REDIRECTS TO PHISHING', weights.get('redirects_phishing', 25)),
+            ('REDIRECTS TO PHISHING', weights.get('phishing_infra_redirect', 25)),
             ('VT FLAGGED', weights.get('vt_malicious_medium', 40)),
-            ('BLOCKED ASN', weights.get('blocked_asn', 20)),
+            ('BLOCKED ASN', weights.get('blocked_asn_org_score', 20)),
             ('OPAQUE ENTITY', weights.get('opaque_entity', 20)),
-            ('TLD VARIANT SPOOF', weights.get('tld_variant', 20)),
+            ('TLD VARIANT SPOOF', weights.get('tld_variant_spoofing', 30)),
             ('EMPTY PAGE', weights.get('empty_page', 20)),
             ('ZERO EMAIL AUTH', 20),
             ('HACKLINK KEYWORDS', weights.get('hacklink_keywords', 15)),
@@ -3469,31 +3470,31 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('SUSPICIOUS SUFFIX', weights.get('suspicious_suffix', 15)),
             ('VT SUSPICIOUS', weights.get('vt_suspicious', 15)),
             ('FREE EMAIL PROVIDER', weights.get('free_email_domain', 15)),
-            ('DOCUMENT SHARING LURE', weights.get('doc_lure', 15)),
-            ('PHISHING KIT JS', weights.get('phishing_js', 15)),
+            ('DOCUMENT SHARING LURE', weights.get('doc_sharing_lure', 15)),
+            ('PHISHING KIT JS', weights.get('phishing_js_behavior', 18)),
             ('TRANSFER LOCK', weights.get('transfer_lock_recent', 15)),
             ('CT RECENT ISSUANCE ON OLD', weights.get('ct_recent_issuance', 8)),
             ('NO CT HISTORY', weights.get('ct_no_history', 12)),
             ('SENSITIVE FORM', weights.get('sensitive_fields', 12)),
             ('TECH SUPPORT SCAM TLD', weights.get('tech_support_tld', 12)),
-            ('DISPOSABLE MX', weights.get('disposable_mx', 12)),
-            ('HIJACK', weights.get('hijack_path', 12)),
+            ('DISPOSABLE MX', weights.get('mx_disposable', 10)),
+            ('HIJACK', weights.get('hijack_path_pattern', 12)),
             ('RETAIL SCAM TLD', weights.get('retail_scam_tld', 10)),
             ('CROSS-DOMAIN BRAND', weights.get('cross_domain_brand_link', 12)),
             ('NO DMARC', weights.get('no_dmarc', 10)),
             ('WHOIS RECENTLY UPDATED', weights.get('whois_recently_updated', 10)),
             ('ACCESS RESTRICTED', weights.get('access_restricted', 10)),
-            ('FREE HOSTING', weights.get('free_hosting', 10)),
+            ('FREE HOSTING', weights.get('hosting_free', 10)),
             ('PARKING PAGE', weights.get('parking_page', 10)),
             ('CREDENTIAL FORM DETECTED', weights.get('credential_form', 10)),
-            ('E-COMMERCE WITHOUT', 10),
-            ('EMAIL TRACKING', weights.get('email_in_url', 10)),
-            ('TLS HANDSHAKE FAILED', 10),
-            ('TLS CONNECTION FAILED', 10),
+            ('E-COMMERCE WITHOUT', weights.get('ecommerce_no_identity', 15)),
+            ('EMAIL TRACKING', weights.get('email_tracking_url', 10)),
+            ('TLS HANDSHAKE FAILED', weights.get('tls_handshake_failed', 10)),
+            ('TLS CONNECTION FAILED', weights.get('tls_connection_failed', 10)),
             ('BRAND IMPERSONATION', weights.get('brand_impersonation', 15)),
-            ('DOMAIN', 8),  # domain age 30-90d fallback
+            ('DOMAIN', weights.get('young_domain_with_risk_90d', 4)),  # domain age 30-90d fallback
             ('NO SPF', weights.get('no_spf', 8)),
-            ('SELF-HOSTED MX', weights.get('selfhosted_mx', 8)),
+            ('SELF-HOSTED MX', weights.get('mx_selfhosted', 8)),
             ('CROSS-DOMAIN REDIRECT', weights.get('redirect_cross_domain', 8)),
             ('MINIMAL/SHELL', weights.get('minimal_shell', 8)),
             ('JAVASCRIPT REDIRECT', weights.get('js_redirect', 8)),
@@ -3501,30 +3502,30 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('NO MX', weights.get('no_mx', 8)),
             ('CPANEL HOSTING', weights.get('cpanel_detected', 8)),
             ('BUDGET SHARED HOST', weights.get('hosting_budget_shared', 8)),
-            ('SUSPECT HOST', 8),
-            ('DEV PLATFORM HOST', 8),
-            ('NO VALID HTTPS', 7),
+            ('SUSPECT HOST', weights.get('hosting_suspect', 8)),
+            ('DEV PLATFORM HOST', weights.get('hosting_platform', 4)),
+            ('NO VALID HTTPS', weights.get('no_https', 25)),
             ('HIGH-ABUSE TLD', weights.get('suspicious_tld', 6)),
             ('NO DKIM', weights.get('no_dkim', 6)),
             ('REDIRECT CHAIN', weights.get('redirect_chain_2plus', 5)),
             ('DMARC p=none', weights.get('dmarc_p_none', 5)),
             ('SPF ?all', weights.get('spf_neutral_all', 5)),
-            ('TEMP REDIRECTS', weights.get('redirect_temp', 5)),
+            ('TEMP REDIRECTS', weights.get('redirect_temp_302_307', 5)),
             ('META REFRESH', weights.get('meta_refresh', 5)),
-            ('EXTERNAL JS LOADER', weights.get('external_js', 5)),
+            ('EXTERNAL JS LOADER', weights.get('external_js_loader', 5)),
             ('PTR MISMATCH', weights.get('ptr_mismatch', 5)),
-            ('BLACKLIST CHECK INCONCLUSIVE', 5),
-            ('401 UNAUTHORIZED', 5),
-            ('403 FORBIDDEN', 5),
-            ('429 RATE LIMITED', 5),
-            ('503 UNAVAILABLE', 5),
+            ('BLACKLIST CHECK INCONCLUSIVE', weights.get('blacklist_inconclusive', 5)),
+            ('401 UNAUTHORIZED', weights.get('status_401_unauthorized', 5)),
+            ('403 FORBIDDEN', weights.get('status_403_cloaking', 5)),
+            ('429 RATE LIMITED', weights.get('status_429_throttling', 5)),
+            ('503 UNAVAILABLE', weights.get('status_503_disposable', 5)),
             ('NO PTR', weights.get('no_ptr', 3)),
             ('SPF ~all', weights.get('spf_softfail_all', 2)),
             ('DMARC NO REPORTING', weights.get('dmarc_no_rua', 2)),
-            ('NO CORPORATE FOOTPRINT', weights.get('missing_trust', 8)),
+            ('NO CORPORATE FOOTPRINT', weights.get('missing_trust_signals', 8)),
             ('SUSPICIOUS EXTERNAL SCRIPTS', 0),  # Not a scored signal — informational only
             ('VT THREAT NAMES', 0),  # Informational detail, not a risk signal
-            ('CT RECENT CERT ISSUANCE', 3),  # Minor standalone
+            ('CT RECENT CERT ISSUANCE', weights.get('ct_recent_issuance', 3)),  # Minor standalone
         ]
         for prefix, w in _map:
             if prefix in text:
@@ -4151,10 +4152,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             ])
             # 3+ legitimacy signals = clearly legitimate site with a popular plugin
             if legitimacy_signals >= 3:
-                add("vuln_plugins_no_compromise_mitigated", -18)
+                add("vuln_plugins_no_compromise_mitigated", weights.get('vuln_plugins_strong_mitigation', -18))
             # 2 legitimacy signals = likely legitimate, moderate reduction
             elif legitimacy_signals >= 2:
-                add("vuln_plugins_no_compromise_mitigated", -10)
+                add("vuln_plugins_no_compromise_mitigated", weights.get('vuln_plugins_moderate_mitigation', -10))
 
     # === UNIFIED RULES ENGINE ===
     # All scoring logic beyond base weights (former combos + custom rules)
