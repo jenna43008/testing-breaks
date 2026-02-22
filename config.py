@@ -48,6 +48,8 @@ DEFAULT_CONFIG = {
         "hacklink_keywords": 25,           # Hacklink keywords present (below detection threshold)
         "hacklink_wp_compromised": 50,     # WordPress compromise indicators
         "hacklink_vulnerable_plugins": 25, # Known exploitable WP plugins
+        "vuln_plugins_strong_mitigation": -18,   # Vuln plugins but 3+ legitimacy signals (established, app store, enterprise MX, etc.)
+        "vuln_plugins_moderate_mitigation": -10,  # Vuln plugins but 2 legitimacy signals
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
         "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — HIGH confidence (5+ multi-signal score)
         "malicious_script_medium": 25,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — log + moderate penalty
@@ -120,6 +122,13 @@ DEFAULT_CONFIG = {
         # === DOMAIN AGE (Moderate for very new, low otherwise) ===
         "domain_lt_30d": 0,          # 7-30 days old - moderate concern
         "domain_lt_90d": 0,           # 30-90 days old - minor concern
+        
+        # Domain age WITH content risk (only fires when age + risky content co-occur)
+        "new_domain_with_risk": 40,              # Created today/yesterday + content risk signals
+        "young_domain_with_risk_7d": 25,         # 2-7 days old + content risk signals
+        "young_domain_with_risk_30d": 10,        # 8-30 days old + content risk signals
+        "young_domain_with_risk_90d": 4,         # 31-90 days old + content risk signals
+        
         "suspicious_tld": 15,          # High-abuse TLD
         "free_email_domain": 15,      # Sending from gmail.com etc
         "free_hosting": 6,
@@ -140,6 +149,10 @@ DEFAULT_CONFIG = {
         "access_restricted": 15,          # 401 or 403 on what should be public domain
         "minimal_shell": 15,
         "js_redirect": 10,
+        
+        # Mitigations (negative weights — reduce score when strong email auth present)
+        "minimal_shell_email_auth_mitigated": -8,   # Shell site with SPF -all + DMARC reject — less likely phishing
+        "js_redirect_email_auth_mitigated": -8,      # JS redirect with SPF -all + DMARC reject — less likely phishing
         "meta_refresh": 5,
         "external_js_loader": 6,
         "obfuscated_js": 15,
