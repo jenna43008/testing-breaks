@@ -47,16 +47,16 @@ DEFAULT_CONFIG = {
         "hacklink_detected": 100,           # Hacklink SEO spam injection confirmed
         "hacklink_keywords": 25,           # Hacklink keywords present (below detection threshold)
         "hacklink_wp_compromised": 50,     # WordPress compromise indicators
-        "hacklink_vulnerable_plugins": 10, # Known exploitable WP plugins
+        "hacklink_vulnerable_plugins": 25, # Known exploitable WP plugins
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
         "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — HIGH confidence (5+ multi-signal score)
-        "malicious_script_medium": 40,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — log + moderate penalty
+        "malicious_script_medium": 25,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — log + moderate penalty
         "hidden_injection": 100,            # CSS-hidden content injection (hacklink fingerprint) — confirmed compromise
         "cpanel_detected": 25,              # cPanel hosting (common hacklink target, not malicious alone)
         
         # === TRANSFER LOCK / DOMAIN TAKEOVER ===
-        "transfer_lock_recent": 5,        # Transfer lock recently added (post-compromise lockdown signal)
-        "whois_recently_updated": 5,      # WHOIS updated in last 30 days
+        "transfer_lock_recent": 35,        # Transfer lock recently added (post-compromise lockdown signal)
+        "whois_recently_updated": 10,      # WHOIS updated in last 30 days
         
         # === EMPTY PAGE ===
         "empty_page": 20,                  # Reachable domain with empty/near-empty content
@@ -79,13 +79,13 @@ DEFAULT_CONFIG = {
         "hijack_path_pattern": 25,         # /tunnel/, /bid/, /secure/ paths
         "doc_sharing_lure": 25,            # "Secure Document Sharing" content
         "phishing_js_behavior": 25,        # atob(), hash extraction, etc.
-        "phishing_infra_redirect": 45,     # Redirect to workers.dev, etc.
+        "phishing_infra_redirect": 35,     # Redirect to workers.dev, etc.
         "email_tracking_url": 20,          # Email in URL hash (tracking)
         
         # === E-COMMERCE / RETAIL SCAM INDICATORS ===
         "retail_scam_tld": 12,             # .shop, .store, .sale, etc.
         "ecommerce_no_identity": 15,       # E-commerce site with no business identity
-        "cross_domain_brand_link": 30,     # Links to same-brand different TLD (clone indicator)
+        "cross_domain_brand_link": 18,     # Links to same-brand different TLD (clone indicator)
         "ecommerce_missing_policies": 8,   # E-commerce without terms/refund policy
         
         # === DELIVERABILITY CONCERNS (Low weights - warn but don't deny alone) ===
@@ -125,10 +125,10 @@ DEFAULT_CONFIG = {
         "url_shortener": 20,
         
         # === REDIRECT/CLOAKING CONCERNS ===
-        "redirect_chain_2plus": 25,
-        "redirect_chain_3plus": 25,
-        "redirect_cross_domain": 25,
-        "redirect_temp_302_307": 25,
+        "redirect_chain_2plus": 15,
+        "redirect_chain_3plus": 15,
+        "redirect_cross_domain": 15,
+        "redirect_temp_302_307": 15,
         
         # === SUSPICIOUS BEHAVIOR (Higher weights - actual red flags) ===
         "status_401_unauthorized": 25,    # 401 on public site - unusual
@@ -138,7 +138,7 @@ DEFAULT_CONFIG = {
         "status_5xx_errors": 10,
         "access_restricted": 15,          # 401 or 403 on what should be public domain
         "minimal_shell": 15,
-        "js_redirect": 25,
+        "js_redirect": 10,
         "meta_refresh": 5,
         "external_js_loader": 6,
         "obfuscated_js": 15,
@@ -171,7 +171,7 @@ DEFAULT_CONFIG = {
         # === MX PROVIDER SCORING (v4.7) ===
         "mx_disposable": 20,          # Disposable/cheap MX (Titan, ImprovMX, Hostinger email, etc.)
         "mx_selfhosted": 20,           # Self-hosted MX on same domain/IP - no provider oversight
-        "mx_enterprise_bonus": -20,    # Enterprise MX (Google Workspace, M365, Proofpoint) = legitimacy signal
+        "mx_enterprise_bonus": -10,    # Enterprise MX (Google Workspace, M365, Proofpoint) = legitimacy signal
     },
     
     # ==========================================================================
@@ -428,8 +428,8 @@ DEFAULT_CONFIG = {
         {"name": "cpanel_malicious_script", "score": 25, "label": "cPanel + malicious script — compromised shared hosting", "category": "Domain Takeover", "enabled": True, "if_all": ["cpanel_detected", "malicious_script"], "if_any": [], "if_not": []},
 
         # --- Transfer Lock Recently Added + Old Domain / VT Combos (4 rules) ---
-        {"name": "transfer_lock_old_domain", "score": 30, "label": "transfer lock recently added + domain >1yr — post-compromise lockdown on established domain", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "domain_gt_1yr"], "if_any": [], "if_not": []},
-        {"name": "transfer_lock_whois_updated", "score": 30, "label": "transfer lock recently added + WHOIS recently updated — active post-compromise response", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "whois_recently_updated"], "if_any": [], "if_not": []},
+        {"name": "transfer_lock_old_domain", "score": 0, "label": "transfer lock recently added + domain >1yr — post-compromise lockdown on established domain", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "domain_gt_1yr"], "if_any": [], "if_not": []},
+        {"name": "transfer_lock_whois_updated", "score": 0, "label": "transfer lock recently added + WHOIS recently updated — active post-compromise response", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "whois_recently_updated"], "if_any": [], "if_not": []},
         {"name": "transfer_lock_vt_malicious", "score": 25, "label": "transfer lock recently added + VT malicious — locked down after threat intel flagged", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
         {"name": "transfer_lock_hacklink", "score": 20, "label": "transfer lock recently added + hacklink — locked down after SEO injection found", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "hacklink_detected"], "if_any": [], "if_not": []},
 
