@@ -300,6 +300,16 @@ class DomainApprovalResult:
     has_suspicious_iframe: bool = False
     is_parking_page: bool = False
     
+    # === PHISHING KIT DETECTION (v7.3) ===
+    has_phishing_kit_filename: bool = False    # Kit entry-point filename in URL path
+    phishing_kit_filename: str = ""            # Which filename matched (e.g., "gate.php")
+    phishing_kit_filename_strong: bool = False # True if strong-signal filename
+    has_exfil_drop_script: bool = False        # Telegram/Discord/exfil patterns in source
+    exfil_drop_signals: str = ""               # Semicolon-separated signal names that fired
+    exfil_drop_details: str = ""               # Human-readable descriptions
+    phishing_kit_detected: bool = False        # Composite: multiple kit signals confirm a kit
+    phishing_kit_reason: str = ""              # Human-readable explanation of kit detection
+    
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     has_hijack_path_pattern: bool = False
     hijack_path_found: str = ""
@@ -481,6 +491,54 @@ URL_SHORTENERS = [
 PHISHING_PATHS = [
     '/signin', '/login', '/secure', '/verify', '/update', '/confirm',
     '/account', '/banking', '/webscr', '/paypal', '/amazon',
+    # v7.3: Additional kit directory patterns
+    '/auth/', '/portal/', '/invoice/', '/doc/', '/share/',
+    '/account/verification', '/secure/login', '/admin/verify',
+    '/wp-admin/update/', '/verification/',
+]
+
+# ============================================================================
+# PHISHING KIT DETECTION (v7.3)
+# ============================================================================
+# Kit filenames — if the final URL path ends with one of these, the domain
+# is serving a phishing kit entry point.
+# STRONG: score directly (almost never legitimate)
+# WEAK:   score 0 alone — only fire via combo rules needing a second signal
+PHISHING_KIT_FILENAMES_STRONG = [
+    'gate.php', 'post.php', 'next.php', 'submit.php', 'process.php',
+    'validate.php', 'secure.php', 'auth.php',
+    'index2.php',                    # Classic kit duplicate-index pattern
+    'well.php', 'ok.php',            # Common kit result pages
+    'log.php', 'logs.php',           # Kit logging endpoints
+    'rezult.php', 'result.php',
+    'chk.php', 'check.php',
+]
+
+PHISHING_KIT_FILENAMES_WEAK = [
+    # Common on legitimate CMS — only flag in combination with other signals
+    'login.php', 'verify.php', 'signin.php', 'update.php', 'confirm.php',
+    'recover.php', 'reset.php', 'access.php',
+]
+
+# Exfiltration / drop script patterns detectable in HTML source.
+# Each tuple: (compiled_regex, signal_name, description)
+import re as _re
+EXFIL_DROP_PATTERNS = [
+    # Telegram Bot API tokens — format: bot{8-10 digits}:{35 alphanumeric+_-}
+    (_re.compile(rb'bot\d{8,10}:AA[A-Za-z0-9_\-]{30,}', _re.IGNORECASE),
+     'telegram_bot_token', 'Telegram bot token (credential exfiltration)'),
+    # Telegram API sendMessage endpoint
+    (_re.compile(rb'api\.telegram\.org/bot', _re.IGNORECASE),
+     'telegram_api', 'Telegram API call (credential exfiltration)'),
+    # Discord webhook URLs — format: discord.com/api/webhooks/{id}/{token}
+    (_re.compile(rb'discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_\-]+', _re.IGNORECASE),
+     'discord_webhook', 'Discord webhook URL (credential exfiltration)'),
+    # Suspicious base64-encoded blocks near network calls
+    (_re.compile(rb'(?:atob|btoa|base64)\s*\(["\'][A-Za-z0-9+/=]{40,}["\']', _re.IGNORECASE),
+     'base64_exfil', 'Base64-encoded exfiltration payload'),
+    # Hardcoded email recipient in JS string context (kit exfil target)
+    (_re.compile(rb'''["'](?:to|email|recipient|receiver)["']\s*[:=]\s*["'][a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}["']''', _re.IGNORECASE),
+     'js_email_exfil', 'Hardcoded email in JavaScript (kit exfiltration target)'),
 ]
 
 # ============================================================================
@@ -2445,6 +2503,9 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
         "external_js": False, "obfuscation": False, "credential_form": False,
         "sensitive_fields": False, "brands": [], "form_external": False,
         "malware": [], "suspicious_iframe": False, "parking": False, "phishing_paths": [],
+        # Phishing kit detection (v7.3)
+        "kit_filename": "", "kit_filename_strong": False,
+        "exfil_signals": [], "exfil_details": [],
     }
     
     if not content:
@@ -2602,6 +2663,32 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     for p in PHISHING_PATHS:
         if p in path:
             result["phishing_paths"].append(p)
+    
+    # === PHISHING KIT FILENAME DETECTION (v7.3) ===
+    # Check if the URL path ends with a known kit entry-point filename.
+    path_basename = path.rsplit('/', 1)[-1] if '/' in path else path
+    
+    for fn in PHISHING_KIT_FILENAMES_STRONG:
+        if path_basename == fn:
+            result["kit_filename"] = fn
+            result["kit_filename_strong"] = True
+            break
+    
+    if not result["kit_filename"]:
+        for fn in PHISHING_KIT_FILENAMES_WEAK:
+            if path_basename == fn:
+                result["kit_filename"] = fn
+                result["kit_filename_strong"] = False
+                break
+    
+    # === EXFILTRATION / DROP SCRIPT DETECTION (v7.3) ===
+    # Scan raw HTML source for credential exfiltration patterns.
+    # Telegram bot tokens, Discord webhooks, base64-encoded exfil payloads
+    # in page source are near-certain indicators of a live phishing kit.
+    for pattern_re, signal_name, description in EXFIL_DROP_PATTERNS:
+        if pattern_re.search(content):
+            result["exfil_signals"].append(signal_name)
+            result["exfil_details"].append(description)
     
     return result
 
@@ -3209,6 +3296,18 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.has_credential_form and res.brands_detected:
         all_issues.append("CREDENTIAL FORM + BRAND IMPERSONATION → Classic phishing; will be blocked")
     
+    # === PHISHING KIT / EXFIL DETECTION (v7.3) ===
+    if res.phishing_kit_detected:
+        all_issues.append(f"🎣 PHISHING KIT DETECTED → {res.phishing_kit_reason}")
+    
+    if res.has_phishing_kit_filename:
+        severity = "HIGH" if res.phishing_kit_filename_strong else "MODERATE"
+        all_issues.append(f"PHISHING KIT FILENAME ({res.phishing_kit_filename}, {severity}) → URL path ends with known phishing kit entry point")
+    
+    if res.has_exfil_drop_script:
+        details = res.exfil_drop_details.replace(";", "; ")
+        all_issues.append(f"EXFIL DROP SCRIPT ({details}) → Credential exfiltration infrastructure in page source")
+    
     # === VIRUSTOTAL REPUTATION ===
     if res.vt_available:
         if res.vt_malicious_count >= 5:
@@ -3562,6 +3661,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('BRAND + SPOOFING', weights.get('brand_spoofing_keyword', 20)),
             ('DOMAIN IMPERSONATES', weights.get('domain_brand_impersonation', 25)),
             ('MALWARE LINKS', weights.get('malware_links', 25)),
+            ('EXFIL DROP SCRIPT', weights.get('exfil_drop_script', 30)),
+            ('PHISHING KIT DETECTED', weights.get('phishing_kit_detected', 15)),
+            ('PHISHING KIT FILENAME', weights.get('phishing_kit_filename_strong', 22)),
             ('CREDENTIAL FORM + BRAND', weights.get('credential_form', 10)),
             ('VULNERABLE WP PLUGINS', weights.get('hacklink_vulnerable_plugins', 25)),
             ('YOUNG DOMAIN + RISK', weights.get('young_domain_with_risk_7d', 25)),
@@ -3687,6 +3789,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('FORM POSTS EXTERNALLY', ['form_posts_external']),
         ('SENSITIVE FORM', ['sensitive_fields']),
         ('CREDENTIAL FORM', ['credential_form']),
+        ('PHISHING KIT FILENAME', ['phishing_kit_filename_strong', 'phishing_kit_filename_weak']),
+        ('PHISHING KIT DETECTED', ['phishing_kit_detected']),
+        ('EXFIL DROP SCRIPT', ['exfil_drop_script']),
         ('401 UNAUTHORIZED', ['access_restricted']),
         ('403 FORBIDDEN', ['access_restricted']),
         ('429 RATE LIMITED', ['status_429_throttling']),
@@ -4126,6 +4231,18 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.malware_links_found:
         add("malware_links", weights.get('malware_links', 25))
     
+    # === PHISHING KIT / EXFIL DETECTION (v7.3) ===
+    if res.has_phishing_kit_filename:
+        if res.phishing_kit_filename_strong:
+            add("phishing_kit_filename_strong", weights.get('phishing_kit_filename_strong', 22))
+        else:
+            # Weak filenames score 0 alone — combo rules give them weight
+            add("phishing_kit_filename_weak", 0)
+    if res.has_exfil_drop_script:
+        add("exfil_drop_script", weights.get('exfil_drop_script', 30))
+    if res.phishing_kit_detected:
+        add("phishing_kit_detected", weights.get('phishing_kit_detected', 15))
+    
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     if res.has_hijack_path_pattern:
         add("hijack_path_pattern", weights.get('hijack_path_pattern', 12))
@@ -4384,9 +4501,41 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             "partial match on known phishing infrastructure fingerprint"
         )
     
+    # === PHISHING KIT COMPOSITE DETECTION (v7.3) ===
+    # Fires when multiple phishing kit indicators combine to confirm a live kit.
+    # This surfaces the conclusion "this domain is running a phishing kit"
+    # as a clear banner, rather than just scattered individual issues.
+    #
+    # Criteria: 2+ signals from this set fires the composite.
+    # Exception: exfil alone is strong enough (1 signal fires composite).
+    kit_evidence = []
+    if res.has_phishing_kit_filename:
+        kit_evidence.append(f"kit filename: {res.phishing_kit_filename}")
+    if res.has_exfil_drop_script:
+        kit_evidence.append(f"exfil: {res.exfil_drop_signals}")
+    if res.has_credential_form:
+        kit_evidence.append("credential form")
+    if res.phishing_paths_found:
+        kit_evidence.append(f"phishing paths: {res.phishing_paths_found}")
+    if res.brands_detected:
+        kit_evidence.append(f"brand: {res.brands_detected}")
+    if res.form_posts_external:
+        kit_evidence.append("form posts to external domain")
+    if res.has_obfuscation:
+        kit_evidence.append("obfuscated JS")
+    
+    if len(kit_evidence) >= 2 or res.has_exfil_drop_script:
+        res.phishing_kit_detected = True
+        res.phishing_kit_reason = " + ".join(kit_evidence)
+    
     # === BUILD PATTERN MATCH INDICATOR ===
     # Identifies known attack patterns for specialist visibility.
     _patterns = []
+    
+    # Phishing Kit pattern (v7.3)
+    if res.phishing_kit_detected:
+        # Show up to 3 evidence items in the pattern string
+        _patterns.append(f"🎣 Phishing Kit ({', '.join(kit_evidence[:3])})")
     
     # Swedish Invoice Phish pattern
     if res.high_risk_phish_infra:
@@ -4682,6 +4831,16 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.has_suspicious_iframe = ca["suspicious_iframe"]
         res.is_parking_page = ca["parking"]
         res.phishing_paths_found = ";".join(ca["phishing_paths"])
+        
+        # Phishing kit detection (v7.3)
+        if ca["kit_filename"]:
+            res.has_phishing_kit_filename = True
+            res.phishing_kit_filename = ca["kit_filename"]
+            res.phishing_kit_filename_strong = ca["kit_filename_strong"]
+        if ca["exfil_signals"]:
+            res.has_exfil_drop_script = True
+            res.exfil_drop_signals = ";".join(ca["exfil_signals"])
+            res.exfil_drop_details = ";".join(ca["exfil_details"])
     
     # Check for hijacked domain / stepping stone indicators
     redirect_chain_urls = res.redirect_chain.split(' → ') if res.redirect_chain else []
