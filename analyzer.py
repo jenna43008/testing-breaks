@@ -2394,20 +2394,83 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     
     final_domain = urlparse(final_url).netloc.lower()
     
-    # Check for brand keywords in page content
-    for brand in BRAND_KEYWORDS:
-        brand_str = brand.decode('utf-8', errors='ignore').replace(' ', '')
-        if brand in content_lower and brand_str not in final_domain and brand_str not in domain:
-            result["brands"].append(brand.decode('utf-8', errors='ignore'))
+    # Check for brand keywords in VISIBLE page text only.
+    # We must exclude: HTML tags/attributes, scripts, styles, URLs (href/src),
+    # social media links, app store references, meta tags, Open Graph tags,
+    # Facebook/Google SDKs, tracking pixels, and share buttons.
+    # Only flag brands that appear in actual page copy (titles, headings, body text).
     
-    # Check short brand keywords with word boundary matching (to avoid "first" matching "irs")
-    content_str = content_lower.decode('utf-8', errors='ignore')
+    # Step 1: Remove script, style, noscript, head blocks entirely
+    visible = re.sub(rb'<script[^>]*>.*?</script>', b' ', content_lower, flags=re.DOTALL)
+    visible = re.sub(rb'<style[^>]*>.*?</style>', b' ', visible, flags=re.DOTALL)
+    visible = re.sub(rb'<noscript[^>]*>.*?</noscript>', b' ', visible, flags=re.DOTALL)
+    visible = re.sub(rb'<head[^>]*>.*?</head>', b' ', visible, flags=re.DOTALL)
+    
+    # Step 2: Remove all HTML comments
+    visible = re.sub(rb'<!--.*?-->', b' ', visible, flags=re.DOTALL)
+    
+    # Step 3: Remove all HTML tags (and their attributes — this strips href, src, alt, etc.)
+    visible = re.sub(rb'<[^>]+>', b' ', visible)
+    
+    # Step 4: Remove any remaining URLs
+    visible = re.sub(rb'https?://\S+', b' ', visible)
+    
+    # Step 5: Decode to string for brand matching
+    visible_text = visible.decode('utf-8', errors='ignore').lower()
+    
+    # Step 6: Remove common non-impersonation phrases (social links, app stores, SDKs)
+    _SAFE_BRAND_CONTEXTS = [
+        # Social media references
+        r'follow\s+us\s+on\s+\w+', r'like\s+us\s+on\s+\w+', r'find\s+us\s+on\s+\w+',
+        r'connect\s+with\s+us\s+on\s+\w+', r'join\s+us\s+on\s+\w+',
+        r'share\s+on\s+\w+', r'share\s+to\s+\w+', r'share\s+via\s+\w+',
+        r'sign\s+in\s+with\s+\w+', r'log\s*in\s+with\s+\w+', r'continue\s+with\s+\w+',
+        r'powered\s+by\s+\w+',
+        # App store references
+        r'download\s+on\s+the\s+app\s+store', r'get\s+it\s+on\s+google\s+play',
+        r'available\s+on\s+the\s+app\s+store', r'available\s+on\s+google\s+play',
+        r'download\s+from\s+\w+\s+store', r'app\s+store', r'google\s+play',
+        r'apple\s+store',
+        # Copyright / footer boilerplate
+        r'©\s*\d{4}\s+\w+', r'copyright\s+\d{4}\s+\w+',
+        r'all\s+rights\s+reserved',
+        # Platform references
+        r'facebook\s+pixel', r'facebook\s+sdk', r'facebook\s+page',
+        r'google\s+analytics', r'google\s+tag\s+manager', r'google\s+maps',
+        r'google\s+fonts', r'google\s+recaptcha', r'google\s+adsense',
+        r'instagram\s+feed', r'instagram\s+widget',
+        r'microsoft\s+365', r'microsoft\s+office', r'microsoft\s+teams',
+        r'apple\s+pay', r'apple\s+music', r'apple\s+tv', r'apple\s+watch',
+        r'amazon\s+pay', r'amazon\s+web\s+services', r'amazon\s+aws',
+        r'paypal\s+checkout', r'pay\s+with\s+paypal',
+    ]
+    visible_cleaned = visible_text
+    for ctx_pattern in _SAFE_BRAND_CONTEXTS:
+        visible_cleaned = re.sub(ctx_pattern, ' ', visible_cleaned, flags=re.IGNORECASE)
+    
+    # Ubiquitous brands: appear on virtually every website as social links,
+    # login buttons, analytics, share widgets, app store links, etc.
+    # These should NOT be flagged from content alone — only the domain-name
+    # check (IMPERSONATED_BRANDS) should catch impersonation of these.
+    _UBIQUITOUS_BRANDS = {b'facebook', b'instagram', b'google', b'microsoft', b'amazon', b'apple', b'netflix'}
+    
+    # Step 7: Check standard brand keywords in cleaned visible text
+    # Only flag non-ubiquitous brands from content (financial, shipping, etc.)
+    for brand in BRAND_KEYWORDS:
+        if brand in _UBIQUITOUS_BRANDS:
+            continue  # Skip — too common in legitimate page content
+        brand_str = brand.decode('utf-8', errors='ignore').replace(' ', '')
+        brand_display = brand.decode('utf-8', errors='ignore')
+        if brand_str not in final_domain and brand_str not in domain:
+            if brand_str in visible_cleaned:
+                result["brands"].append(brand_display)
+    
+    # Step 8: Check short brand keywords with word boundary matching
     for brand in BRAND_KEYWORDS_SHORT:
         brand_str = brand.decode('utf-8', errors='ignore')
         if brand_str not in final_domain and brand_str not in domain:
-            # Use word boundary regex to avoid false positives
             pattern = r'\b' + re.escape(brand_str) + r'\b'
-            if re.search(pattern, content_str, re.IGNORECASE):
+            if re.search(pattern, visible_cleaned, re.IGNORECASE):
                 result["brands"].append(brand_str)
     
     result["brands"] = list(set(result["brands"]))[:5]  # Dedupe and limit
