@@ -433,6 +433,11 @@ DEFAULT_CONFIG = {
         {"name": "combo_email_track_cred_form", "score": 28, "label": "email tracking url + credential form", "category": "Phishing Lures", "enabled": True, "if_all": ["email_tracking_url", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_email_track_doc_lure", "score": 22, "label": "email tracking url + doc sharing lure", "category": "Phishing Lures", "enabled": True, "if_all": ["email_tracking_url", "doc_sharing_lure"], "if_any": [], "if_not": []},
 
+        # --- URL Cloaking (3 rules) ---
+        {"name": "combo_iframe_temp_redir", "score": 15, "label": "hidden iframe + temp redirect — URL cloaking", "category": "URL Cloaking", "enabled": True, "if_all": ["suspicious_iframe", "redirect_temp_302_307"], "if_any": [], "if_not": []},
+        {"name": "combo_iframe_cross_redir", "score": 12, "label": "hidden iframe + cross-domain redirect", "category": "URL Cloaking", "enabled": True, "if_all": ["suspicious_iframe", "redirect_cross_domain"], "if_any": [], "if_not": []},
+        {"name": "combo_iframe_js_redir", "score": 12, "label": "hidden iframe + JS redirect — phishing kit loader", "category": "URL Cloaking", "enabled": True, "if_all": ["suspicious_iframe", "js_redirect"], "if_any": [], "if_not": []},
+
         # --- Phishing Templates (4 rules) ---
         {"name": "brand_keyword_phish", "score": 10, "label": "Brand + spoofing keyword domain without established legitimacy signals", "category": "Phishing Templates", "enabled": True, "if_all": ["brand_spoofing_keyword", "domain_brand_impersonation"], "if_any": [], "if_not": ["domain_gt_1yr", "app_store_high", "mx_enterprise"]},
         {"name": "phish_factory_template", "score": 10, "label": "Phishing factory template: mail.{domain} + no DKIM + weak DMARC + no PTR", "category": "Phishing Templates", "enabled": True, "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none", "no_ptr"], "if_any": [], "if_not": ["mx_enterprise", "has_bimi", "domain_gt_1yr"]},
