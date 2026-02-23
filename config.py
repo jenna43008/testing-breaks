@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "check_rdap": True,
     "admin_password": "admin123",  # CHANGE THIS!
     "vt_api_key": "3976cc546c3ac01b8f50773c46a5c4a7e508709ae23b62ab4d82436222367d8",   # VirusTotal API key (hardcoded)
-    "config_version": "7.2",              # Used for weight migration between versions
+    "config_version": "7.3",              # Used for weight migration between versions
     
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
@@ -45,14 +45,14 @@ DEFAULT_CONFIG = {
         
         # === HACKLINK / SEO SPAM DETECTION ===
         "hacklink_detected": 100,           # Hacklink SEO spam injection confirmed
-        "hacklink_keywords": 25,           # Hacklink keywords present (below detection threshold)
+        "hacklink_keywords": 8,            # Hacklink keywords present (below detection threshold) — single keyword match is very low confidence
         "hacklink_wp_compromised": 50,     # WordPress compromise indicators
         "hacklink_vulnerable_plugins": 25, # Known exploitable WP plugins
         "vuln_plugins_strong_mitigation": -18,   # Vuln plugins but 3+ legitimacy signals (established, app store, enterprise MX, etc.)
         "vuln_plugins_moderate_mitigation": -10,  # Vuln plugins but 2 legitimacy signals
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
         "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — HIGH confidence (5+ multi-signal score)
-        "malicious_script_medium": 40,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — log + moderate penalty
+        "malicious_script_medium": 20,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — moderate penalty; common on sites with third-party tracking
         "hidden_injection": 100,            # CSS-hidden content injection (hacklink fingerprint) — confirmed compromise
         "hidden_injection_css_only": 0,     # CSS hiding patterns (display:none etc.) without confirmed injection — too common on legitimate sites
         "cpanel_detected": 25,              # cPanel hosting (common hacklink target, not malicious alone)
@@ -1020,7 +1020,9 @@ DEFAULT_CONFIG = {
             "undeveloped.com",
             "domainparking",
             "parkeddomain",
-            "dns-parking.com",       # Hostinger parking (before setup)
+            # dns-parking.com REMOVED — it's Hostinger's standard NS
+            # (ns1/ns2.dns-parking.com) used by millions of active sites.
+            # Whitelisted in analyzer.py _PARKING_NS_WHITELIST.
             "domainnameshop.com",    # Often seen on parked domains
             "expired-domain",
         ],
@@ -1197,6 +1199,26 @@ def load_config() -> dict:
                         if 'malicious_script_medium' not in merged['weights']:
                             merged['weights']['malicious_script_medium'] = 25
                         merged['config_version'] = '7.2'
+                    
+                    # v7.3 migration: reduce false-positive-prone weights.
+                    # hacklink_keywords: 25→8 (single keyword below threshold is
+                    #   very low confidence; was causing false positives on film,
+                    #   media, and health sites with incidental keyword matches).
+                    # malicious_script_medium: 40→20 (MEDIUM confidence = 1-2
+                    #   moderate signals like unknown external script + async;
+                    #   common on legitimate sites with third-party tracking).
+                    # dns-parking.com removed from parking_ns (Hostinger standard NS).
+                    if saved_version < '7.3':
+                        v73_reductions = {
+                            # signal: (old_max, new_val) — reduce if saved ≤ old_max
+                            'hacklink_keywords': (25, 8),
+                            'malicious_script_medium': (40, 20),
+                        }
+                        for signal, (old_max, new_val) in v73_reductions.items():
+                            saved_val = merged['weights'].get(signal, old_max)
+                            if saved_val >= old_max:  # User hasn't manually lowered it
+                                merged['weights'][signal] = new_val
+                        merged['config_version'] = '7.3'
                 # Legacy: if old config has combos, ignore them (now in rules)
                 loaded.pop('combos', None)
                 loaded.pop('disabled_combos', None)
