@@ -52,7 +52,7 @@ DEFAULT_CONFIG = {
         "vuln_plugins_moderate_mitigation": -10,  # Vuln plugins but 2 legitimacy signals
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
         "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — HIGH confidence (5+ multi-signal score)
-        "malicious_script_medium": 20,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — moderate penalty; common on sites with third-party tracking
+        "malicious_script_medium": 35,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — moderate penalty; common on sites with third-party tracking
         "hidden_injection": 100,            # CSS-hidden content injection (hacklink fingerprint) — confirmed compromise
         "hidden_injection_css_only": 0,     # CSS hiding patterns (display:none etc.) without confirmed injection — too common on legitimate sites
         "cpanel_detected": 25,              # cPanel hosting (common hacklink target, not malicious alone)
