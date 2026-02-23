@@ -1459,12 +1459,23 @@ def check_ns_risk(ns_records: List[str], ns_risk_config: dict) -> Dict:
     
     ns_lower = [ns.lower().rstrip('.') for ns in ns_records]
     
-    # Check parking NS patterns
+    # Known false-positive NS patterns — these LOOK like parking services but are
+    # actually legitimate hosting provider nameservers.
+    # dns-parking.com = Hostinger's standard NS (ns1/ns2.dns-parking.com) used by
+    #                   millions of active sites.  The name is misleading.
+    _PARKING_NS_WHITELIST = [
+        "dns-parking.com",   # Hostinger default NS
+    ]
+    
+    def _is_whitelisted(ns_value: str) -> bool:
+        return any(wl in ns_value for wl in _PARKING_NS_WHITELIST)
+    
+    # Check parking NS patterns (skip whitelisted entries)
     parking_patterns = ns_risk_config.get("parking_ns", [])
     for pattern in parking_patterns:
         pattern_lower = pattern.lower()
         for ns in ns_lower:
-            if pattern_lower in ns:
+            if pattern_lower in ns and not _is_whitelisted(ns):
                 result["is_parking"] = True
                 result["parking_match"] = pattern
                 break
