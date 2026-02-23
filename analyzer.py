@@ -4,6 +4,17 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 7.5 (Feb 2026)
+- AUTOFAIL OVERRIDE: Deterministic DENY for confirmed threats regardless of score.
+  Three conditions force instant denial that no bonus can override:
+  1. PHISHING KIT CONFIRMED — composite detection (exfil script or 2+ kit indicators)
+  2. HACKLINK/SEO SPAM CONFIRMED — hacklink scanner positive detection
+  3. SWEDISH PHISH TREND CONFIRMED — Render ASN + self-hosted MX + phish factory fingerprint
+- New field: autofail_reason — audit trail for why autofail fired
+- Fixed: phishing_kit_detected composite was evaluated AFTER verdict, meaning bonuses
+  (e.g. mx_enterprise -10) could pull confirmed kits below deny threshold
+- Fixed: high_risk_phish_infra (Swedish phish) was evaluated AFTER verdict
+
 VERSION: 7.2 (Feb 2026)
 - MALICIOUS SCRIPT detection overhaul: replaced broad single-regex SocGholish pattern
   with multi-signal scoring architecture (10 weighted signals, CDN whitelist, Shannon
@@ -96,7 +107,7 @@ VERSION: 4.4 (Feb 2026)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "7.2"
+ANALYZER_VERSION = "7.5"
 
 import re
 import json
@@ -395,6 +406,7 @@ class DomainApprovalResult:
     high_risk_phish_infra: bool = False          # Render ASN + self-hosted MX + both phish rules fired
     high_risk_phish_infra_reason: str = ""       # Human-readable explanation
     pattern_match: str = ""                      # Known attack pattern identifier (e.g. "Swedish Invoice Phish", "Hacklink/SEO Spam")
+    autofail_reason: str = ""                     # Non-empty when a deterministic override forced DENY (e.g. confirmed phishing kit)
     all_issues_text: str = ""                     # Full semicolon-separated list of all issues found
     asn_display: str = ""                        # Formatted "AS{number} ({org})" for results display
     
@@ -4034,6 +4046,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.high_risk_phish_infra:
         parts.append(f"🚨 HIGH-RISK PHISHING INFRA → {res.high_risk_phish_infra_reason}")
     
+    # Autofail override (v7.5) — show immediately after phishing infra flag
+    if res.autofail_reason:
+        parts.append(f"🚫 AUTOFAIL → {res.autofail_reason}")
+    
     # Recommendation with score
     if res.recommendation == "DENY":
         parts.append(f"⛔ DENY (Score: {res.risk_score})")
@@ -4721,6 +4737,51 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         _patterns.append(f"🕷️ Hacklink/SEO Spam ({', '.join(_hl_signals)})")
     
     res.pattern_match = " + ".join(_patterns) if _patterns else ""
+    
+    # === AUTOFAIL OVERRIDE (v7.5) ===
+    # Deterministic deny for confirmed threats — score and bonuses cannot override.
+    # These conditions represent HIGH-CONFIDENCE threat detections where approving
+    # would be an operational error regardless of accumulated score or trust bonuses.
+    #
+    # Each condition:
+    #   1. Forces recommendation → DENY
+    #   2. Clamps risk_score to at least threshold + 1 (so score visually reflects denial)
+    #   3. Records the reason in autofail_reason for audit trail
+    #   4. Adds "autofail" signal to breakdown
+    _autofail_reasons = []
+    
+    # Confirmed phishing kit (exfil script, or 2+ kit indicators)
+    if res.phishing_kit_detected:
+        _autofail_reasons.append(
+            f"PHISHING KIT CONFIRMED ({res.phishing_kit_reason})"
+        )
+    
+    # Confirmed hacklink / SEO spam injection
+    if res.hacklink_detected:
+        _autofail_reasons.append(
+            f"HACKLINK/SEO SPAM CONFIRMED (score={res.hacklink_score}, "
+            f"keywords={res.hacklink_keywords or 'none'})"
+        )
+    
+    # Swedish invoice phishing infrastructure fingerprint
+    if res.high_risk_phish_infra:
+        _autofail_reasons.append(
+            f"SWEDISH PHISH TREND CONFIRMED ({res.high_risk_phish_infra_reason})"
+        )
+    
+    if _autofail_reasons:
+        res.autofail_reason = " | ".join(_autofail_reasons)
+        res.recommendation = "DENY"
+        # Ensure score visually reflects the denial
+        res.risk_score = max(res.risk_score, threshold + 1)
+        # Re-derive risk_level since score may have changed
+        bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
+        res.risk_level = next((l for lo, hi, l in bands if lo <= res.risk_score <= hi), "UNKNOWN")
+        # Record in breakdown for transparency
+        breakdown["autofail"] = 0  # No extra points — it's a policy override, not a score contribution
+        signals.add("autofail")
+        res.signals_triggered = ";".join(sorted(signals))
+        res.score_breakdown = json.dumps(breakdown)
     
     res.summary = generate_summary(res, signals, res.domain_age_days >= 0, weights=weights)
 
