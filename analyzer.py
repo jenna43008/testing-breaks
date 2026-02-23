@@ -2730,10 +2730,31 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     if re.search(rb'<iframe[^>]*(?:display:\s*none|width=["\']?[01])', content_lower):
         result["suspicious_iframe"] = True
     
-    for p in [b'domain for sale', b'buy this domain', b'parked']:
-        if p in content_lower:
+    # Parking page detection — use full phrases for long strings, word-boundary
+    # regex for short words to avoid false positives (e.g. "parked" inside CSS
+    # classes, JS vars, or unrelated page content like "double-parked").
+    _PARKING_PHRASES = [
+        b'domain for sale', b'buy this domain', b'domain parking',
+        b'this domain is parked', b'parked free', b'parked by',
+        b'parked domain', b'under construction', b'sedoparking',
+        b'hugedomains', b'afternic', b'dan.com/buy-domain',
+    ]
+    for phrase in _PARKING_PHRASES:
+        if phrase in content_lower:
             result["parking"] = True
             break
+    if not result["parking"]:
+        # Decode once for regex checks — catches "coming soon" and standalone
+        # "parked" while avoiding substring collisions
+        _content_str = content_lower.decode('utf-8', errors='ignore')
+        _PARKING_REGEX = [
+            r'(?<!-)\bparked\b(?!-)',  # standalone "parked" — excludes hyphenated (double-parked, header-parked-section)
+            r'\bcoming\s+soon\b',       # "coming soon" as whole phrase
+        ]
+        for pat in _PARKING_REGEX:
+            if re.search(pat, _content_str):
+                result["parking"] = True
+                break
     
     path = urlparse(final_url).path.lower()
     for p in PHISHING_PATHS:
