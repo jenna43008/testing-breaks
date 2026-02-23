@@ -120,10 +120,27 @@ CDN_WHITELIST = {
     "assets.squarespace.com", "static.wixstatic.com",
     "cdn.wix.com", "cdn.hubspot.com",
     "www.hostinger.com", "hpanel.hostinger.com",
+    "hostinger.com",  # Base domain — catches ALL *.hostinger.com subdomains
     
     # reCAPTCHA / security
     "www.google.com", "www.recaptcha.net",
     "challenges.cloudflare.com", "js.hcaptcha.com",
+    
+    # Cloudflare analytics / insights
+    "static.cloudflareinsights.com",
+    
+    # Microsoft Clarity / analytics
+    "www.clarity.ms", "cdn.clarity.ms",
+    
+    # Cookie consent / compliance
+    "cdn.cookielaw.org", "cdn.cookie-script.com",
+    "cookiescript.com",
+    
+    # Push notifications
+    "cdn.onesignal.com", "onesignal.com",
+    
+    # Pingdom RUM (used by Hostinger and many others)
+    "rum-static.pingdom.net",
     
     # Microsoft
     "ajax.aspnetcdn.com", "appsforoffice.microsoft.com",
@@ -512,12 +529,21 @@ class HacklinkKeywordScanner:
 
         content_lower = page_content.lower()
 
+        # hacklink_content_score tracks ONLY hacklink-specific content signals
+        # (keywords, hidden injection with suspicious links, meta spam, spam
+        # outbound links).  Infrastructure signals like malicious-script
+        # detection, CMS fingerprinting, empty-page checks, and cPanel markers
+        # feed into the general `score` but MUST NOT inflate the
+        # hacklink_detected threshold — they represent separate threat classes.
+        hacklink_content_score = 0
+
         # ----- 0. Domain Name Keyword Check -----
         # Check if the domain name itself contains hacklink keywords
         domain_name_keywords = self._check_domain_name(domain)
         if domain_name_keywords:
             keywords_found.extend(domain_name_keywords)
             score += 5
+            hacklink_content_score += 5
             findings.append({
                 "severity": "high",
                 "category": "domain_name_keywords",
@@ -552,6 +578,7 @@ class HacklinkKeywordScanner:
 
         if len(keywords_found) >= 5:
             score += 30
+            hacklink_content_score += 30
             findings.append({
                 "severity": "critical",
                 "category": "hacklink_keywords",
@@ -560,6 +587,7 @@ class HacklinkKeywordScanner:
             })
         elif len(keywords_found) >= 2:
             score += 20
+            hacklink_content_score += 20
             findings.append({
                 "severity": "high",
                 "category": "hacklink_keywords",
@@ -567,6 +595,7 @@ class HacklinkKeywordScanner:
             })
         elif len(keywords_found) == 1:
             score += 8
+            hacklink_content_score += 8
             findings.append({
                 "severity": "medium",
                 "category": "hacklink_keywords",
@@ -602,6 +631,7 @@ class HacklinkKeywordScanner:
                     injection_patterns.append(f"hidden_content_high: {pattern[:50]}")
                     if score < 25:
                         score += 10
+                        hacklink_content_score += 10
                     ext_sample = ", ".join(sorted(sus_doms)[:5])
                     findings.append({
                         "severity": "critical",
@@ -859,12 +889,14 @@ class HacklinkKeywordScanner:
         meta_anomalies = self._check_meta_anomalies(page_content)
         if meta_anomalies:
             score = min(score + 5, 30)
+            hacklink_content_score += 5
             findings.extend(meta_anomalies)
 
         # ----- 7. Excessive Outbound Links to Gambling/Pharma -----
         spam_links = self._count_spam_outbound_links(page_content)
         if spam_links > 10:
             score = min(score + 10, 30)
+            hacklink_content_score += 10
             findings.append({
                 "severity": "critical",
                 "category": "spam_links",
@@ -872,6 +904,7 @@ class HacklinkKeywordScanner:
             })
         elif spam_links > 3:
             score = min(score + 5, 30)
+            hacklink_content_score += 5
             findings.append({
                 "severity": "high",
                 "category": "spam_links",
@@ -944,7 +977,11 @@ class HacklinkKeywordScanner:
                 })
                 break
 
-        hacklink_detected = score >= 15 or len(keywords_found) >= 2
+        # hacklink_detected uses ONLY content-specific signals (keywords, hidden
+        # injection with suspicious links, meta spam, spam outbound links).
+        # Infrastructure signals (malicious scripts, CMS fingerprints, empty
+        # pages) are separate threat classes and must NOT inflate this flag.
+        hacklink_detected = hacklink_content_score >= 15 or len(keywords_found) >= 2
 
         # Determine hidden injection confidence
         if hidden_high_found:
