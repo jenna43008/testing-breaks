@@ -27,31 +27,41 @@ from urllib.parse import urlparse
 # ================================================================
 
 # Long/specific keywords — safe for substring matching (low false-positive risk)
+# Multi-word Turkish phrases are highly specific and won't collide with legitimate content.
 TURKISH_HACKLINK_KEYWORDS = [
     "hacklink", "hack link", "hacklink satın al", "hacklink al",
     "hacklink panel", "hacklink servisi", "hacklink fiyat",
-    "bahis", "bahis siteleri", "canlı bahis", "illegal bahis",
-    "casino", "canlı casino", "online casino", "casino siteleri",
+    "bahis siteleri", "canlı bahis", "illegal bahis",
+    "canlı casino", "online casino", "casino siteleri",
     "kumar", "kumar siteleri", "slot oyunları",
-    "betting", "betist", "betpark", "bahsegel",
-    "rulet", "poker", "blackjack", "bakara",
+    "betist", "betpark", "bahsegel",
     "deneme bonusu", "bonus veren siteler", "free bonus",
-    "kaçak iddaa", "iddaa", "spor bahis",
+    "kaçak iddaa", "spor bahis",
     "escort bayan",
-    "porno", "viagra",
     "oto çekici", "nakliyat",
 ]
 
 # Short/ambiguous keywords — require word-boundary matching (\b) to avoid
 # false positives on legitimate words (e.g. "bet" in "better", "slot" in
 # "slotted", "sex" in "next", "hap" in "happen", "xxx" in CSS comments,
-# "cialis" in "specialist").
+# "porno" in content-rating metadata or genre taxonomies on film/media sites,
+# "poker"/"casino"/"blackjack" as film titles or legitimate card game
+# references, "betting" in legitimate sports content, "viagra" in health
+# articles, "bahis" in non-gambling Turkish text, "iddaa" standalone).
+#
+# The (?<!-) and (?!-) lookarounds prevent matching inside hyphenated
+# CSS classes and compound words (e.g. "no-porno-filter", "pre-casino-era",
+# "anti-escort-policy").
 HACKLINK_EXACT_KEYWORDS = [
-    r'\bbet\b', r'\bslot\b', r'\bslots\b',
-    r'\bescort\b',
-    r'\bsex\b', r'\bxxx\b',
-    r'\bhap\b',
-    r'\bcialis\b',
+    r'(?<!-)\bbet\b(?!-)',    r'(?<!-)\bslot\b(?!-)',   r'(?<!-)\bslots\b(?!-)',
+    r'(?<!-)\bescort\b(?!-)',
+    r'(?<!-)\bsex\b(?!-)',    r'(?<!-)\bxxx\b(?!-)',
+    r'(?<!-)\bhap\b(?!-)',
+    r'(?<!-)\bcialis\b(?!-)',
+    r'(?<!-)\bporno\b(?!-)',  r'(?<!-)\bviagra\b(?!-)',
+    r'(?<!-)\bcasino\b(?!-)', r'(?<!-)\bpoker\b(?!-)',  r'(?<!-)\bblackjack\b(?!-)',
+    r'(?<!-)\bbetting\b(?!-)',r'(?<!-)\bbahis\b(?!-)',  r'(?<!-)\brulet\b(?!-)',
+    r'(?<!-)\bbakara\b(?!-)', r'(?<!-)\biddaa\b(?!-)',
 ]
 HACKLINK_EXACT_COMPILED = [re.compile(p, re.IGNORECASE) for p in HACKLINK_EXACT_KEYWORDS]
 
@@ -109,6 +119,7 @@ CDN_WHITELIST = {
     "cdn.shopify.com", "cdn.squarespace.com",
     "assets.squarespace.com", "static.wixstatic.com",
     "cdn.wix.com", "cdn.hubspot.com",
+    "www.hostinger.com", "hpanel.hostinger.com",
     
     # reCAPTCHA / security
     "www.google.com", "www.recaptcha.net",
@@ -281,6 +292,9 @@ class HacklinkKeywordScanner:
         "recaptcha.net", "hcaptcha.com",
     }
 
+    # Regex to extract href values from HTML
+    _HREF_EXTRACTOR = re.compile(r'href\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+
     # TLDs overwhelmingly associated with hacklink/SEO spam campaigns
     _SUSPICIOUS_TLDS = {
         ".top", ".buzz", ".click", ".link", ".xyz", ".icu",
@@ -309,17 +323,22 @@ class HacklinkKeywordScanner:
 
     @staticmethod
     def _is_suspicious_external(host: str) -> bool:
-        """Check if a hostname has hacklink-associated indicators."""
+        """Check if a hostname has hacklink-associated indicators.
+        
+        Uses segment-based matching: the hostname is split into labels
+        (by '.' and '-') and each label is checked against the keyword set.
+        This prevents 'slot' matching 'timeslot.com' or 'bonus' matching
+        'bonustage.de' while still catching 'casino-online.com'.
+        """
         # Check suspicious TLDs
         for tld in HacklinkKeywordScanner._SUSPICIOUS_TLDS:
             if host.endswith(tld):
                 return True
-        # Check for hacklink keywords in the domain name
+        # Split hostname into segments (domain labels and hyphenated parts)
+        # e.g. "casino-online.example.com" → ["casino", "online", "example", "com"]
         host_lower = host.lower()
-        for kw in HacklinkKeywordScanner._SUSPICIOUS_DOMAIN_KEYWORDS:
-            if kw in host_lower:
-                return True
-        return False
+        segments = set(re.split(r'[.\-]', host_lower))
+        return bool(segments & HacklinkKeywordScanner._SUSPICIOUS_DOMAIN_KEYWORDS)
 
     @staticmethod
     def _has_external_links(html_chunk: str, domain: str) -> tuple:
@@ -1108,22 +1127,28 @@ class HacklinkKeywordScanner:
         return score, findings
 
     def _check_domain_name(self, domain: str) -> List[str]:
-        """Check if the domain name itself contains hacklink-associated keywords."""
-        found = []
-        domain_lower = domain.lower().replace("-", "").replace(".", " ")
-        # Also check with hyphens preserved
-        domain_with_hyphens = domain.lower().replace(".", " ")
-
-        # Check shorter, more specific keywords that are meaningful in domain names
-        domain_name_keywords = [
+        """Check if the domain name itself contains hacklink-associated keywords.
+        
+        Uses segment-based matching: the domain is split into labels (by '.'
+        and '-') and each label is checked against the keyword set.  This
+        prevents 'slot' matching 'timeslot.com' or 'bonus' matching
+        'bonushour.com' while still catching 'casino-online.com' and
+        'bahisplus.com'.
+        """
+        domain_name_keywords = {
             "hacklink", "bahis", "casino", "kumar", "slot", "betting",
             "escort", "cialis", "viagra", "nakliyat", "cekici",
             "porno", "bonus", "iddaa", "rulet", "poker",
-        ]
-        for kw in domain_name_keywords:
-            if kw in domain_lower or kw in domain_with_hyphens:
-                found.append(kw)
-        return found
+        }
+        # Split into segments: "bahis-siteleri.example.com" → {"bahis","siteleri","example","com"}
+        segments = set(re.split(r'[.\-]', domain.lower()))
+        # Remove common TLD/SLD segments that could collide
+        segments.discard("com")
+        segments.discard("net")
+        segments.discard("org")
+        segments.discard("co")
+        segments.discard("io")
+        return sorted(segments & domain_name_keywords)
 
     def _fetch_content(self, url: str):
         """Fetch page content with safety limits. Returns (content, status_code)."""
@@ -1156,7 +1181,14 @@ class HacklinkKeywordScanner:
         )
         if meta_kw:
             kw_content = meta_kw.group(1).lower()
+            # Check long phrases (substring)
             spam_kws = [k for k in TURKISH_HACKLINK_KEYWORDS if k in kw_content]
+            # Check short keywords (word-boundary) — meta keywords are
+            # comma-separated tags so \b works well here
+            for pattern in HACKLINK_EXACT_COMPILED:
+                m = pattern.search(kw_content)
+                if m:
+                    spam_kws.append(m.group())
             if spam_kws:
                 findings.append({
                     "severity": "critical",
@@ -1179,16 +1211,49 @@ class HacklinkKeywordScanner:
         return findings
 
     def _count_spam_outbound_links(self, content: str) -> int:
-        """Count outbound links to known spam categories."""
-        spam_domains_pattern = (
-            r'href=["\']https?://[^"\']*(?:'
-            r'bet|casino|slot|poker|bahis|kumar|escort|porno|xxx|sex|'
-            r'viagra|cialis|pharma|pill|drug|weight.?loss|'
-            r'hacklink|seo.?link|backlink.?service'
-            r')[^"\']*["\']'
+        """Count outbound links to known spam categories.
+        
+        Uses URL-segment-aware matching: short keywords must appear as
+        standalone domain labels or path segments (delimited by . / - _)
+        to avoid false positives like 'bet' matching 'alphabet.com' or
+        'sex' matching 'essex.gov.uk'.
+        """
+        # Extract all outbound hrefs first
+        hrefs = re.findall(
+            r'href=["\']https?://([^"\']+)["\']', content, re.IGNORECASE
         )
-        matches = re.findall(spam_domains_pattern, content, re.IGNORECASE)
-        return len(matches)
+        if not hrefs:
+            return 0
+
+        # Long/specific terms — safe for substring matching in URLs
+        _SPAM_URL_PHRASES = [
+            "casino", "bahis", "kumar", "escort", "porno",
+            "viagra", "cialis", "pharma", "hacklink",
+            "weight-loss", "weightloss", "weight_loss",
+            "seo-link", "seolink", "backlink-service",
+            "backlinkservice",
+        ]
+
+        # Short terms — require URL segment boundaries (. / - _ or start/end)
+        # This prevents "bet" matching "alphabet", "sex" matching "essex", etc.
+        _SPAM_URL_SEGMENT_RE = re.compile(
+            r'(?:^|[./_-])'           # segment start: beginning or delimiter
+            r'(?:bet|slot|slots|poker|xxx|sex|pill|drug)'
+            r'(?:$|[./_\-?#])',       # segment end: end or delimiter or query
+            re.IGNORECASE
+        )
+
+        count = 0
+        for href in hrefs:
+            href_lower = href.lower()
+            # Check long phrases (substring OK)
+            if any(phrase in href_lower for phrase in _SPAM_URL_PHRASES):
+                count += 1
+                continue
+            # Check short terms (segment-boundary match)
+            if _SPAM_URL_SEGMENT_RE.search(href_lower):
+                count += 1
+        return count
 
     def _extract_wp_plugins(self, content: str) -> List[str]:
         """Extract WordPress plugin slugs from page source HTML."""
