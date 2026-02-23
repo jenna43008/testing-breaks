@@ -76,7 +76,7 @@ DEFAULT_CONFIG = {
         "brand_spoofing_keyword": 20,      # Brand + phishing keyword (easyjetconnect, amazonverify)
         
         # === TLD VARIANT SPOOFING DETECTION ===
-        "tld_variant_spoofing": 45,        # Signup domain is TLD variant of established business
+        "tld_variant_spoofing": 35,        # Signup domain is TLD variant of established business
         
         # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
         "hijack_path_pattern": 25,         # /tunnel/, /bid/, /secure/ paths
