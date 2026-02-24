@@ -10,6 +10,15 @@ keywords designed to boost attacker-controlled sites in search rankings.
 IMPORTANT: HTTP errors (403, timeout, SSL failures) are treated as risk signals,
 not benign outcomes. A legitimate business domain that blocks access, times out,
 or has certificate issues is itself suspicious for a sending domain.
+
+VERSION: 7.3 (Feb 2026)
+- GAMBLING SITE CONTEXT: Added _is_gambling_site() detection (domain name + title/H1/meta).
+  When a site IS a legitimate gambling/gaming business, keyword scoring is suppressed for
+  visible content — only keywords found inside CSS-hidden blocks will score.  This eliminates
+  false positives on sites like locobingo.es where "bingo", "slot", "casino" are the site's
+  own product vocabulary, not injected hacklink content.
+- New return field: is_gambling_site (bool) for transparency in results.
+- Hidden injection detection, malicious script detection, and all other checks unchanged.
 """
 
 import re
@@ -520,6 +529,7 @@ class HacklinkKeywordScanner:
                 "malicious_script_signals": [],
                 "malicious_script_score": 0,
                 "hidden_injection_confidence": "",
+                "is_gambling_site": False,
                 "google_dorks": self._generate_google_dorks(domain, domain_name_keywords, [], False),
                 "findings": findings,
                 "fetch_error": fetch_error,
@@ -552,6 +562,21 @@ class HacklinkKeywordScanner:
                           f"part of a hacklink/SEO spam network."
             })
 
+        # ----- 0b. Gambling/Gaming Site Context Check -----
+        # If the site IS a gambling business, its own product keywords (casino,
+        # slot, bingo, bet) in visible content are expected — not evidence of
+        # compromise.  We only score keywords found in hidden blocks.
+        is_gambling_site = self._is_gambling_site(domain, page_content)
+        if is_gambling_site:
+            findings.append({
+                "severity": "info",
+                "category": "gambling_site_context",
+                "detail": "Site identified as a legitimate gambling/gaming business "
+                          "(domain name + page title/headings confirm gambling as "
+                          "primary business). Gambling keywords in visible content "
+                          "are suppressed — only hidden-block keywords will score."
+            })
+
         # ----- 1. Turkish Hacklink Keyword Scan -----
         # Build a set of keywords that appear in the domain name itself.
         # If a business is literally named "acarlar nakliyat" (a Turkish moving
@@ -560,21 +585,49 @@ class HacklinkKeywordScanner:
         # We suppress these from page-content matching to avoid false positives.
         domain_name_kw_set = set(k.lower() for k in domain_name_keywords)
 
-        # Substring match for long/specific keywords (low false-positive risk)
-        for keyword in TURKISH_HACKLINK_KEYWORDS:
-            kw_lower = keyword.lower()
-            if kw_lower in domain_name_kw_set:
-                continue  # Skip — this is the business's own terminology
-            if kw_lower in content_lower:
-                keywords_found.append(keyword)
-        # Word-boundary match for short/ambiguous keywords (high false-positive risk)
-        for pattern in HACKLINK_EXACT_COMPILED:
-            m = pattern.search(page_content)
-            if m:
-                matched = m.group().lower()
-                if matched in domain_name_kw_set:
-                    continue  # Skip — domain's own terminology
-                keywords_found.append(matched)
+        if is_gambling_site:
+            # --- GAMBLING SITE MODE ---
+            # Extract only keywords found inside CSS-hidden blocks.
+            # Visible-content gambling terms are the site's own product vocabulary.
+            hidden_blocks = []
+            for pattern in HIDDEN_CONTENT_PATTERNS_HIGH + HIDDEN_CONTENT_PATTERNS_LOW:
+                for m in re.finditer(pattern, page_content, re.IGNORECASE | re.DOTALL):
+                    hidden_blocks.append(page_content[m.start():m.start() + 2000].lower())
+            hidden_text = " ".join(hidden_blocks)
+
+            if hidden_text:
+                for keyword in TURKISH_HACKLINK_KEYWORDS:
+                    kw_lower = keyword.lower()
+                    if kw_lower in domain_name_kw_set:
+                        continue
+                    if kw_lower in hidden_text:
+                        keywords_found.append(keyword)
+                for pattern in HACKLINK_EXACT_COMPILED:
+                    m = pattern.search(hidden_text)
+                    if m:
+                        matched = m.group().lower()
+                        if matched in domain_name_kw_set:
+                            continue
+                        keywords_found.append(matched)
+            # If no hidden blocks or no keywords in hidden blocks → keywords_found stays empty
+        else:
+            # --- NORMAL MODE ---
+            # Scan full page content (original behavior).
+            # Substring match for long/specific keywords (low false-positive risk)
+            for keyword in TURKISH_HACKLINK_KEYWORDS:
+                kw_lower = keyword.lower()
+                if kw_lower in domain_name_kw_set:
+                    continue  # Skip — this is the business's own terminology
+                if kw_lower in content_lower:
+                    keywords_found.append(keyword)
+            # Word-boundary match for short/ambiguous keywords (high false-positive risk)
+            for pattern in HACKLINK_EXACT_COMPILED:
+                m = pattern.search(page_content)
+                if m:
+                    matched = m.group().lower()
+                    if matched in domain_name_kw_set:
+                        continue  # Skip — domain's own terminology
+                    keywords_found.append(matched)
 
         if len(keywords_found) >= 5:
             score += 30
@@ -1012,6 +1065,7 @@ class HacklinkKeywordScanner:
             "malicious_script_signals": [s[0] for s in soc_signals],
             "malicious_script_score": soc_score_val,
             "hidden_injection_confidence": hidden_injection_confidence,
+            "is_gambling_site": is_gambling_site,
             "google_dorks": google_dorks,
             "findings": findings,
             "fetch_status": fetch_status,
@@ -1162,6 +1216,60 @@ class HacklinkKeywordScanner:
             })
 
         return score, findings
+
+    @staticmethod
+    def _is_gambling_site(domain: str, page_content: str) -> bool:
+        """Determine if the site is a LEGITIMATE gambling/gaming/casino business.
+
+        A gambling site's own visible content will naturally contain keywords
+        like "casino", "slot", "bingo", "bet" — these are their product, not
+        evidence of compromise.  When this returns True the keyword scanner
+        suppresses scoring for gambling terms found in *visible* content and
+        only scores keywords found inside hidden (CSS-cloaked) blocks.
+
+        Detection signals (need 2+ to confirm):
+          - Domain name contains gambling terms (locobingo, casinorange, etc.)
+          - <title> contains gambling terms
+          - <h1> contains gambling terms
+          - <meta description> contains gambling terms
+        """
+        GAMBLING_SIGNALS = {
+            "casino", "bingo", "poker", "slot", "slots", "betting",
+            "bet", "bahis", "blackjack", "roulette", "rulet", "lottery",
+            "lotto", "jackpot", "gamble", "gambling", "wager", "sportsbook",
+        }
+        hits = 0
+
+        # 1. Domain name — substring match within each segment
+        #    "locobingo" contains "bingo", "casinorange" contains "casino", etc.
+        segments = set(re.split(r'[.\-]', domain.lower()))
+        segments -= {"com", "net", "org", "co", "io", "es", "uk", "de", "fr"}
+        for seg in segments:
+            if any(g in seg for g in GAMBLING_SIGNALS):
+                hits += 1
+                break
+
+        content_lower = page_content.lower() if page_content else ""
+
+        # 2. <title>
+        title_m = re.search(r'<title[^>]*>([^<]{0,300})</title>', content_lower)
+        if title_m and any(g in title_m.group(1) for g in GAMBLING_SIGNALS):
+            hits += 1
+
+        # 3. <h1>
+        h1_m = re.search(r'<h1[^>]*>(.{0,300}?)</h1>', content_lower, re.DOTALL)
+        if h1_m and any(g in h1_m.group(1) for g in GAMBLING_SIGNALS):
+            hits += 1
+
+        # 4. <meta description>
+        meta_m = re.search(
+            r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']{0,500})["\']',
+            content_lower,
+        )
+        if meta_m and any(g in meta_m.group(1) for g in GAMBLING_SIGNALS):
+            hits += 1
+
+        return hits >= 2
 
     def _check_domain_name(self, domain: str) -> List[str]:
         """Check if the domain name itself contains hacklink-associated keywords.
