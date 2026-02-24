@@ -458,6 +458,14 @@ class DomainApprovalResult:
     whois_recently_updated: bool = False         # WHOIS updated in last 30 days
     whois_recently_updated_days: int = -1        # Days since last WHOIS update
     
+    # === MX HIJACK FINGERPRINT (v7.3.1) ===
+    # Detects enterprise provider ghosts in DNS: SPF/DKIM still references
+    # Google/Microsoft/etc but MX has been changed to different infrastructure.
+    mx_provider_mismatch: bool = False           # SPF/DKIM ghosts enterprise but MX doesn't match
+    mx_ghost_provider: str = ""                  # Which enterprise provider the ghost references
+    mx_ghost_evidence: str = ""                  # Semicolon-separated evidence strings
+    mx_hijack_confidence: str = ""               # HIGH, MEDIUM, LOW
+    
     # === EMPTY PAGE DETECTION ===
     is_empty_page: bool = False                  # Page returns empty or near-empty content (<50 chars)
     
@@ -1139,6 +1147,139 @@ def classify_mx_provider(mx_records: List[Tuple[int, str]], domain: str, config:
             return "selfhosted"
     
     return "unknown"
+
+
+def detect_mx_provider_mismatch(
+    spf_includes: List[str],
+    dkim_selectors: List[str],
+    mx_provider_type: str,
+    mx_primary: str,
+    domain_age_days: int,
+    whois_recently_updated: bool,
+) -> Dict:
+    """Detect enterprise provider ghosts in DNS — MX hijack fingerprint.
+    
+    When a domain's SPF record still references an enterprise email provider
+    (Google Workspace, Microsoft 365, etc.) but the MX records have been
+    changed to self-hosted, budget, or unknown infrastructure, it's a strong
+    indicator of domain hijack. Attackers change MX to route mail through
+    their own infra but rarely clean up SPF/DKIM.
+    
+    Returns dict with: mismatch (bool), ghost_provider, evidence (list), confidence
+    """
+    result = {
+        "mismatch": False,
+        "ghost_provider": "",
+        "evidence": [],
+        "confidence": "",
+    }
+    
+    # Only flag if current MX is NOT enterprise — if they moved from Google
+    # to Microsoft, that's a migration, not a hijack.
+    if mx_provider_type == "enterprise":
+        return result
+    
+    # Only meaningful on established domains — new domains with messy DNS
+    # are just misconfigured, not hijacked.
+    if domain_age_days >= 0 and domain_age_days < 180:
+        return result
+    
+    # === SPF → MX provider mapping ===
+    # Maps: SPF include substring → (provider_name, MX substring that should match)
+    _SPF_TO_PROVIDER = [
+        # Google Workspace
+        ('_spf.google.com',             'Google Workspace', 'google.com'),
+        ('google.com',                   'Google Workspace', 'google.com'),
+        ('googlemail.com',               'Google Workspace', 'googlemail.com'),
+        # Microsoft 365
+        ('spf.protection.outlook.com',   'Microsoft 365',   'mail.protection.outlook.com'),
+        ('outlook.com',                  'Microsoft 365',   'outlook.com'),
+        # Proofpoint
+        ('pphosted.com',                 'Proofpoint',      'pphosted.com'),
+        # Mimecast
+        ('mimecast.com',                 'Mimecast',        'mimecast.com'),
+    ]
+    
+    # === DKIM selector → provider mapping ===
+    # Only high-confidence selectors that are near-exclusive to one provider.
+    _DKIM_TO_PROVIDER = {
+        'google':    'Google Workspace',
+        'selector1': 'Microsoft 365',
+        'selector2': 'Microsoft 365',
+    }
+    
+    mx_lower = mx_primary.lower() if mx_primary else ""
+    spf_lower = [inc.lower() for inc in spf_includes]
+    
+    ghost_providers = {}  # provider_name → list of evidence strings
+    
+    # Check SPF includes for enterprise ghosts
+    for spf_pattern, provider_name, mx_pattern in _SPF_TO_PROVIDER:
+        # Does SPF reference this provider?
+        spf_match = any(spf_pattern in inc for inc in spf_lower)
+        if not spf_match:
+            continue
+        # Does current MX match this provider?
+        mx_match = mx_pattern in mx_lower
+        if mx_match:
+            continue  # MX still matches — no ghost
+        # Ghost found: SPF references provider but MX doesn't match
+        if provider_name not in ghost_providers:
+            ghost_providers[provider_name] = []
+        ghost_providers[provider_name].append(f"SPF includes {spf_pattern}")
+    
+    # Check DKIM selectors for enterprise ghosts
+    for sel in dkim_selectors:
+        sel_lower = sel.lower()
+        if sel_lower in _DKIM_TO_PROVIDER:
+            provider_name = _DKIM_TO_PROVIDER[sel_lower]
+            # Check if MX matches this provider
+            mx_patterns_for_provider = [
+                p[2] for p in _SPF_TO_PROVIDER if p[1] == provider_name
+            ]
+            mx_match = any(pat in mx_lower for pat in mx_patterns_for_provider)
+            if not mx_match:
+                if provider_name not in ghost_providers:
+                    ghost_providers[provider_name] = []
+                ghost_providers[provider_name].append(f"DKIM selector '{sel}' present")
+    
+    if not ghost_providers:
+        return result
+    
+    # Pick the provider with the most evidence
+    best_provider = max(ghost_providers, key=lambda p: len(ghost_providers[p]))
+    evidence = ghost_providers[best_provider]
+    
+    # Add MX context to evidence
+    if mx_provider_type == "selfhosted":
+        evidence.append(f"MX now self-hosted ({mx_primary})")
+    elif mx_provider_type == "disposable":
+        evidence.append(f"MX now disposable ({mx_primary})")
+    elif mx_provider_type == "budget_shared":
+        evidence.append(f"MX now budget shared ({mx_primary})")
+    else:
+        evidence.append(f"MX now {mx_provider_type} ({mx_primary})")
+    
+    # Determine confidence
+    has_spf_ghost = any("SPF" in e for e in evidence)
+    has_dkim_ghost = any("DKIM" in e for e in evidence)
+    
+    if has_spf_ghost and has_dkim_ghost and whois_recently_updated:
+        confidence = "HIGH"
+    elif has_spf_ghost and (whois_recently_updated or mx_provider_type in ("selfhosted", "disposable")):
+        confidence = "HIGH"
+    elif has_spf_ghost:
+        confidence = "MEDIUM"
+    else:
+        # DKIM ghost alone — could be residual from legitimate migration
+        confidence = "LOW"
+    
+    result["mismatch"] = True
+    result["ghost_provider"] = best_provider
+    result["evidence"] = evidence
+    result["confidence"] = confidence
+    
+    return result
 
 
 def get_bimi(domain: str) -> Tuple[bool, str]:
@@ -3602,6 +3743,16 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         days = res.whois_recently_updated_days
         all_issues.append(f"WHOIS RECENTLY UPDATED ({days}d ago) → Possible recent transfer, ownership change, or DNS hijack")
     
+    # === MX HIJACK FINGERPRINT (v7.3.1) ===
+    if res.mx_provider_mismatch:
+        evidence_str = res.mx_ghost_evidence.replace(";", ", ")
+        if res.mx_hijack_confidence == "HIGH":
+            all_issues.append(f"🚨 MX HIJACK FINGERPRINT ({res.mx_ghost_provider} ghost, HIGH confidence) → {evidence_str}")
+        elif res.mx_hijack_confidence == "MEDIUM":
+            all_issues.append(f"⚠️ MX PROVIDER MISMATCH ({res.mx_ghost_provider} ghost, MEDIUM) → {evidence_str}")
+        else:
+            all_issues.append(f"MX PROVIDER MISMATCH ({res.mx_ghost_provider} residual, LOW) → {evidence_str}")
+    
     # === EMPTY PAGE ===
     if res.is_empty_page:
         all_issues.append("EMPTY PAGE → Reachable domain returns empty/near-empty content; possibly parked, abandoned, or stripped post-compromise")
@@ -3905,6 +4056,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('DOCUMENT SHARING LURE', weights.get('doc_sharing_lure', 15)),
             ('PHISHING KIT JS', weights.get('phishing_js_behavior', 18)),
             ('TRANSFER LOCK', weights.get('transfer_lock_recent', 15)),
+            ('MX HIJACK FINGERPRINT', weights.get('mx_hijack_high', 30)),
+            ('MX PROVIDER MISMATCH', weights.get('mx_hijack_medium', 15)),
             ('CT RECENT ISSUANCE ON OLD', weights.get('ct_recent_issuance', 8)),
             ('NO CT HISTORY', weights.get('ct_no_history', 12)),
             ('SENSITIVE FORM', weights.get('sensitive_fields', 12)),
@@ -4064,6 +4217,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('CPANEL HOSTING', ['cpanel_detected']),
         ('BLOCKED ASN', ['blocked_asn']),
         ('TRANSFER LOCK', ['transfer_lock_recent', 'transfer_lock_with_risk']),
+        ('MX HIJACK FINGERPRINT', ['mx_hijack_high']),
+        ('MX PROVIDER MISMATCH', ['mx_hijack_high', 'mx_hijack_medium', 'mx_hijack_low']),
         ('WHOIS RECENTLY UPDATED', ['whois_recently_updated', 'whois_updated_with_risk']),
         ('NO PTR', ['no_ptr']),
         ('PTR MISMATCH', ['ptr_mismatch']),
@@ -4585,7 +4740,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         "tld_variant_spoof", "domain_brand_impersonation",
         "opaque_entity", "sensitive_fields", "phishing_js", "doc_lure",
         "vt_malicious", "vt_malicious_medium", "vt_suspicious",
-        "blocked_asn",
+        "blocked_asn", "mx_hijack_high", "mx_hijack_medium",
     }
     if (res.domain_transfer_lock_recent or res.whois_recently_updated):
         has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
@@ -4594,6 +4749,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 add("transfer_lock_with_risk", weights.get('transfer_lock_recent', 15))
             else:
                 add("whois_updated_with_risk", weights.get('whois_recently_updated', 10))
+    
+    # === MX HIJACK FINGERPRINT (v7.3.1) ===
+    if res.mx_provider_mismatch:
+        if res.mx_hijack_confidence == "HIGH":
+            add("mx_hijack_high", weights.get('mx_hijack_high', 30))
+        elif res.mx_hijack_confidence == "MEDIUM":
+            add("mx_hijack_medium", weights.get('mx_hijack_medium', 15))
+        else:
+            add("mx_hijack_low", weights.get('mx_hijack_low', 0))  # informational only
     
     # === EMPTY PAGE ===
     if res.is_empty_page:
@@ -5001,6 +5165,22 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.mx_is_mail_prefix = any(
             h.lower() == f"mail.{domain_lower}" for _, h in mx_records
         )
+    
+    # v7.3.1: MX hijack fingerprint — detect enterprise provider ghosts in DNS
+    spf_inc_list = spf_parsed.get("includes", []) if spf_exists else []
+    mx_hijack = detect_mx_provider_mismatch(
+        spf_includes=spf_inc_list,
+        dkim_selectors=dkim_selectors,
+        mx_provider_type=res.mx_provider_type,
+        mx_primary=res.mx_primary,
+        domain_age_days=res.domain_age_days,
+        whois_recently_updated=res.whois_recently_updated,
+    )
+    if mx_hijack["mismatch"]:
+        res.mx_provider_mismatch = True
+        res.mx_ghost_provider = mx_hijack["ghost_provider"]
+        res.mx_ghost_evidence = ";".join(mx_hijack["evidence"])
+        res.mx_hijack_confidence = mx_hijack["confidence"]
     
     # BIMI
     res.bimi_exists, res.bimi_record = get_bimi(domain)
