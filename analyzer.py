@@ -2744,28 +2744,57 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     # Parking page detection — use full phrases for long strings, word-boundary
     # regex for short words to avoid false positives (e.g. "parked" inside CSS
     # classes, JS vars, or unrelated page content like "double-parked").
-    _PARKING_PHRASES = [
+    #
+    # Split into DEFINITIVE signals (always fire) and AMBIGUOUS signals (only
+    # fire on thin pages).  A full landing page that says "Coming Soon" for one
+    # feature or "under construction" for a section is a product label, not a
+    # parking indicator.  Definitive signals like "buy this domain" or
+    # "sedoparking" are never legitimate feature labels.
+    _PARKING_DEFINITIVE = [
         b'domain for sale', b'buy this domain', b'domain parking',
         b'this domain is parked', b'parked free', b'parked by',
-        b'parked domain', b'under construction', b'sedoparking',
+        b'parked domain', b'sedoparking',
         b'hugedomains', b'afternic', b'dan.com/buy-domain',
     ]
-    for phrase in _PARKING_PHRASES:
+    _PARKING_AMBIGUOUS = [
+        b'under construction',
+    ]
+    for phrase in _PARKING_DEFINITIVE:
         if phrase in content_lower:
             result["parking"] = True
             break
     if not result["parking"]:
+        for phrase in _PARKING_AMBIGUOUS:
+            if phrase in content_lower:
+                # Only fire on thin pages — strip tags and measure visible text
+                _visible = re.sub(rb'<[^>]+>', b' ', content)
+                _visible = re.sub(rb'\s+', b' ', _visible).strip()
+                if len(_visible) < 1000:
+                    result["parking"] = True
+                break
+    if not result["parking"]:
         # Decode once for regex checks — catches "coming soon" and standalone
         # "parked" while avoiding substring collisions
         _content_str = content_lower.decode('utf-8', errors='ignore')
-        _PARKING_REGEX = [
+        _PARKING_REGEX_DEFINITIVE = [
             r'(?<!-)\bparked\b(?!-)',  # standalone "parked" — excludes hyphenated (double-parked, header-parked-section)
+        ]
+        _PARKING_REGEX_AMBIGUOUS = [
             r'\bcoming\s+soon\b',       # "coming soon" as whole phrase
         ]
-        for pat in _PARKING_REGEX:
+        for pat in _PARKING_REGEX_DEFINITIVE:
             if re.search(pat, _content_str):
                 result["parking"] = True
                 break
+        if not result["parking"]:
+            for pat in _PARKING_REGEX_AMBIGUOUS:
+                if re.search(pat, _content_str):
+                    # Only fire on thin pages
+                    _visible = re.sub(rb'<[^>]+>', b' ', content)
+                    _visible = re.sub(rb'\s+', b' ', _visible).strip()
+                    if len(_visible) < 1000:
+                        result["parking"] = True
+                    break
     
     path = urlparse(final_url).path.lower()
     for p in PHISHING_PATHS:
