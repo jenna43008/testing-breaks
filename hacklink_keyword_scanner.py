@@ -17,8 +17,12 @@ VERSION: 7.3 (Feb 2026)
   visible content — only keywords found inside CSS-hidden blocks will score.  This eliminates
   false positives on sites like locobingo.es where "bingo", "slot", "casino" are the site's
   own product vocabulary, not injected hacklink content.
+- PLACEHOLDER DETECTION FIX: Ambiguous signals ("coming soon", "under construction") now
+  only fire on thin pages (< 1000 chars visible text).  A full landing page that says
+  "Coming Soon" for one feature is a product label, not a parking page.  Definitive parking
+  signals ("parked domain", "buy this domain", "apache2 default page", etc.) still fire
+  regardless of page size.
 - New return field: is_gambling_site (bool) for transparency in results.
-- Hidden injection detection, malicious script detection, and all other checks unchanged.
 """
 
 import re
@@ -1012,15 +1016,31 @@ class HacklinkKeywordScanner:
                           f"Attackers often leave broken WP installations behind."
             })
 
-        # Check for default/placeholder pages
+        # Check for default/placeholder pages.
+        # IMPORTANT: Only check on thin pages (< 1000 chars visible text).
+        # A full landing page with navigation, features, and footer that says
+        # "Coming Soon" for one feature is NOT a parking page — it's a product
+        # label.  Parking pages are characterised by minimal content + a
+        # placeholder phrase being the DOMINANT message on the page.
         placeholder_signals = [
             "coming soon", "under construction", "parked domain",
             "this domain is for sale", "buy this domain",
             "default web page", "apache2 default page",
             "welcome to nginx", "it works!",
         ]
+        # Definitive parking signals — always fire regardless of page size
+        # (no legitimate site says "this domain is for sale" as a feature label)
+        always_fire_signals = {
+            "parked domain", "this domain is for sale", "buy this domain",
+            "default web page", "apache2 default page",
+            "welcome to nginx", "it works!",
+        }
         for signal in placeholder_signals:
             if signal in content_lower:
+                # For ambiguous signals ("coming soon", "under construction"),
+                # only fire on thin pages where the signal is the dominant content
+                if signal not in always_fire_signals and visible_text_len >= 1000:
+                    continue  # Skip — this is likely a feature label on a real site
                 score = min(score + 5, 30)
                 findings.append({
                     "severity": "high",
