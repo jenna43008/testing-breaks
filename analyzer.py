@@ -4,6 +4,19 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 7.6 (Feb 2026)
+- ENTERPRISE DOMAIN SUPPRESSION: Established enterprise domains (2+ yr, enterprise MX or
+  enterprise registrar, DMARC reject/quarantine) no longer penalized for dev platform hosting,
+  hidden iframes, or MEDIUM-confidence malicious scripts caused by build-tool artifacts.
+- DEV PLATFORM FIX: hosting_platform signal suppressed when domain is established enterprise
+  (e.g. scripps.com on Vercel with MarkMonitor registrar is not a phishing operation)
+- HIDDEN IFRAME FIX: suspicious_iframe signal suppressed on established enterprise domains
+  (media/enterprise sites use tracking pixels, ad containers, video embeds legitimately)
+- MALICIOUS SCRIPT FIX: MEDIUM-confidence malicious_script suppressed when signals are
+  ONLY build-tool artifacts (UNKNOWN_EXTERNAL_SCRIPT, HIGH_ENTROPY_PATH) on enterprise
+  domains. Next.js/Webpack/Vite generate hashed filenames that trigger HIGH_ENTROPY_PATH.
+- New zero-point marker: enterprise_domain_suppressed — tracks when suppression fires
+
 VERSION: 7.5 (Feb 2026)
 - AUTOFAIL OVERRIDE: Deterministic DENY for confirmed threats regardless of score.
   Three conditions force instant denial that no bonus can override:
@@ -107,7 +120,7 @@ VERSION: 4.4 (Feb 2026)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "7.5"
+ANALYZER_VERSION = "7.6"
 
 import re
 import json
@@ -407,6 +420,7 @@ class DomainApprovalResult:
     high_risk_phish_infra_reason: str = ""       # Human-readable explanation
     pattern_match: str = ""                      # Known attack pattern identifier (e.g. "Swedish Invoice Phish", "Hacklink/SEO Spam")
     autofail_reason: str = ""                     # Non-empty when a deterministic override forced DENY (e.g. confirmed phishing kit)
+    is_enterprise_domain: bool = False             # v7.6: Established enterprise domain (2+yr, enterprise MX/registrar/DMARC) — suppresses FP signals
     all_issues_text: str = ""                     # Full semicolon-separated list of all issues found
     asn_display: str = ""                        # Formatted "AS{number} ({org})" for results display
     
@@ -4377,7 +4391,13 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         if conf == "HIGH":
             all_issues.append(f"🚨 MALICIOUS SCRIPT INJECTION (HIGH confidence) → SocGholish/FakeUpdates-style obfuscated script detected; signals: {signals}")
         else:
-            all_issues.append(f"⚠️ SUSPICIOUS SCRIPT DETECTED (MEDIUM confidence) → Potentially malicious script patterns found; signals: {signals}")
+            # v7.6: Suppress MEDIUM text on enterprise domains when only build-tool artifacts
+            _bt_signals = {'UNKNOWN_EXTERNAL_SCRIPT', 'HIGH_ENTROPY_PATH'}
+            _ms_set = set(s.strip() for s in res.hacklink_malicious_script_signals.split(";") if s.strip()) if res.hacklink_malicious_script_signals else set()
+            if res.is_enterprise_domain and _ms_set and _ms_set.issubset(_bt_signals):
+                pass  # Build-tool artifacts on enterprise domain — not a real signal
+            else:
+                all_issues.append(f"⚠️ SUSPICIOUS SCRIPT DETECTED (MEDIUM confidence) → Potentially malicious script patterns found; signals: {signals}")
     
     if res.hacklink_hidden_injection:
         if res.hacklink_hidden_injection_confidence == "HIGH":
@@ -4529,13 +4549,17 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append("FREE HOSTING PROVIDER → Associated with spam; limited reputation potential")
     
     if res.hosting_provider and res.hosting_provider_type in ("budget_shared", "free", "suspect", "platform"):
-        type_labels = {
-            "budget_shared": f"BUDGET SHARED HOST ({res.hosting_provider}) → Commonly used for spam/phishing; shared IP reputation risk",
-            "free": f"FREE HOSTING ({res.hosting_provider}) → Associated with throwaway sites and spam campaigns",
-            "suspect": f"SUSPECT HOST ({res.hosting_provider}) → Known bulletproof/abuse-tolerant hosting provider",
-            "platform": f"DEV PLATFORM HOST ({res.hosting_provider}) → Developer platform with free tier; custom domains used for phishing infrastructure",
-        }
-        all_issues.append(type_labels.get(res.hosting_provider_type, f"HOSTING: {res.hosting_provider}"))
+        # v7.6: Suppress dev platform issue text on enterprise domains
+        if res.hosting_provider_type == "platform" and res.is_enterprise_domain:
+            pass  # Enterprise domain on platform hosting — not a risk signal
+        else:
+            type_labels = {
+                "budget_shared": f"BUDGET SHARED HOST ({res.hosting_provider}) → Commonly used for spam/phishing; shared IP reputation risk",
+                "free": f"FREE HOSTING ({res.hosting_provider}) → Associated with throwaway sites and spam campaigns",
+                "suspect": f"SUSPECT HOST ({res.hosting_provider}) → Known bulletproof/abuse-tolerant hosting provider",
+                "platform": f"DEV PLATFORM HOST ({res.hosting_provider}) → Developer platform with free tier; custom domains used for phishing infrastructure",
+            }
+            all_issues.append(type_labels.get(res.hosting_provider_type, f"HOSTING: {res.hosting_provider}"))
     
     if res.blocked_asn_org_match:
         all_issues.append(f"BLOCKED ASN ORG ({res.blocked_asn_org_match} / {res.hosting_asn_org}) → Domain hosted on blocked network; ASN {res.hosting_asn}")
@@ -4594,7 +4618,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append("EXTERNAL JS LOADER → Content loaded from external source")
     
     if res.has_suspicious_iframe:
-        all_issues.append("HIDDEN IFRAME → Often used to load malicious content")
+        # v7.6: Suppress on enterprise domains — legitimate tracking/ad/video iframes
+        if not res.is_enterprise_domain:
+            all_issues.append("HIDDEN IFRAME → Often used to load malicious content")
     
     if res.is_parking_page:
         all_issues.append("PARKING PAGE → Domain not actively used")
@@ -5047,6 +5073,35 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     
     # Email Auth - these are DELIVERABILITY concerns only, NOT fraud signals
     # A domain missing these should get warnings, not denial
+    
+    # === v7.6: ENTERPRISE DOMAIN DETECTION ===
+    # Established enterprise domains should not be penalized for dev platform hosting,
+    # hidden iframes, or MEDIUM-confidence malicious scripts from build-tool artifacts.
+    # Detection: domain age 2+ years AND (enterprise MX OR enterprise registrar OR DMARC reject)
+    _ENTERPRISE_REGISTRARS = {
+        'markmonitor', 'csc corporate domains', 'csc global', 'safenames',
+        'networksolutions', 'corporation service company', 'nom-iq',
+        'comlaude', 'gandi sas', 'key-systems', 'united-domains',
+    }
+    _is_enterprise_domain = False
+    _enterprise_age = res.domain_age_days >= 730  # 2+ years
+    _enterprise_mx = res.mx_provider_type == "enterprise"
+    _enterprise_registrar = any(
+        er in res.whois_registrar.lower() 
+        for er in _ENTERPRISE_REGISTRARS
+    ) if res.whois_registrar else False
+    _enterprise_dmarc = res.dmarc_policy in ("reject", "quarantine")
+    
+    if _enterprise_age and (_enterprise_mx or _enterprise_registrar or _enterprise_dmarc):
+        _is_enterprise_domain = True
+        res.is_enterprise_domain = True
+    
+    # === v7.6: BUILD-TOOL ARTIFACT SIGNALS ===
+    # These signals fire on legitimate build tools (Next.js, Webpack, Vite)
+    # and should not contribute to malicious_script detection on enterprise domains
+    _BUILD_TOOL_ARTIFACT_SIGNALS = {
+        'UNKNOWN_EXTERNAL_SCRIPT', 'HIGH_ENTROPY_PATH',
+    }
     if not res.spf_exists:
         add("no_spf", weights.get('no_spf', 8))
     else:
@@ -5213,7 +5268,11 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     elif res.hosting_provider_type == "platform":
         # Dev platforms (Render, Netlify, Vercel) aren't inherently bad,
         # but custom domains on free-tier platforms sending email is a red flag
-        add("hosting_platform", weights.get('hosting_platform', 4))
+        # v7.6: Suppress for established enterprise domains using platform as production hosting
+        if _is_enterprise_domain:
+            add("enterprise_domain_suppressed", 0)  # Track suppression for audit
+        else:
+            add("hosting_platform", weights.get('hosting_platform', 4))
     
     # === NAMESERVER RISK SIGNALS ===
     if res.ns_is_dynamic_dns:
@@ -5323,7 +5382,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_external_js:
         add("external_js_loader", weights.get('external_js_loader', 6))
     if res.has_suspicious_iframe:
-        add("suspicious_iframe", weights.get('suspicious_iframe', 8))
+        # v7.6: Suppress on enterprise domains — media/enterprise sites use tracking
+        # pixels, ad containers, video embeds, and CMP iframes legitimately
+        if _is_enterprise_domain:
+            add("enterprise_domain_suppressed", 0)
+        else:
+            add("suspicious_iframe", weights.get('suspicious_iframe', 8))
     if res.is_parking_page:
         add("parking_page", weights.get('parking_page', 6))
     if res.has_credential_form:
@@ -5424,11 +5488,22 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     
     # === MALICIOUS SCRIPT INJECTION (SocGholish/FakeUpdates/obfuscated) ===
     # v7.2: Multi-signal confidence — HIGH gets full weight, MEDIUM gets reduced weight
+    # v7.6: MEDIUM suppressed on enterprise domains when signals are ONLY build-tool artifacts
+    #       (UNKNOWN_EXTERNAL_SCRIPT, HIGH_ENTROPY_PATH from Next.js/Webpack/Vite hashed filenames)
     if res.hacklink_malicious_script:
         if res.hacklink_malicious_script_confidence == "HIGH":
             add("malicious_script", weights.get('malicious_script', 100))
         elif res.hacklink_malicious_script_confidence == "MEDIUM":
-            add("malicious_script", weights.get('malicious_script_medium', 25))
+            # Check if all signals are build-tool artifacts on an enterprise domain
+            ms_signal_set = set(
+                s.strip() for s in res.hacklink_malicious_script_signals.split(";") if s.strip()
+            ) if res.hacklink_malicious_script_signals else set()
+            _is_build_tool_only = ms_signal_set and ms_signal_set.issubset(_BUILD_TOOL_ARTIFACT_SIGNALS)
+            
+            if _is_enterprise_domain and _is_build_tool_only:
+                add("enterprise_domain_suppressed", 0)
+            else:
+                add("malicious_script", weights.get('malicious_script_medium', 25))
     
     # === HIDDEN CONTENT INJECTION (CSS cloaking: display:none, font-size:0) ===
     # HIGH = hidden content WITH embedded links (near-certain hacklink/SEO spam)
@@ -5727,7 +5802,11 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.hacklink_wp_compromised:
         _hl_signals.append("WP compromised")
     if res.hacklink_malicious_script:
-        _hl_signals.append("malicious script")
+        # v7.6: Don't tag as hacklink pattern when it's build-tool artifacts on enterprise domain
+        _bt_sigs = {'UNKNOWN_EXTERNAL_SCRIPT', 'HIGH_ENTROPY_PATH'}
+        _ms_sig_set = set(s.strip() for s in res.hacklink_malicious_script_signals.split(";") if s.strip()) if res.hacklink_malicious_script_signals else set()
+        if not (res.is_enterprise_domain and _ms_sig_set and _ms_sig_set.issubset(_bt_sigs)):
+            _hl_signals.append("malicious script")
     if res.hacklink_spam_link_count >= 5:
         _hl_signals.append(f"{res.hacklink_spam_link_count} spam links")
     if _hl_signals:
