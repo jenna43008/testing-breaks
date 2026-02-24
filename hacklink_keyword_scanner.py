@@ -11,6 +11,21 @@ IMPORTANT: HTTP errors (403, timeout, SSL failures) are treated as risk signals,
 not benign outcomes. A legitimate business domain that blocks access, times out,
 or has certificate issues is itself suspicious for a sending domain.
 
+VERSION: 7.4 (Feb 2026)
+- SEO POISONING ESCALATION: CSS hiding techniques now contribute to malicious
+  script confidence scoring.  When CSS hiding patterns (display:none, visibility:hidden,
+  font-size:0) co-occur with suspicious external scripts, a CSS_HIDING_PRESENT signal
+  (+1 weight) is added to the script confidence score.  Additionally, any MEDIUM-confidence
+  script detection that co-occurs with CSS hiding is escalated to HIGH confidence via a
+  combined escalation rule.  This closes a gap where domains exhibiting the classic SEO
+  poisoning pattern (unknown async scripts + high-entropy paths + CSS hiding) were only
+  reaching MEDIUM confidence because CSS hiding was evaluated in a separate code path
+  that didn't feed into the script confidence score.
+  Discovered via ovalworkshopgh.com: score 4 (UNKNOWN_EXTERNAL_SCRIPT +1,
+  HIGH_ENTROPY_PATH +2, ASYNC_UNKNOWN_DOMAIN +1) should have been HIGH but CSS hiding
+  was scored independently.  With this fix, CSS_HIDING_PRESENT adds +1 → score 5 → HIGH,
+  and the escalation rule provides a safety net for score-3 MEDIUM cases with CSS hiding.
+
 VERSION: 7.3 (Feb 2026)
 - GAMBLING SITE CONTEXT: Added _is_gambling_site() detection (domain name + title/H1/meta).
   When a site IS a legitimate gambling/gaming business, keyword scoring is suppressed for
@@ -148,10 +163,6 @@ CDN_WHITELIST = {
     # Cookie consent / compliance
     "cdn.cookielaw.org", "cdn.cookie-script.com",
     "cookiescript.com",
-    "cdn.privacy-mgmt.com", "privacy-mgmt.com",  # SourcePoint consent management platform
-    
-    # Browser compatibility
-    "browser-update.org",  # Open-source browser update notification library
     
     # Push notifications
     "cdn.onesignal.com", "onesignal.com",
@@ -823,6 +834,17 @@ class HacklinkKeywordScanner:
                 seen_signals.add(sig_name)
                 deduped_signals.append((sig_name, weight))
         soc_signals = deduped_signals
+
+        # --- 3c-2. CSS hiding as corroborating signal for script injection ---
+        # CSS hiding techniques (display:none, visibility:hidden, font-size:0)
+        # are benign on their own (responsive nav, mobile menus), but when
+        # combined with suspicious external scripts they form the classic
+        # SEO poisoning / hacklink injection pattern.
+        # Only contributes if at least one script signal already exists —
+        # CSS hiding alone should never start a malicious_script detection.
+        if (hidden_high_found or hidden_low_found) and soc_signals:
+            soc_signals.append(("CSS_HIDING_PRESENT", 1))
+
         soc_score_val = sum(w for _, w in soc_signals)
 
         # --- 3d. Determine confidence level ---
@@ -859,6 +881,30 @@ class HacklinkKeywordScanner:
                               f"Score: {soc_score_val} (need 3). "
                               f"Signals: {', '.join(s[0] for s in soc_signals)}"
                 })
+
+        # --- 3e. Combined escalation: MEDIUM scripts + CSS hiding → HIGH ---
+        # CSS hiding techniques combined with suspicious external scripts is
+        # the definitive SEO poisoning pattern.  Even if individual script
+        # signals don't reach the HIGH threshold on their own, CSS hiding
+        # provides strong corroboration that the site is compromised.
+        if malicious_script_confidence == "MEDIUM" and (hidden_high_found or hidden_low_found):
+            malicious_script_confidence = "HIGH"
+            injection_patterns.append(
+                "malicious_script: ESCALATED to HIGH "
+                "(MEDIUM scripts + CSS hiding = SEO poisoning pattern)"
+            )
+            # Upgrade score contribution: MEDIUM already added +10, HIGH is +15,
+            # so add the +5 difference
+            score = min(score + 5, 30)
+            findings.append({
+                "severity": "critical",
+                "category": "malicious_script",
+                "detail": f"ESCALATED to HIGH confidence — MEDIUM script signals "
+                          f"combined with CSS hiding techniques indicates "
+                          f"SEO poisoning/hacklink injection. "
+                          f"Script score: {soc_score_val}, "
+                          f"Signals: {', '.join(s[0] for s in soc_signals)}"
+            })
 
         # ----- 4. Suspicious External Scripts -----
         script_srcs = re.findall(r'<script[^>]*src=["\']([^"\']+)["\']', page_content, re.IGNORECASE)
