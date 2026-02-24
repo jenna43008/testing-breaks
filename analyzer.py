@@ -489,6 +489,25 @@ class DomainApprovalResult:
     subdomain_infra_divergent: bool = False      # Subdomain points to different infrastructure than parent
     subdomain_divergence_evidence: str = ""      # Evidence of divergence
     subdomain_divergence_confidence: str = ""    # HIGH, MEDIUM, LOW
+    
+    # === OAUTH CONSENT PHISHING (v7.3.1) ===
+    has_oauth_phish: bool = False                # Page contains OAuth consent phishing patterns
+    oauth_phish_evidence: str = ""               # Semicolon-separated evidence strings
+    
+    # === HOMOGLYPH / IDN SPOOFING (v7.3.1) ===
+    is_homoglyph_domain: bool = False            # Domain uses IDN homoglyphs mimicking a brand
+    homoglyph_target: str = ""                   # The brand being spoofed
+    homoglyph_decoded: str = ""                  # Unicode-decoded domain display
+    
+    # === QUISHING PROFILE (v7.3.1) ===
+    quishing_profile: bool = False               # Domain matches QR code phishing profile
+    quishing_evidence: str = ""                  # Evidence strings
+    
+    # === CDN TUNNEL ABUSE (v7.3.1) ===
+    is_cdn_hosted: bool = False                  # Domain resolves to CDN provider IPs
+    cdn_provider: str = ""                       # Which CDN (Cloudflare, Fastly, etc.)
+    cdn_tunnel_suspect: bool = False             # CDN-hosted with no organic web presence
+    cdn_tunnel_evidence: str = ""                # Evidence strings
 
 
 # ============================================================================
@@ -894,6 +913,90 @@ BRAND_KEYWORDS = [
 
 # Short keywords that need word boundary matching (to avoid false positives like "first" matching "irs")
 BRAND_KEYWORDS_SHORT = [b'irs', b'ups', b'dhl']
+
+# === OAUTH CONSENT PHISHING PATTERNS (v7.3.1) ===
+# OAuth authorization endpoint patterns that indicate consent phishing.
+# Attackers redirect to real Microsoft/Google OAuth pages with malicious
+# app permissions — no password fields on the phishing domain itself.
+OAUTH_AUTH_ENDPOINTS = [
+    b'login.microsoftonline.com/common/oauth2/authorize',
+    b'login.microsoftonline.com/common/oauth2/v2.0/authorize',
+    b'login.microsoftonline.com/organizations/oauth2',
+    b'accounts.google.com/o/oauth2/auth',
+    b'accounts.google.com/o/oauth2/v2/auth',
+    b'login.windows.net/common/oauth2',
+]
+OAUTH_PARAM_PATTERNS = [
+    rb'response_type\s*=\s*["\']?code',
+    rb'redirect_uri\s*=\s*["\']?https?://',
+    rb'client_id\s*=\s*[0-9a-f-]{20,}',
+    rb'scope\s*=.*(?:mail|files|contacts|user)\.read',
+]
+
+# === HOMOGLYPH MAP (v7.3.1) ===
+# Cyrillic/Greek/other Unicode chars that visually resemble Latin letters.
+# Used to detect IDN homoglyph attacks (xn-- punycode domains).
+HOMOGLYPH_MAP = {
+    '\u0430': 'a',  # Cyrillic а
+    '\u0435': 'e',  # Cyrillic е
+    '\u043e': 'o',  # Cyrillic о
+    '\u0440': 'p',  # Cyrillic р
+    '\u0441': 'c',  # Cyrillic с
+    '\u0443': 'y',  # Cyrillic у
+    '\u0445': 'x',  # Cyrillic х
+    '\u0456': 'i',  # Cyrillic і
+    '\u0458': 'j',  # Cyrillic ј
+    '\u04bb': 'h',  # Cyrillic һ
+    '\u0501': 'd',  # Cyrillic ԁ
+    '\u051b': 'q',  # Cyrillic ԛ
+    '\u0261': 'g',  # Latin small script g (IPA)
+    '\u0251': 'a',  # Latin alpha
+    '\u03b1': 'a',  # Greek α
+    '\u03bf': 'o',  # Greek ο
+    '\u03c1': 'p',  # Greek ρ
+    '\u03b5': 'e',  # Greek ε
+    '\u0432': 'b',  # Cyrillic в (looks like b in some fonts)
+    '\u043a': 'k',  # Cyrillic к
+    '\u043c': 'm',  # Cyrillic м
+    '\u043d': 'h',  # Cyrillic н (looks like H)
+    '\u0442': 't',  # Cyrillic т
+    '\u0448': 'w',  # Cyrillic ш (sometimes confusable)
+    '\u0131': 'i',  # Turkish dotless ı
+    '\u1d00': 'a',  # Latin small cap A
+    '\u1d04': 'c',  # Latin small cap C
+    '\u1d07': 'e',  # Latin small cap E
+    '\u1d0f': 'o',  # Latin small cap O
+}
+
+# === CONFUSABLE TLD PAIRS (v7.3.1) ===
+# TLD pairs that look similar in certain fonts or at small sizes
+CONFUSABLE_TLD_PAIRS = {
+    '.corn': '.com',   # rn → m in sans-serif
+    '.cam': '.com',    # vowel swap
+    '.con': '.com',    # trailing char swap
+    '.corn': '.com',
+    '.orn': '.om',
+}
+
+# === QUISHING TLDs (v7.3.1) ===
+# TLDs disproportionately used for QR code phishing landing pages
+QUISHING_TLDS = {'.page', '.link', '.click', '.qr', '.to', '.me', '.one', '.zip', '.mov'}
+
+# === CDN PROVIDER ASN MAP (v7.3.1) ===
+# ASNs belonging to major CDN/proxy providers. When a domain resolves to these,
+# the actual origin server is hidden — could be legitimate or attacker-controlled.
+CDN_ASN_MAP = {
+    '13335': 'Cloudflare',   # CLOUDFLARENET
+    '209242': 'Cloudflare',  # Cloudflare secondary
+    '54113': 'Fastly',
+    '16625': 'Akamai',
+    '20940': 'Akamai',
+    '16509': 'AWS CloudFront',  # AMAZON-02
+    '15169': 'Google Cloud CDN',
+    '396982': 'Google Cloud',
+    '8075': 'Microsoft Azure CDN',
+    '13414': 'Twitter/X CDN',
+}
 
 CREDENTIAL_PATTERNS = [b'type="password"', b"type='password'", b'name="password"']
 SENSITIVE_PATTERNS = [b'name="ssn"', b'name="card_number"', b'name="cvv"']
@@ -1526,6 +1629,158 @@ def detect_ct_gap(
     return result
 
 
+def detect_cdn_hosted(asn: str) -> Tuple[bool, str]:
+    """Check if the domain's IP belongs to a CDN/proxy provider.
+    
+    When a domain resolves to a CDN, the actual origin server is hidden.
+    This is normal for legitimate sites, but attackers use Cloudflare Tunnels
+    and similar services to hide phishing kit origins behind reputable CDN IPs.
+    
+    Returns: (is_cdn, provider_name)
+    """
+    if asn and asn in CDN_ASN_MAP:
+        return True, CDN_ASN_MAP[asn]
+    return False, ""
+
+
+def detect_cdn_tunnel_abuse(
+    is_cdn: bool,
+    cdn_provider: str,
+    domain_age_days: int,
+    ct_log_count: int,
+    ct_recent_issuance: bool,
+    has_credential_form: bool,
+    has_oauth_phish: bool,
+    is_minimal_shell: bool,
+    has_parking: bool,
+    has_js_redirect: bool,
+    hosting_provider_type: str,
+) -> Dict:
+    """Detect CDN tunnel abuse — phishing kit hidden behind CDN proxy.
+    
+    The domain resolves to Cloudflare/CDN IPs (looks reputable), has valid
+    universal SSL certs, but serves a phishing kit from a hidden origin.
+    
+    Suspicious combo: CDN-hosted + (new domain OR no CT history) + 
+                      (minimal content OR credential form OR OAuth phish)
+    
+    Returns dict with: suspect (bool), evidence (list)
+    """
+    result = {"suspect": False, "evidence": []}
+    
+    if not is_cdn:
+        return result
+    
+    evidence = []
+    risk_signals = 0
+    
+    # Domain youth / freshness signals
+    if domain_age_days >= 0 and domain_age_days < 90:
+        evidence.append(f"New domain ({domain_age_days}d old) on {cdn_provider}")
+        risk_signals += 1
+    if ct_log_count == 0:
+        evidence.append(f"No CT history — zero organic cert presence")
+        risk_signals += 1
+    if ct_recent_issuance and domain_age_days > 180:
+        evidence.append(f"Fresh cert on established domain behind {cdn_provider}")
+        risk_signals += 1
+    
+    # Content signals — what's the CDN serving?
+    if has_credential_form:
+        evidence.append("Credential form behind CDN proxy")
+        risk_signals += 1
+    if has_oauth_phish:
+        evidence.append("OAuth consent phishing behind CDN proxy")
+        risk_signals += 1
+    if is_minimal_shell or has_js_redirect:
+        evidence.append("Minimal shell / JS redirect behind CDN — classic tunnel abuse")
+        risk_signals += 1
+    if has_parking:
+        evidence.append("Parked page behind CDN — domain not actively used")
+        risk_signals += 1
+    
+    # Need at least 2 risk signals to flag (CDN + one youth + one content indicator)
+    if risk_signals >= 2:
+        result["suspect"] = True
+        result["evidence"] = evidence
+    
+    return result
+
+
+def detect_quishing_profile(
+    domain: str,
+    domain_age_days: int,
+    ct_log_count: int,
+    is_minimal_shell: bool,
+    has_js_redirect: bool,
+    has_credential_form: bool,
+    has_oauth_phish: bool,
+    tld: str,
+) -> Dict:
+    """Detect QR code phishing (quishing) landing page profile.
+    
+    Quishing domains are registered purely as QR-to-phish destinations:
+    - Extremely minimal pages (redirect or single form)
+    - Very new domains or no CT history
+    - Frequently use .page, .link, .click, .qr TLDs
+    - Zero organic web presence
+    
+    Returns dict with: profile (bool), evidence (list)
+    """
+    result = {"profile": False, "evidence": []}
+    
+    evidence = []
+    score = 0
+    
+    # TLD signal
+    tld_with_dot = '.' + tld if not tld.startswith('.') else tld
+    if tld_with_dot.lower() in QUISHING_TLDS:
+        evidence.append(f"Quishing-associated TLD ({tld_with_dot})")
+        score += 2
+    
+    # Domain freshness
+    if domain_age_days >= 0 and domain_age_days < 30:
+        evidence.append(f"Very new domain ({domain_age_days}d)")
+        score += 2
+    elif domain_age_days >= 0 and domain_age_days < 90:
+        evidence.append(f"New domain ({domain_age_days}d)")
+        score += 1
+    
+    # No organic presence
+    if ct_log_count == 0:
+        evidence.append("No CT history — zero prior web presence")
+        score += 1
+    
+    # Minimal content
+    if is_minimal_shell:
+        evidence.append("Minimal page shell — classic QR redirect target")
+        score += 2
+    if has_js_redirect:
+        evidence.append("JS redirect — QR → redirect → phish")
+        score += 1
+    
+    # Payload
+    if has_credential_form:
+        evidence.append("Credential form — phishing endpoint")
+        score += 1
+    if has_oauth_phish:
+        evidence.append("OAuth consent phish — QR → OAuth flow")
+        score += 1
+    
+    # Short domain name (QR domains are often short for easy encoding)
+    base = domain.split('.')[0] if '.' in domain else domain
+    if len(base) <= 6:
+        evidence.append(f"Short domain name ({base}) — optimized for QR encoding")
+        score += 1
+    
+    # Need quishing TLD + at least 1 other signal, or 4+ non-TLD signals
+    if (tld_with_dot.lower() in QUISHING_TLDS and score >= 4) or score >= 5:
+        result["profile"] = True
+        result["evidence"] = evidence
+    
+    return result
+
+
 def get_bimi(domain: str) -> Tuple[bool, str]:
     for record in dns_query(f"default._bimi.{domain}", 'TXT'):
         record = record.strip('"').strip("'")
@@ -2002,6 +2257,128 @@ def is_disposable_email(domain: str, disposable_list: List[str]) -> bool:
         if re.search(pattern, domain_lower):
             return True
     return False
+
+
+def check_homoglyph_domain(domain: str, protected_brands: List[str]) -> Dict:
+    """Detect IDN homoglyph attacks — domains using Unicode lookalike characters.
+    
+    Attackers register domains like xn--pypal-4ve.com (paуpal.com with Cyrillic у)
+    that look identical to legitimate brands in browsers and email clients.
+    
+    Detection approach:
+    1. If domain is punycode (xn--), decode to Unicode
+    2. Map each Unicode char through HOMOGLYPH_MAP to find Latin equivalents
+    3. Compare the Latin-mapped result against protected brands
+    4. Also check confusable TLD pairs (.corn → .com visual confusion)
+    
+    Returns dict with: is_homoglyph, target_brand, decoded_display, evidence
+    """
+    result = {
+        "is_homoglyph": False,
+        "target_brand": "",
+        "decoded_display": "",
+        "evidence": "",
+    }
+    
+    domain_lower = domain.lower().strip().rstrip('.')
+    parts = domain_lower.split('.')
+    
+    # Check for punycode labels (xn--)
+    has_punycode = any(label.startswith('xn--') for label in parts)
+    
+    # Decode punycode to Unicode
+    decoded_domain = domain_lower
+    if has_punycode:
+        try:
+            decoded_domain = domain_lower.encode('ascii').decode('idna')
+        except (UnicodeError, UnicodeDecodeError):
+            try:
+                # Try label-by-label decoding
+                decoded_parts = []
+                for part in parts:
+                    if part.startswith('xn--'):
+                        decoded_parts.append(part.encode('ascii').decode('idna'))
+                    else:
+                        decoded_parts.append(part)
+                decoded_domain = '.'.join(decoded_parts)
+            except Exception:
+                return result  # Can't decode — skip
+    
+    result["decoded_display"] = decoded_domain
+    
+    # Check if decoded domain has any non-ASCII characters
+    has_non_ascii = any(ord(c) > 127 for c in decoded_domain)
+    
+    if not has_non_ascii and not has_punycode:
+        # Not an IDN domain — check confusable TLD pairs only
+        tld = '.' + parts[-1] if parts else ''
+        for confusable, legitimate in CONFUSABLE_TLD_PAIRS.items():
+            if tld == confusable:
+                # Reconstruct with legitimate TLD and check against brands
+                base = '.'.join(parts[:-1])
+                legit_domain = base + legitimate
+                legit_main = legit_domain.split('.')[-2] if '.' in legit_domain else legit_domain
+                for brand in protected_brands:
+                    if len(brand) > 3 and legit_main == brand:
+                        result["is_homoglyph"] = True
+                        result["target_brand"] = brand
+                        result["evidence"] = f"Confusable TLD: {tld} looks like {legitimate} → {brand}{legitimate}"
+                        return result
+        return result
+    
+    # Map Unicode homoglyphs to Latin equivalents
+    # Extract the main domain part (before TLD)
+    if len(parts) >= 2:
+        main_label = parts[-2] if len(parts[-1]) <= 3 else parts[-1]
+    else:
+        main_label = parts[0]
+    
+    # Convert using homoglyph map
+    latin_mapped = []
+    mixed_script = False
+    has_homoglyph = False
+    for char in main_label:
+        if char in HOMOGLYPH_MAP:
+            latin_mapped.append(HOMOGLYPH_MAP[char])
+            has_homoglyph = True
+        elif ord(char) > 127:
+            # Non-ASCII char not in our map — keep as-is
+            latin_mapped.append(char)
+        else:
+            latin_mapped.append(char)
+            if has_homoglyph:
+                mixed_script = True  # Mix of Latin + non-Latin = suspicious
+    
+    if not has_homoglyph:
+        return result
+    
+    latin_equivalent = ''.join(latin_mapped)
+    
+    # Compare against protected brands
+    for brand in protected_brands:
+        if len(brand) <= 3:
+            continue
+        # Direct match
+        if latin_equivalent == brand:
+            result["is_homoglyph"] = True
+            result["target_brand"] = brand
+            result["evidence"] = (
+                f"IDN homoglyph: {decoded_domain} (punycode: {domain_lower}) "
+                f"→ Latin equivalent '{latin_equivalent}' matches brand '{brand}'"
+            )
+            return result
+        # High similarity (accounts for partial homoglyph + typo combos)
+        ratio = difflib.SequenceMatcher(None, latin_equivalent, brand).ratio()
+        if ratio >= 0.85 and has_homoglyph:
+            result["is_homoglyph"] = True
+            result["target_brand"] = brand
+            result["evidence"] = (
+                f"IDN homoglyph (similarity {ratio:.0%}): {decoded_domain} "
+                f"→ Latin equivalent '{latin_equivalent}' ≈ brand '{brand}'"
+            )
+            return result
+    
+    return result
 
 
 def check_domain_name_patterns(domain: str, config: dict = None) -> Dict:
@@ -2966,6 +3343,8 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
         "exfil_signals": [], "exfil_details": [],
         "form_action_kit": "", "form_action_kit_strong": False,
         "page_title": "", "suspicious_title_match": "",
+        # OAuth consent phishing (v7.3.1)
+        "oauth_phish": False, "oauth_evidence": [],
     }
     
     if not content:
@@ -3226,6 +3605,39 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
         if pattern_re.search(content):
             result["exfil_signals"].append(signal_name)
             result["exfil_details"].append(description)
+    
+    # === OAUTH CONSENT PHISHING DETECTION (v7.3.1) ===
+    # Attackers set up pages that redirect to real Microsoft/Google OAuth
+    # authorization endpoints with malicious app permissions. The phishing
+    # domain itself has NO password fields (bypasses credential form detection).
+    # Look for: OAuth auth endpoints in links/redirects, response_type=code,
+    # redirect_uri pointing back to the domain, excessive scope requests.
+    oauth_evidence = []
+    
+    # Check for OAuth authorization endpoints in all href/src links
+    all_links = re.findall(rb'(?:href|src|action|url)\s*=\s*["\']([^"\']{10,500})["\']', content, re.IGNORECASE)
+    all_links_lower = [l.lower() for l in all_links]
+    for link in all_links_lower:
+        for endpoint in OAUTH_AUTH_ENDPOINTS:
+            if endpoint in link:
+                oauth_evidence.append(f"OAuth endpoint in link: {endpoint.decode()}")
+                break
+    
+    # Check for OAuth parameters in page source (could be in JS, forms, or meta redirects)
+    for pattern in OAUTH_PARAM_PATTERNS:
+        match = re.search(pattern, content, re.IGNORECASE)
+        if match:
+            param_str = match.group(0).decode('utf-8', errors='ignore')[:80]
+            oauth_evidence.append(f"OAuth param: {param_str}")
+    
+    # Also check for inline JS that builds OAuth URLs
+    if re.search(rb'(?:oauth|authorize|consent).*(?:response_type|redirect_uri|client_id)', content, re.IGNORECASE):
+        if not oauth_evidence:  # Only if we haven't already found direct evidence
+            oauth_evidence.append("JS references to OAuth authorization flow")
+    
+    if oauth_evidence:
+        result["oauth_phish"] = True
+        result["oauth_evidence"] = oauth_evidence
     
     return result
 
@@ -4040,6 +4452,30 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     elif res.is_subdomain and res.parent_domain:
         positives.append(f"Subdomain of {res.parent_domain} — infrastructure matches parent")
     
+    # v7.3.1: OAuth consent phishing
+    if res.has_oauth_phish:
+        evidence_str = res.oauth_phish_evidence.replace(";", ", ")
+        all_issues.append(f"🚨 OAUTH CONSENT PHISH → {evidence_str}")
+    
+    # v7.3.1: Homoglyph / IDN spoofing
+    if res.is_homoglyph_domain:
+        decoded = f" (displays as: {res.homoglyph_decoded})" if res.homoglyph_decoded else ""
+        all_issues.append(
+            f"🚨 HOMOGLYPH DOMAIN → IDN lookalike targeting '{res.homoglyph_target}'{decoded}"
+        )
+    
+    # v7.3.1: Quishing profile
+    if res.quishing_profile:
+        evidence_str = res.quishing_evidence.replace(";", ", ")
+        all_issues.append(f"⚠️ QUISHING PROFILE → QR code phishing landing page: {evidence_str}")
+    
+    # v7.3.1: CDN tunnel abuse
+    if res.cdn_tunnel_suspect:
+        evidence_str = res.cdn_tunnel_evidence.replace(";", ", ")
+        all_issues.append(f"⚠️ CDN TUNNEL ABUSE ({res.cdn_provider}) → {evidence_str}")
+    elif res.is_cdn_hosted:
+        positives.append(f"CDN-hosted ({res.cdn_provider}) — origin hidden but no abuse indicators")
+    
     # === EMAIL AUTHENTICATION ===
     if not res.dmarc_exists:
         all_issues.append("NO DMARC → Gmail/Yahoo now REQUIRE DMARC; expect 10-30% lower inbox placement")
@@ -4335,6 +4771,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('NO CT HISTORY', weights.get('ct_no_history', 12)),
             ('SUBDOMAIN DELEGATION ABUSE', weights.get('subdomain_delegation_high', 25)),
             ('SUBDOMAIN INFRA DIVERGENCE', weights.get('subdomain_delegation_medium', 12)),
+            ('OAUTH CONSENT PHISH', weights.get('oauth_phish', 20)),
+            ('HOMOGLYPH DOMAIN', weights.get('homoglyph_domain', 30)),
+            ('QUISHING PROFILE', weights.get('quishing_profile', 15)),
+            ('CDN TUNNEL ABUSE', weights.get('cdn_tunnel_suspect', 15)),
             ('SENSITIVE FORM', weights.get('sensitive_fields', 12)),
             ('TECH SUPPORT SCAM TLD', weights.get('tech_support_tld', 12)),
             ('DISPOSABLE MX', weights.get('mx_disposable', 10)),
@@ -4504,6 +4944,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('NO CT HISTORY', ['ct_no_history']),
         ('SUBDOMAIN DELEGATION ABUSE', ['subdomain_delegation_high']),
         ('SUBDOMAIN INFRA DIVERGENCE', ['subdomain_delegation_high', 'subdomain_delegation_medium', 'subdomain_delegation_low']),
+        ('OAUTH CONSENT PHISH', ['oauth_phish']),
+        ('HOMOGLYPH DOMAIN', ['homoglyph_domain']),
+        ('QUISHING PROFILE', ['quishing_profile']),
+        ('CDN TUNNEL ABUSE', ['cdn_tunnel_suspect']),
         ('VULNERABLE WP PLUGINS', ['hacklink_vulnerable_plugins', 'vuln_plugins_no_compromise_mitigated']),
         ('HIDDEN CONTENT INJECTION', ['hidden_injection']),
         ('HACKLINK', ['hacklink_keywords']),
@@ -5022,6 +5466,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         "blocked_asn", "mx_hijack_high", "mx_hijack_medium",
         "subdomain_delegation_high", "subdomain_delegation_medium",
         "ct_reactivated",
+        "oauth_phish", "homoglyph_domain", "cdn_tunnel_suspect", "quishing_profile",
     }
     if (res.domain_transfer_lock_recent or res.whois_recently_updated):
         has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
@@ -5065,6 +5510,22 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             add("subdomain_delegation_medium", weights.get('subdomain_delegation_medium', 12))
         else:
             add("subdomain_delegation_low", weights.get('subdomain_delegation_low', 0))  # informational
+    
+    # v7.3.1: OAuth consent phishing
+    if res.has_oauth_phish:
+        add("oauth_phish", weights.get('oauth_phish', 20))
+    
+    # v7.3.1: Homoglyph / IDN spoofing
+    if res.is_homoglyph_domain:
+        add("homoglyph_domain", weights.get('homoglyph_domain', 30))
+    
+    # v7.3.1: Quishing profile
+    if res.quishing_profile:
+        add("quishing_profile", weights.get('quishing_profile', 15))
+    
+    # v7.3.1: CDN tunnel abuse
+    if res.cdn_tunnel_suspect:
+        add("cdn_tunnel_suspect", weights.get('cdn_tunnel_suspect', 15))
     
     # === MITIGATIONS (strong counter-signals reduce risk from ambiguous indicators) ===
     # JS redirect + minimal shell is the classic phishing dropper fingerprint, but it's
@@ -5381,6 +5842,12 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.is_disposable_email = is_disposable_email(domain_lower, config['disposable_domains'])
     res.typosquat_target, res.typosquat_similarity = check_typosquatting(domain, config['protected_brands'])
     
+    # v7.3.1: Homoglyph / IDN spoofing detection
+    homoglyph = check_homoglyph_domain(domain, config['protected_brands'])
+    res.is_homoglyph_domain = homoglyph["is_homoglyph"]
+    res.homoglyph_target = homoglyph["target_brand"]
+    res.homoglyph_decoded = homoglyph["decoded_display"]
+    
     # Check domain name for tech support scam / brand impersonation patterns
     domain_patterns = check_domain_name_patterns(domain, config)
     res.has_suspicious_prefix = domain_patterns["has_suspicious_prefix"]
@@ -5407,6 +5874,8 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.brand_spoofing_keyword = ""
         res.brand_plus_keyword_domain = False
         res.domain_pattern_risk = ""
+        res.is_homoglyph_domain = False
+        res.homoglyph_target = ""
     
     # SPF
     spf_record, spf_exists, spf_parsed = get_spf(domain)
@@ -5508,6 +5977,9 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.hosting_detected_via = hosting_result["detected_via"]
     res.hosting_asn = hosting_result["asn"]
     res.hosting_asn_org = hosting_result["asn_org"]
+    
+    # v7.3.1: CDN Provider Detection
+    res.is_cdn_hosted, res.cdn_provider = detect_cdn_hosted(res.hosting_asn)
     
     # v7.3.1: Subdomain Delegation Abuse Detection
     sub_result = detect_subdomain_delegation_abuse(
@@ -5644,6 +6116,11 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         if ca["suspicious_title_match"]:
             res.has_suspicious_page_title = True
             res.page_title_match = ca["suspicious_title_match"]
+        
+        # v7.3.1: OAuth consent phishing
+        if ca.get("oauth_phish"):
+            res.has_oauth_phish = True
+            res.oauth_phish_evidence = ";".join(ca["oauth_evidence"])
     
     # Check for hijacked domain / stepping stone indicators
     redirect_chain_urls = res.redirect_chain.split(' → ') if res.redirect_chain else []
@@ -5854,6 +6331,41 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.ct_gap_evidence = ct_gap["evidence"]
     except Exception:
         pass
+    
+    # v7.3.1: CDN Tunnel Abuse Detection (needs CT + content analysis results)
+    if res.is_cdn_hosted:
+        cdn_tunnel = detect_cdn_tunnel_abuse(
+            is_cdn=res.is_cdn_hosted,
+            cdn_provider=res.cdn_provider,
+            domain_age_days=res.domain_age_days,
+            ct_log_count=res.ct_log_count,
+            ct_recent_issuance=res.ct_recent_issuance,
+            has_credential_form=res.has_credential_form,
+            has_oauth_phish=res.has_oauth_phish,
+            is_minimal_shell=res.is_minimal_shell,
+            has_parking=res.is_parking_page,
+            has_js_redirect=res.has_js_redirect,
+            hosting_provider_type=res.hosting_provider_type,
+        )
+        if cdn_tunnel["suspect"]:
+            res.cdn_tunnel_suspect = True
+            res.cdn_tunnel_evidence = ";".join(cdn_tunnel["evidence"])
+    
+    # v7.3.1: Quishing Profile Detection
+    tld = domain.split('.')[-1] if '.' in domain else ''
+    quishing = detect_quishing_profile(
+        domain=domain,
+        domain_age_days=res.domain_age_days,
+        ct_log_count=res.ct_log_count,
+        is_minimal_shell=res.is_minimal_shell,
+        has_js_redirect=res.has_js_redirect,
+        has_credential_form=res.has_credential_form,
+        has_oauth_phish=res.has_oauth_phish,
+        tld=tld,
+    )
+    if quishing["profile"]:
+        res.quishing_profile = True
+        res.quishing_evidence = ";".join(quishing["evidence"])
     
     # Score
     calculate_score(res, config)
