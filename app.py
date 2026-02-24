@@ -260,55 +260,65 @@ def display_results(results: list):
         summary_df = df[['domain', 'risk_score', 'recommendation', 'summary']].copy()
         
         # v7.3.1: Build threat indicator column showing kit files and malicious links
+        def _safe_str(val, default=''):
+            """Return string value, converting NaN/None to default."""
+            if pd.isna(val) if isinstance(val, float) else val is None:
+                return default
+            return str(val)
+
         def _build_threat_indicator(row):
             parts = []
             # Kit filename
-            kit_fn = row.get('phishing_kit_filename', '')
+            kit_fn = _safe_str(row.get('phishing_kit_filename'))
             if kit_fn:
                 parts.append(f"🎣 {kit_fn}")
             # Phishing paths
-            phish_paths = row.get('phishing_paths_found', '')
+            phish_paths = _safe_str(row.get('phishing_paths_found'))
             if phish_paths:
                 paths = phish_paths.split(';')[:2]
                 parts.append(f"📂 {', '.join(paths)}")
             # Malicious script
             if row.get('hacklink_malicious_script'):
-                conf = row.get('hacklink_malicious_script_confidence', '')
+                conf = _safe_str(row.get('hacklink_malicious_script_confidence'))
                 parts.append(f"💀 Script ({conf})")
             # Hidden injection
             if row.get('hacklink_hidden_injection') and row.get('hacklink_hidden_injection_confidence') == 'HIGH':
                 parts.append("💉 Hidden inject")
             # MX hijack
             if row.get('mx_provider_mismatch'):
-                conf = row.get('mx_hijack_confidence', '')
-                ghost = row.get('mx_ghost_provider', '')
+                conf = _safe_str(row.get('mx_hijack_confidence'))
+                ghost = _safe_str(row.get('mx_ghost_provider'))
                 parts.append(f"🔓 MX hijack ({ghost}, {conf})")
             # Subdomain delegation abuse
             if row.get('subdomain_infra_divergent'):
-                conf = row.get('subdomain_divergence_confidence', '')
+                conf = _safe_str(row.get('subdomain_divergence_confidence'))
                 parts.append(f"🔀 Subdomain divergence ({conf})")
             # CT reactivation (aged domain purchase)
             if row.get('ct_reactivated'):
                 gap = row.get('ct_gap_months', 0)
+                if pd.isna(gap) if isinstance(gap, float) else gap is None:
+                    gap = 0
                 parts.append(f"📜 CT reactivation ({gap}mo gap)")
             # v7.3.1: OAuth consent phishing
             if row.get('has_oauth_phish'):
                 parts.append("🔑 OAuth phish")
             # v7.3.1: Homoglyph / IDN spoofing
             if row.get('is_homoglyph_domain'):
-                target = row.get('homoglyph_target', '')
+                target = _safe_str(row.get('homoglyph_target'))
                 parts.append(f"🔤 Homoglyph ({target})")
             # v7.3.1: Quishing profile
             if row.get('quishing_profile'):
                 parts.append("📱 Quishing")
             # v7.3.1: CDN tunnel abuse
             if row.get('cdn_tunnel_suspect'):
-                cdn = row.get('cdn_provider', '')
+                cdn = _safe_str(row.get('cdn_provider'))
                 parts.append(f"☁️ CDN tunnel ({cdn})")
             # Spam links
             spam_ct = row.get('hacklink_spam_link_count', 0)
+            if pd.isna(spam_ct) if isinstance(spam_ct, float) else spam_ct is None:
+                spam_ct = 0
             if spam_ct > 0:
-                parts.append(f"🔗 {spam_ct} spam links")
+                parts.append(f"🔗 {int(spam_ct)} spam links")
             # Phishing kit composite
             if row.get('phishing_kit_detected') and not kit_fn:
                 parts.append("🎣 Kit detected")
