@@ -1,4 +1,3 @@
-
 """
 Domain Sender Approval - Streamlit App
 =======================================
@@ -257,8 +256,43 @@ def display_results(results: list):
     tab1, tab2, tab3 = st.tabs(["📋 Summary View", "📊 Full Details", "⬇️ Download"])
     
     with tab1:
-        # Summary table with color coding — clean view: just domain, score, result, summary
+        # Summary table with color coding — clean view: domain, score, result, threats, summary
         summary_df = df[['domain', 'risk_score', 'recommendation', 'summary']].copy()
+        
+        # v7.3.1: Build threat indicator column showing kit files and malicious links
+        def _build_threat_indicator(row):
+            parts = []
+            # Kit filename
+            kit_fn = row.get('phishing_kit_filename', '')
+            if kit_fn:
+                parts.append(f"🎣 {kit_fn}")
+            # Phishing paths
+            phish_paths = row.get('phishing_paths_found', '')
+            if phish_paths:
+                paths = phish_paths.split(';')[:2]
+                parts.append(f"📂 {', '.join(paths)}")
+            # Malicious script
+            if row.get('hacklink_malicious_script'):
+                conf = row.get('hacklink_malicious_script_confidence', '')
+                parts.append(f"💀 Script ({conf})")
+            # Hidden injection
+            if row.get('hacklink_hidden_injection') and row.get('hacklink_hidden_injection_confidence') == 'HIGH':
+                parts.append("💉 Hidden inject")
+            # Spam links
+            spam_ct = row.get('hacklink_spam_link_count', 0)
+            if spam_ct > 0:
+                parts.append(f"🔗 {spam_ct} spam links")
+            # Phishing kit composite
+            if row.get('phishing_kit_detected') and not kit_fn:
+                parts.append("🎣 Kit detected")
+            # Exfil
+            if row.get('has_exfil_drop_script'):
+                parts.append("📡 Exfil")
+            return ' · '.join(parts) if parts else ''
+        
+        # Build from full df (has all fields), then attach to summary_df
+        threat_indicators = df.apply(_build_threat_indicator, axis=1)
+        summary_df.insert(3, 'threats', threat_indicators)
         
         def color_recommendation(val):
             if val == 'APPROVE':
@@ -285,6 +319,7 @@ def display_results(results: list):
             "domain": st.column_config.TextColumn("Domain", width="medium"),
             "risk_score": st.column_config.NumberColumn("Score", width="small"),
             "recommendation": st.column_config.TextColumn("Result", width="small"),
+            "threats": st.column_config.TextColumn("Threats", width="medium"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
         }
         
@@ -359,7 +394,8 @@ def display_results(results: list):
         with col2:
             # Summary CSV (just key columns)
             summary_csv = BytesIO()
-            summary_cols = ['domain', 'risk_score', 'recommendation', 'score_breakdown', 'summary']
+            summary_cols = ['domain', 'risk_score', 'recommendation', 'score_breakdown', 
+                           'phishing_kit_filename', 'hacklink_spam_links_found', 'summary']
             summary_cols = [c for c in summary_cols if c in df.columns]
             df[summary_cols].to_csv(summary_csv, index=False)
             summary_csv.seek(0)
@@ -761,6 +797,64 @@ def display_results(results: list):
                 sus_scripts = domain_data.get('hacklink_suspicious_scripts', '')
                 if sus_scripts:
                     st.warning(f"**Suspicious external scripts:** {sus_scripts.replace(';', ', ')}")
+        
+        # === MALICIOUS LINKS & URLs (v7.3.1) ===
+        # Aggregate all link-related findings into a single reference section
+        _kit_fn = domain_data.get('phishing_kit_filename', '')
+        _phish_paths = domain_data.get('phishing_paths_found', '')
+        _malware_links = domain_data.get('malware_links_found', '')
+        _spam_links = domain_data.get('hacklink_spam_links_found', '')
+        _sus_scripts = domain_data.get('hacklink_suspicious_scripts', '')
+        _phish_infra = domain_data.get('phishing_infra_domain', '')
+        _final_url = domain_data.get('final_url', '')
+        _redirect_chain = domain_data.get('redirect_chain', '')
+        
+        has_any_links = any([_kit_fn, _phish_paths, _malware_links, _spam_links, _sus_scripts, _phish_infra])
+        
+        if has_any_links:
+            with st.expander("🔗 Malicious Links & URLs", expanded=True):
+                st.caption("⚠️ URLs displayed as plain text — do not visit these domains")
+                
+                # Kit filename + full URL context
+                if _kit_fn:
+                    strength = "🔴 STRONG" if domain_data.get('phishing_kit_filename_strong') else "🟡 WEAK"
+                    kit_url = _final_url if _final_url else f"(path ends with {_kit_fn})"
+                    st.error(f"**🎣 Kit Entry Point:** `{_kit_fn}` ({strength})")
+                    st.code(kit_url, language=None)
+                
+                # Phishing paths matched in URL
+                if _phish_paths:
+                    paths = _phish_paths.split(';')
+                    st.warning(f"**📂 Phishing Paths ({len(paths)}):** URL contains known phishing directory patterns")
+                    st.code('\n'.join(paths[:5]), language=None)
+                
+                # Redirect to phishing infrastructure
+                if _phish_infra:
+                    st.error(f"**🔀 Redirects to Phishing Infra:**")
+                    st.code(_phish_infra, language=None)
+                    if _redirect_chain:
+                        st.code(_redirect_chain.replace(' → ', '\n→ '), language=None)
+                
+                # Spam/hacklink outbound links found in content
+                if _spam_links:
+                    urls = _spam_links.split(';')
+                    st.warning(f"**🕷️ Spam/Hacklink URLs ({len(urls)}):** Hidden outbound links to gambling/pharma/spam domains")
+                    display_urls = urls[:10]
+                    st.code('\n'.join(u[:120] for u in display_urls), language=None)
+                    if len(urls) > 10:
+                        st.caption(f"... and {len(urls) - 10} more")
+                
+                # Malware links
+                if _malware_links:
+                    links = _malware_links.split(';')
+                    st.error(f"**🦠 Malware Links ({len(links)}):** Known malicious URLs found in page content")
+                    st.code('\n'.join(l[:120] for l in links[:5]), language=None)
+                
+                # Suspicious external scripts
+                if _sus_scripts:
+                    scripts = _sus_scripts.split(';')
+                    st.warning(f"**⚠️ Suspicious Scripts ({len(scripts)}):** External JS from untrusted domains")
+                    st.code('\n'.join(s[:120] for s in scripts[:5]), language=None)
         
         # === DOMAIN TAKEOVER / TRANSFER LOCK ===
         has_takeover_signal = (
