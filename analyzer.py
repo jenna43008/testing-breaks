@@ -439,6 +439,7 @@ class DomainApprovalResult:
     hacklink_wp_compromised: bool = False         # WordPress compromise indicators found
     hacklink_vulnerable_plugins: str = ""         # Semicolon-separated vulnerable WP plugins
     hacklink_spam_link_count: int = 0            # Number of spam links found in content
+    hacklink_spam_links_found: str = ""          # Semicolon-separated spam/phishing URLs found in content
     hacklink_malicious_script: bool = False       # SocGholish/FakeUpdates/obfuscated script injection
     hacklink_malicious_script_confidence: str = "" # HIGH, MEDIUM, or NONE — multi-signal confidence level
     hacklink_malicious_script_signals: str = ""    # Semicolon-separated signal names that fired
@@ -5273,6 +5274,9 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                     for p in vuln_plugins
                 )
             res.hacklink_spam_link_count = hl_result.get("spam_link_count", 0)
+            spam_urls = hl_result.get("spam_link_urls", [])
+            if spam_urls:
+                res.hacklink_spam_links_found = ";".join(spam_urls[:20])
             
             # === Extract sub-signals for individual scoring ===
             res.hacklink_is_cpanel = hl_result.get("is_cpanel", False)
