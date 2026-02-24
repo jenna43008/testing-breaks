@@ -515,6 +515,11 @@ PHISHING_PATHS = [
     '/auth/', '/portal/', '/invoice/', '/doc/', '/share/',
     '/account/verification', '/secure/login', '/admin/verify',
     '/wp-admin/update/', '/verification/',
+    # v7.3.1: HTML credential-harvesting kit directory patterns
+    # Source: Feb 2025 observed phishing paths (121 samples).
+    # /tunnel/ appeared in 18/121 paths — dominant kit directory.
+    # /tunel/ is an attacker typo variant (3 additional hits).
+    '/tunnel/', '/tunel/',
 ]
 
 # ============================================================================
@@ -532,12 +537,21 @@ PHISHING_KIT_FILENAMES_STRONG = [
     'log.php', 'logs.php',           # Kit logging endpoints
     'rezult.php', 'result.php',
     'chk.php', 'check.php',
+    # v7.3.1: HTML credential-harvesting kits (Feb 2025 observed paths)
+    # These filenames are near-zero legitimate use.  No real site serves
+    # a page called "email-template.html" — it's a kit builder artifact
+    # where the author's internal name leaked into production.
+    'email-template.html',           # 29/121 observed kit paths — dominant
+    'project-template.html',         # 2/121 — same kit family, project lure
 ]
 
 PHISHING_KIT_FILENAMES_WEAK = [
     # Common on legitimate CMS — only flag in combination with other signals
     'login.php', 'verify.php', 'signin.php', 'update.php', 'confirm.php',
     'recover.php', 'reset.php', 'access.php',
+    # v7.3.1: HTML kit filenames that COULD appear on legitimate sites
+    # (e.g. a security tool page named "scan.html").  Only score via combos.
+    'scan.html',                     # 2/121 — common but not definitive alone
 ]
 
 # Exfiltration / drop script patterns detectable in HTML source.
