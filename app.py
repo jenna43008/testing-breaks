@@ -283,6 +283,14 @@ def display_results(results: list):
                 conf = row.get('mx_hijack_confidence', '')
                 ghost = row.get('mx_ghost_provider', '')
                 parts.append(f"🔓 MX hijack ({ghost}, {conf})")
+            # Subdomain delegation abuse
+            if row.get('subdomain_infra_divergent'):
+                conf = row.get('subdomain_divergence_confidence', '')
+                parts.append(f"🔀 Subdomain divergence ({conf})")
+            # CT reactivation (aged domain purchase)
+            if row.get('ct_reactivated'):
+                gap = row.get('ct_gap_months', 0)
+                parts.append(f"📜 CT reactivation ({gap}mo gap)")
             # Spam links
             spam_ct = row.get('hacklink_spam_link_count', 0)
             if spam_ct > 0:
@@ -353,6 +361,8 @@ def display_results(results: list):
             "is_empty_page": st.column_config.CheckboxColumn("📄 Empty", width="small"),
             "ct_log_count": st.column_config.NumberColumn("📜 CT Certs", width="small"),
             "mx_provider_mismatch": st.column_config.CheckboxColumn("🔓 MX Hijack", width="small"),
+            "subdomain_infra_divergent": st.column_config.CheckboxColumn("🔀 Sub Diverge", width="small"),
+            "ct_reactivated": st.column_config.CheckboxColumn("📜 CT React", width="small"),
             "asn_display": st.column_config.TextColumn("ASN", width="medium"),
             "rules_triggered": st.column_config.TextColumn("Rules Fired", width="medium"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
@@ -367,6 +377,7 @@ def display_results(results: list):
                         'vt_malicious_count', 'hacklink_detected',
                         'hacklink_malicious_script', 'hacklink_hidden_injection',
                         'domain_transfer_lock_missing', 'mx_provider_mismatch',
+                        'subdomain_infra_divergent', 'ct_reactivated',
                         'asn_display', 'rules_triggered',
                         'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
             safe_defaults = [c for c in desired_defaults if c in all_cols]
@@ -403,6 +414,8 @@ def display_results(results: list):
             summary_cols = ['domain', 'risk_score', 'recommendation', 'score_breakdown', 
                            'phishing_kit_filename', 'hacklink_spam_links_found',
                            'mx_provider_mismatch', 'mx_ghost_provider', 'mx_hijack_confidence',
+                           'subdomain_infra_divergent', 'subdomain_divergence_confidence',
+                           'ct_reactivated', 'ct_gap_months',
                            'summary']
             summary_cols = [c for c in summary_cols if c in df.columns]
             df[summary_cols].to_csv(summary_csv, index=False)
@@ -869,6 +882,7 @@ def display_results(results: list):
             domain_data.get('domain_transfer_lock_missing') or 
             domain_data.get('whois_recently_updated') or
             domain_data.get('mx_provider_mismatch') or
+            domain_data.get('subdomain_infra_divergent') or
             (domain_data.get('ct_recent_issuance') and domain_data.get('domain_age_days', 0) > 365)
         )
         if has_takeover_signal:
@@ -905,6 +919,25 @@ def display_results(results: list):
                     else:
                         st.info(f"**MX Provider Mismatch** — {ghost} residual detected (LOW — possible legitimate migration)")
                     st.code(f"• {evidence}", language=None)
+                
+                # Subdomain Delegation Abuse (v7.3.1)
+                if domain_data.get('subdomain_infra_divergent'):
+                    confidence = domain_data.get('subdomain_divergence_confidence', '')
+                    parent = domain_data.get('parent_domain', '')
+                    sub_evidence = domain_data.get('subdomain_divergence_evidence', '').replace(';', '\n• ')
+                    parent_ip = domain_data.get('parent_ip', '')
+                    parent_asn = domain_data.get('parent_asn', '')
+                    parent_asn_org = domain_data.get('parent_asn_org', '')
+                    parent_mx = domain_data.get('parent_mx_provider_type', '')
+                    
+                    if confidence == "HIGH":
+                        st.error(f"**🚨 SUBDOMAIN DELEGATION ABUSE** — `{domain_data.get('domain', '')}` points to different infrastructure than parent `{parent}` (HIGH confidence)")
+                    elif confidence == "MEDIUM":
+                        st.warning(f"**⚠️ Subdomain Infrastructure Divergence** — `{domain_data.get('domain', '')}` diverges from parent `{parent}` (MEDIUM confidence)")
+                    else:
+                        st.info(f"**Subdomain Infrastructure Divergence** — Minor divergence from parent `{parent}` (LOW)")
+                    
+                    st.code(f"• {sub_evidence}\n\nParent: {parent} → IP {parent_ip} (AS{parent_asn} {parent_asn_org}), MX: {parent_mx}", language=None)
                 
                 if domain_data.get('domain_transfer_lock_missing'):
                     age = domain_data.get('domain_age_days', -1)
@@ -945,6 +978,17 @@ def display_results(results: list):
                     st.error("**No CT history** — Zero certificates found; domain may never have been used for HTTPS")
                 elif domain_data.get('ct_recent_issuance') and domain_data.get('domain_age_days', 0) > 365:
                     st.warning(f"**Recent cert on old domain** — New certificate issued on {domain_data.get('domain_age_days')}d-old domain; possible takeover/reactivation")
+                
+                # v7.3.1: CT gap / aged domain purchase detection
+                ct_gap = domain_data.get('ct_gap_months', -1)
+                if domain_data.get('ct_reactivated'):
+                    st.error(f"**🚨 CT REACTIVATION** — {ct_gap} month gap in cert history, then recent cert. Domain likely purchased from auction/expiry.")
+                    st.code(domain_data.get('ct_gap_evidence', ''), language=None)
+                elif ct_gap >= 12:
+                    st.warning(f"**⚠️ CT Gap ({ct_gap} months)** — Significant gap in cert issuance history; may indicate period of inactivity/expiry.")
+                    gap_ev = domain_data.get('ct_gap_evidence', '')
+                    if gap_ev:
+                        st.code(gap_ev, language=None)
 
 
 def admin_view():
@@ -1015,8 +1059,10 @@ def admin_view():
                                     'hacklink_vulnerable_plugins', 'hacklink_spam_links'],
             "Malicious Script / Hidden Injection": ['malicious_script', 'hidden_injection', 'cpanel_detected'],
             "Transfer Lock / Domain Takeover": ['transfer_lock_missing', 'whois_recently_updated',
-                                                    'mx_hijack_high', 'mx_hijack_medium'],
-            "Empty Page / Cert Transparency": ['empty_page', 'ct_recent_issuance', 'ct_no_history'],
+                                                    'mx_hijack_high', 'mx_hijack_medium',
+                                                    'subdomain_delegation_high', 'subdomain_delegation_medium'],
+            "Empty Page / Cert Transparency": ['empty_page', 'ct_recent_issuance', 'ct_no_history',
+                                                'ct_reactivated', 'ct_gap_large'],
         }
         
         new_weights = {}
@@ -1095,6 +1141,17 @@ def admin_view():
             "DNS": {
                 "no_ptr": "No PTR (reverse DNS) record — enterprise filters may reject",
                 "ptr_mismatch": "PTR doesn't match forward DNS — triggers spam filters",
+            },
+            "Subdomain Delegation": {
+                "subdomain_delegation_high": "Subdomain delegation abuse (HIGH) — subdomain points to completely different ASN/IP/MX than parent domain; strong indicator of DNS compromise",
+                "subdomain_delegation_medium": "Subdomain infrastructure divergence (MEDIUM) — partial infrastructure mismatch between subdomain and parent",
+                "subdomain_delegation_low": "Subdomain infrastructure divergence (LOW) — minor difference from parent (informational, 0 points)",
+            },
+            "Certificate Transparency": {
+                "ct_recent_issuance": "SSL certificate issued within last 7 days — new deployment or reactivation",
+                "ct_no_history": "Zero certificates found in CT logs — domain may never have been used for HTTPS",
+                "ct_reactivated": "Aged domain with long CT gap (6+ months) then recent cert — likely purchased from auction/expiry",
+                "ct_gap_large": "CT gap ≥12 months without reactivation — domain was inactive for extended period",
             },
             "Trust & Authentication": {
                 "has_bimi": "BIMI record present — brand logo authentication (high trust)",
@@ -1226,6 +1283,8 @@ def admin_view():
                 "domain_gt_1yr": "Domain registered more than 1 year ago — established (used in takeover combos)",
                 "mx_hijack_high": "MX hijack fingerprint (HIGH) — SPF/DKIM still references enterprise provider (Google/Microsoft) but MX changed to self-hosted or budget; strong indicator of domain compromise",
                 "mx_hijack_medium": "MX provider mismatch (MEDIUM) — SPF references enterprise provider but MX doesn't match; could be hijack or stale migration",
+                "subdomain_delegation_high": "Subdomain delegation abuse (HIGH) — subdomain's IP/ASN/MX completely diverges from parent domain; strong DNS compromise indicator",
+                "subdomain_delegation_medium": "Subdomain infrastructure divergence (MEDIUM) — partial mismatch between subdomain and parent infrastructure",
             },
             "Empty Page": {
                 "empty_page": "Reachable domain returns empty or near-empty content (<50 chars) — parked, abandoned, or stripped post-compromise",
@@ -1233,6 +1292,8 @@ def admin_view():
             "Certificate Transparency": {
                 "ct_recent_issuance": "SSL certificate issued within last 7 days in CT logs — new deployment or reactivation",
                 "ct_no_history": "Zero certificates found in Certificate Transparency logs — domain may never have been used for HTTPS",
+                "ct_reactivated": "Aged domain with long CT gap (6+ months) then recent cert — likely purchased from auction/expiry to exploit reputation",
+                "ct_gap_large": "CT gap ≥12 months — domain had extended period of inactivity in cert logs",
             },
         }
         
