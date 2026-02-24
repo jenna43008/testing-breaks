@@ -475,6 +475,20 @@ class DomainApprovalResult:
     ct_issuers: str = ""                         # Semicolon-separated unique issuers
     ct_first_seen: str = ""                      # Earliest cert date in CT logs
     ct_last_seen: str = ""                       # Most recent cert date in CT logs
+    ct_gap_months: int = -1                      # v7.3.1: Largest gap in cert history (months)
+    ct_reactivated: bool = False                 # v7.3.1: Aged domain with long CT gap + recent cert (expired domain purchase)
+    ct_gap_evidence: str = ""                    # v7.3.1: Evidence string for CT gap
+    
+    # === SUBDOMAIN DELEGATION ABUSE (v7.3.1) ===
+    is_subdomain: bool = False                   # Submitted domain is a subdomain (not registrable root)
+    parent_domain: str = ""                      # The registrable parent domain
+    parent_ip: str = ""                          # Parent domain's resolved IP
+    parent_asn: str = ""                         # Parent domain's ASN
+    parent_asn_org: str = ""                     # Parent domain's ASN org
+    parent_mx_provider_type: str = ""            # Parent domain's MX provider type
+    subdomain_infra_divergent: bool = False      # Subdomain points to different infrastructure than parent
+    subdomain_divergence_evidence: str = ""      # Evidence of divergence
+    subdomain_divergence_confidence: str = ""    # HIGH, MEDIUM, LOW
 
 
 # ============================================================================
@@ -1279,6 +1293,236 @@ def detect_mx_provider_mismatch(
     result["evidence"] = evidence
     result["confidence"] = confidence
     
+    return result
+
+
+def get_registrable_domain(hostname: str) -> str:
+    """Extract the registrable domain from a hostname.
+    
+    Uses same compound TLD logic as _extract_base_and_tld.
+    Examples:
+        mail.example.com → example.com
+        portal.sub.example.co.uk → example.co.uk
+        example.com → example.com
+    """
+    hostname = hostname.lower().strip().rstrip('.')
+    SLD_INDICATORS = {'com', 'co', 'org', 'net', 'ac', 'gov', 'edu', 'me', 'gen', 'mil'}
+    parts = hostname.split('.')
+    
+    if len(parts) >= 3:
+        sld = parts[-2]
+        cctld = parts[-1]
+        if sld in SLD_INDICATORS and len(cctld) <= 3:
+            # Compound TLD: need at least 3 parts for registrable
+            return '.'.join(parts[-3:])
+    
+    if len(parts) >= 2:
+        return '.'.join(parts[-2:])
+    
+    return hostname
+
+
+def is_subdomain_of(domain: str, parent: str) -> bool:
+    """Check if domain is a subdomain of parent (not the parent itself)."""
+    d = domain.lower().rstrip('.')
+    p = parent.lower().rstrip('.')
+    return d != p and d.endswith('.' + p)
+
+
+def detect_subdomain_delegation_abuse(
+    submitted_domain: str,
+    submitted_ip: str,
+    submitted_asn: str,
+    submitted_mx_provider_type: str,
+    config: dict,
+) -> Dict:
+    """Detect subdomain delegation abuse — subdomain points to different infra than parent.
+    
+    Attackers who gain DNS access to a legitimate company can create subdomains
+    (mail.legit.com, portal.legit.com) pointing to their own infrastructure.
+    The parent domain passes all trust checks (aged, enterprise MX, DMARC).
+    
+    This function resolves the parent domain and compares infrastructure signals.
+    
+    Returns dict with: is_subdomain, parent_domain, parent_ip, parent_asn, parent_asn_org,
+                       parent_mx_provider_type, divergent (bool), evidence (list), confidence
+    """
+    result = {
+        "is_subdomain": False,
+        "parent_domain": "",
+        "parent_ip": "",
+        "parent_asn": "",
+        "parent_asn_org": "",
+        "parent_mx_provider_type": "",
+        "divergent": False,
+        "evidence": [],
+        "confidence": "",
+    }
+    
+    parent = get_registrable_domain(submitted_domain)
+    if not parent or parent == submitted_domain.lower().rstrip('.'):
+        return result  # Not a subdomain
+    
+    result["is_subdomain"] = True
+    result["parent_domain"] = parent
+    
+    # Resolve parent IP
+    try:
+        parent_ip = socket.gethostbyname(parent)
+        result["parent_ip"] = parent_ip
+    except Exception:
+        # Parent doesn't resolve — could be parked or expired.
+        # Not enough info to call delegation abuse.
+        return result
+    
+    # Get parent ASN
+    parent_asn, parent_asn_org = get_asn_info(parent_ip)
+    result["parent_asn"] = parent_asn
+    result["parent_asn_org"] = parent_asn_org
+    
+    # Get parent MX provider
+    try:
+        parent_mx_exists, parent_mx_records, _ = get_mx(parent)
+        if parent_mx_records:
+            result["parent_mx_provider_type"] = classify_mx_provider(
+                parent_mx_records, parent, config
+            )
+    except Exception:
+        pass
+    
+    evidence = []
+    
+    # --- Infrastructure comparison ---
+    
+    # 1. IP comparison: same /24 subnet?
+    same_subnet = False
+    if submitted_ip and parent_ip:
+        sub_parts = submitted_ip.split('.')
+        par_parts = parent_ip.split('.')
+        if len(sub_parts) == 4 and len(par_parts) == 4:
+            same_subnet = sub_parts[:3] == par_parts[:3]
+            if not same_subnet and submitted_ip != parent_ip:
+                evidence.append(f"Different IP: subdomain={submitted_ip}, parent={parent_ip}")
+    
+    # 2. ASN comparison: same network?
+    same_asn = (submitted_asn == parent_asn) if submitted_asn and parent_asn else True
+    if not same_asn:
+        evidence.append(
+            f"Different ASN: subdomain=AS{submitted_asn} ({submitted_asn}), "
+            f"parent=AS{parent_asn} ({parent_asn_org})"
+        )
+    
+    # 3. MX provider divergence: parent has enterprise, subdomain has self-hosted/disposable?
+    parent_mx = result["parent_mx_provider_type"]
+    mx_divergent = False
+    if parent_mx == "enterprise" and submitted_mx_provider_type in ("selfhosted", "disposable", "unknown"):
+        mx_divergent = True
+        evidence.append(
+            f"MX divergence: parent={parent_mx}, subdomain={submitted_mx_provider_type}"
+        )
+    
+    if not evidence:
+        return result  # Infrastructure matches — no divergence
+    
+    # Determine confidence
+    result["divergent"] = True
+    
+    if not same_asn and mx_divergent:
+        result["confidence"] = "HIGH"
+    elif not same_asn and not same_subnet:
+        result["confidence"] = "HIGH"
+    elif not same_asn:
+        result["confidence"] = "MEDIUM"
+    elif mx_divergent:
+        result["confidence"] = "MEDIUM"
+    elif not same_subnet:
+        result["confidence"] = "LOW"
+    else:
+        result["confidence"] = "LOW"
+    
+    result["evidence"] = evidence
+    return result
+
+
+def detect_ct_gap(
+    ct_dates: List[datetime],
+    domain_age_days: int,
+    ct_recent_issuance: bool,
+    whois_recently_updated: bool,
+) -> Dict:
+    """Detect aged domain purchase via Certificate Transparency gap analysis.
+    
+    When attackers buy expired-but-aged domains from auction sites, the CT logs
+    show a characteristic gap: active certs for years, then a long silence
+    (6+ months), then a sudden new cert. The domain_age_days is high (passes
+    age checks) but the cert history reveals the domain was dead.
+    
+    Args:
+        ct_dates: Sorted list of cert not_before datetimes from CT logs
+        domain_age_days: Domain age in days
+        ct_recent_issuance: Whether most recent cert is within 7 days
+        whois_recently_updated: Whether WHOIS was updated recently
+    
+    Returns dict with: gap_months, reactivated (bool), evidence (str)
+    """
+    result = {
+        "gap_months": -1,
+        "reactivated": False,
+        "evidence": "",
+    }
+    
+    if len(ct_dates) < 2:
+        return result
+    
+    # Only relevant for established domains — new domains can't have gaps
+    if domain_age_days >= 0 and domain_age_days < 365:
+        return result
+    
+    # Find the largest gap between consecutive cert issuances
+    max_gap_days = 0
+    gap_start = None
+    gap_end = None
+    
+    for i in range(1, len(ct_dates)):
+        gap = (ct_dates[i] - ct_dates[i-1]).days
+        if gap > max_gap_days:
+            max_gap_days = gap
+            gap_start = ct_dates[i-1]
+            gap_end = ct_dates[i]
+    
+    gap_months = max_gap_days // 30
+    result["gap_months"] = gap_months
+    
+    if gap_months < 6:
+        return result  # Normal cert renewal gap
+    
+    # We have a significant gap (6+ months). Now check if it looks like reactivation.
+    now = datetime.now(timezone.utc)
+    
+    # How recent is the cert after the gap?
+    if gap_end:
+        days_since_reactivation = (now - gap_end).days
+    else:
+        return result
+    
+    evidence_parts = []
+    evidence_parts.append(
+        f"{gap_months}mo gap in CT logs ({gap_start.strftime('%Y-%m') if gap_start else '?'} "
+        f"→ {gap_end.strftime('%Y-%m') if gap_end else '?'})"
+    )
+    
+    # Reactivation = gap ended recently (within 90 days) on an aged domain
+    if days_since_reactivation <= 90 and domain_age_days > 365:
+        result["reactivated"] = True
+        evidence_parts.append(
+            f"Domain is {domain_age_days}d old but cert activity resumed {days_since_reactivation}d ago"
+        )
+        if whois_recently_updated:
+            evidence_parts.append("WHOIS also recently updated — likely domain purchase/transfer")
+        if ct_recent_issuance:
+            evidence_parts.append("New cert issued in last 7 days")
+    
+    result["evidence"] = "; ".join(evidence_parts)
     return result
 
 
@@ -3479,6 +3723,7 @@ def check_cert_transparency(domain: str, timeout: float = 8.0) -> dict:
         "issuers": [],
         "first_seen": "",
         "last_seen": "",
+        "dates": [],  # v7.3.1: sorted list of cert datetimes for gap analysis
     }
     if not REQUESTS_AVAILABLE:
         return result
@@ -3534,6 +3779,7 @@ def check_cert_transparency(domain: str, timeout: float = 8.0) -> dict:
                 result["recent_issuance"] = True
         
         result["issuers"] = sorted(issuers)[:10]  # Cap at 10 unique issuers
+        result["dates"] = dates  # v7.3.1: sorted dates for gap analysis
         
     except Exception:
         pass
@@ -3768,6 +4014,31 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.ct_issuers:
         issuers = res.ct_issuers.replace(";", ", ")
         positives.append(f"CT issuers: {issuers}")
+    
+    # v7.3.1: CT gap — aged domain purchase
+    if res.ct_reactivated:
+        all_issues.append(f"🚨 CT REACTIVATION ({res.ct_gap_months}mo gap) → {res.ct_gap_evidence}")
+    elif res.ct_gap_months >= 12:
+        all_issues.append(f"⚠️ CT GAP ({res.ct_gap_months}mo) → {res.ct_gap_evidence}")
+    
+    # v7.3.1: Subdomain delegation abuse
+    if res.subdomain_infra_divergent:
+        evidence_str = res.subdomain_divergence_evidence.replace(";", ", ")
+        conf = res.subdomain_divergence_confidence
+        if conf == "HIGH":
+            all_issues.append(
+                f"🚨 SUBDOMAIN DELEGATION ABUSE ({res.parent_domain} → {domain}, HIGH confidence) → {evidence_str}"
+            )
+        elif conf == "MEDIUM":
+            all_issues.append(
+                f"⚠️ SUBDOMAIN INFRA DIVERGENCE ({res.parent_domain} → {domain}, MEDIUM) → {evidence_str}"
+            )
+        else:
+            all_issues.append(
+                f"SUBDOMAIN INFRA DIVERGENCE ({res.parent_domain} → {domain}, LOW) → {evidence_str}"
+            )
+    elif res.is_subdomain and res.parent_domain:
+        positives.append(f"Subdomain of {res.parent_domain} — infrastructure matches parent")
     
     # === EMAIL AUTHENTICATION ===
     if not res.dmarc_exists:
@@ -4059,7 +4330,11 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('MX HIJACK FINGERPRINT', weights.get('mx_hijack_high', 30)),
             ('MX PROVIDER MISMATCH', weights.get('mx_hijack_medium', 15)),
             ('CT RECENT ISSUANCE ON OLD', weights.get('ct_recent_issuance', 8)),
+            ('CT REACTIVATION', weights.get('ct_reactivated', 25)),
+            ('CT GAP', weights.get('ct_gap_large', 10)),
             ('NO CT HISTORY', weights.get('ct_no_history', 12)),
+            ('SUBDOMAIN DELEGATION ABUSE', weights.get('subdomain_delegation_high', 25)),
+            ('SUBDOMAIN INFRA DIVERGENCE', weights.get('subdomain_delegation_medium', 12)),
             ('SENSITIVE FORM', weights.get('sensitive_fields', 12)),
             ('TECH SUPPORT SCAM TLD', weights.get('tech_support_tld', 12)),
             ('DISPOSABLE MX', weights.get('mx_disposable', 10)),
@@ -4224,7 +4499,11 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('PTR MISMATCH', ['ptr_mismatch']),
         ('CT RECENT ISSUANCE ON OLD', ['ct_recent_issuance']),
         ('CT RECENT CERT ISSUANCE', ['ct_recent_issuance']),
+        ('CT REACTIVATION', ['ct_reactivated']),
+        ('CT GAP', ['ct_gap_large']),
         ('NO CT HISTORY', ['ct_no_history']),
+        ('SUBDOMAIN DELEGATION ABUSE', ['subdomain_delegation_high']),
+        ('SUBDOMAIN INFRA DIVERGENCE', ['subdomain_delegation_high', 'subdomain_delegation_medium', 'subdomain_delegation_low']),
         ('VULNERABLE WP PLUGINS', ['hacklink_vulnerable_plugins', 'vuln_plugins_no_compromise_mitigated']),
         ('HIDDEN CONTENT INJECTION', ['hidden_injection']),
         ('HACKLINK', ['hacklink_keywords']),
@@ -4741,6 +5020,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         "opaque_entity", "sensitive_fields", "phishing_js", "doc_lure",
         "vt_malicious", "vt_malicious_medium", "vt_suspicious",
         "blocked_asn", "mx_hijack_high", "mx_hijack_medium",
+        "subdomain_delegation_high", "subdomain_delegation_medium",
+        "ct_reactivated",
     }
     if (res.domain_transfer_lock_recent or res.whois_recently_updated):
         has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
@@ -4769,6 +5050,21 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     
     if res.ct_log_count == 0:
         add("ct_no_history", weights.get('ct_no_history', 15))
+    
+    # v7.3.1: CT gap — aged domain purchase detection
+    if res.ct_reactivated:
+        add("ct_reactivated", weights.get('ct_reactivated', 25))
+    elif res.ct_gap_months >= 12:
+        add("ct_gap_large", weights.get('ct_gap_large', 10))  # Large gap but not recent reactivation
+    
+    # v7.3.1: Subdomain delegation abuse
+    if res.subdomain_infra_divergent:
+        if res.subdomain_divergence_confidence == "HIGH":
+            add("subdomain_delegation_high", weights.get('subdomain_delegation_high', 25))
+        elif res.subdomain_divergence_confidence == "MEDIUM":
+            add("subdomain_delegation_medium", weights.get('subdomain_delegation_medium', 12))
+        else:
+            add("subdomain_delegation_low", weights.get('subdomain_delegation_low', 0))  # informational
     
     # === MITIGATIONS (strong counter-signals reduce risk from ambiguous indicators) ===
     # JS redirect + minimal shell is the classic phishing dropper fingerprint, but it's
@@ -5213,6 +5509,25 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.hosting_asn = hosting_result["asn"]
     res.hosting_asn_org = hosting_result["asn_org"]
     
+    # v7.3.1: Subdomain Delegation Abuse Detection
+    sub_result = detect_subdomain_delegation_abuse(
+        submitted_domain=domain,
+        submitted_ip=res.ip_address,
+        submitted_asn=res.hosting_asn,
+        submitted_mx_provider_type=res.mx_provider_type,
+        config=config,
+    )
+    res.is_subdomain = sub_result["is_subdomain"]
+    res.parent_domain = sub_result["parent_domain"]
+    res.parent_ip = sub_result["parent_ip"]
+    res.parent_asn = sub_result["parent_asn"]
+    res.parent_asn_org = sub_result["parent_asn_org"]
+    res.parent_mx_provider_type = sub_result["parent_mx_provider_type"]
+    if sub_result["divergent"]:
+        res.subdomain_infra_divergent = True
+        res.subdomain_divergence_evidence = ";".join(sub_result["evidence"])
+        res.subdomain_divergence_confidence = sub_result["confidence"]
+    
     # Nameserver Risk Detection
     ns_risk_config = config.get("ns_risk_patterns", {})
     ns_risk = check_ns_risk(ns_records, ns_risk_config)
@@ -5524,6 +5839,19 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.ct_issuers = ";".join(ct["issuers"])
         res.ct_first_seen = ct["first_seen"]
         res.ct_last_seen = ct["last_seen"]
+        
+        # v7.3.1: CT gap analysis — detect aged domain purchases
+        ct_dates = ct.get("dates", [])
+        if ct_dates:
+            ct_gap = detect_ct_gap(
+                ct_dates=ct_dates,
+                domain_age_days=res.domain_age_days,
+                ct_recent_issuance=res.ct_recent_issuance,
+                whois_recently_updated=res.whois_recently_updated,
+            )
+            res.ct_gap_months = ct_gap["gap_months"]
+            res.ct_reactivated = ct_gap["reactivated"]
+            res.ct_gap_evidence = ct_gap["evidence"]
     except Exception:
         pass
     
