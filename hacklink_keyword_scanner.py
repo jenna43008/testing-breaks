@@ -148,6 +148,10 @@ CDN_WHITELIST = {
     # Cookie consent / compliance
     "cdn.cookielaw.org", "cdn.cookie-script.com",
     "cookiescript.com",
+    "cdn.privacy-mgmt.com", "privacy-mgmt.com",  # SourcePoint consent management platform
+    
+    # Browser compatibility
+    "browser-update.org",  # Open-source browser update notification library
     
     # Push notifications
     "cdn.onesignal.com", "onesignal.com",
