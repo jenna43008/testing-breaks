@@ -83,7 +83,7 @@ def parse_domains(text: str) -> list:
         d = d.strip('/').strip('.')
         if d and '.' in d:
             domains.append(d)
-    return list(dict.fromkeys(domains))  # Remove duplicates, preserve order
+    return domains  # Return all entries in input order, including duplicates
 
 
 def run_analysis(domains: list, config: dict, progress_callback=None) -> list:
