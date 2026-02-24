@@ -291,6 +291,20 @@ def display_results(results: list):
             if row.get('ct_reactivated'):
                 gap = row.get('ct_gap_months', 0)
                 parts.append(f"📜 CT reactivation ({gap}mo gap)")
+            # v7.3.1: OAuth consent phishing
+            if row.get('has_oauth_phish'):
+                parts.append("🔑 OAuth phish")
+            # v7.3.1: Homoglyph / IDN spoofing
+            if row.get('is_homoglyph_domain'):
+                target = row.get('homoglyph_target', '')
+                parts.append(f"🔤 Homoglyph ({target})")
+            # v7.3.1: Quishing profile
+            if row.get('quishing_profile'):
+                parts.append("📱 Quishing")
+            # v7.3.1: CDN tunnel abuse
+            if row.get('cdn_tunnel_suspect'):
+                cdn = row.get('cdn_provider', '')
+                parts.append(f"☁️ CDN tunnel ({cdn})")
             # Spam links
             spam_ct = row.get('hacklink_spam_link_count', 0)
             if spam_ct > 0:
@@ -363,6 +377,10 @@ def display_results(results: list):
             "mx_provider_mismatch": st.column_config.CheckboxColumn("🔓 MX Hijack", width="small"),
             "subdomain_infra_divergent": st.column_config.CheckboxColumn("🔀 Sub Diverge", width="small"),
             "ct_reactivated": st.column_config.CheckboxColumn("📜 CT React", width="small"),
+            "has_oauth_phish": st.column_config.CheckboxColumn("🔑 OAuth", width="small"),
+            "is_homoglyph_domain": st.column_config.CheckboxColumn("🔤 Homoglyph", width="small"),
+            "quishing_profile": st.column_config.CheckboxColumn("📱 Quish", width="small"),
+            "cdn_tunnel_suspect": st.column_config.CheckboxColumn("☁️ CDN Tunnel", width="small"),
             "asn_display": st.column_config.TextColumn("ASN", width="medium"),
             "rules_triggered": st.column_config.TextColumn("Rules Fired", width="medium"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
@@ -378,6 +396,8 @@ def display_results(results: list):
                         'hacklink_malicious_script', 'hacklink_hidden_injection',
                         'domain_transfer_lock_missing', 'mx_provider_mismatch',
                         'subdomain_infra_divergent', 'ct_reactivated',
+                        'has_oauth_phish', 'is_homoglyph_domain',
+                        'quishing_profile', 'cdn_tunnel_suspect',
                         'asn_display', 'rules_triggered',
                         'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
             safe_defaults = [c for c in desired_defaults if c in all_cols]
@@ -416,6 +436,8 @@ def display_results(results: list):
                            'mx_provider_mismatch', 'mx_ghost_provider', 'mx_hijack_confidence',
                            'subdomain_infra_divergent', 'subdomain_divergence_confidence',
                            'ct_reactivated', 'ct_gap_months',
+                           'has_oauth_phish', 'is_homoglyph_domain', 'homoglyph_target',
+                           'quishing_profile', 'cdn_tunnel_suspect', 'cdn_provider',
                            'summary']
             summary_cols = [c for c in summary_cols if c in df.columns]
             df[summary_cols].to_csv(summary_csv, index=False)
@@ -989,6 +1011,47 @@ def display_results(results: list):
                     gap_ev = domain_data.get('ct_gap_evidence', '')
                     if gap_ev:
                         st.code(gap_ev, language=None)
+        
+        # === v7.3.1: OAUTH CONSENT PHISHING ===
+        if domain_data.get('has_oauth_phish'):
+            with st.expander("🔑 OAuth Consent Phishing", expanded=True):
+                st.error("**OAuth consent phishing detected** — Page contains outbound links to Microsoft/Google OAuth authorization endpoints. Attacker tricks users into granting malicious app permissions (mail read, file access, etc.) instead of harvesting credentials directly.")
+                evidence = domain_data.get('oauth_phish_evidence', '')
+                if evidence:
+                    st.code(evidence.replace(';', '\n'), language=None)
+                st.caption("This bypasses password field detection because no credentials are entered on the phishing domain itself.")
+        
+        # === v7.3.1: HOMOGLYPH / IDN SPOOFING ===
+        if domain_data.get('is_homoglyph_domain'):
+            with st.expander("🔤 Homoglyph / IDN Spoofing", expanded=True):
+                target = domain_data.get('homoglyph_target', '')
+                decoded = domain_data.get('homoglyph_decoded', '')
+                st.error(f"**IDN homoglyph attack** — Domain uses Unicode lookalike characters to impersonate **{target}**")
+                if decoded:
+                    st.metric("Displays as", decoded)
+                st.code(f"Punycode: {domain_data.get('domain', '')}\nUnicode:  {decoded}\nTarget:   {target}", language=None)
+                st.caption("Cyrillic/Greek characters that are visually identical to Latin letters in most fonts. Users cannot distinguish this from the real domain.")
+        
+        # === v7.3.1: QUISHING PROFILE ===
+        if domain_data.get('quishing_profile'):
+            with st.expander("📱 QR Code Phishing (Quishing)", expanded=True):
+                st.warning("**Quishing profile detected** — Domain matches the behavioral fingerprint of a QR code phishing landing page: minimal content, new domain, phishing-associated TLD, and no organic web presence.")
+                evidence = domain_data.get('quishing_evidence', '')
+                if evidence:
+                    st.code(evidence.replace(';', '\n'), language=None)
+                st.caption("These domains exist solely as QR code scan destinations, often printed on fake parking meters, emails, or physical flyers.")
+        
+        # === v7.3.1: CDN TUNNEL ABUSE ===
+        if domain_data.get('cdn_tunnel_suspect'):
+            with st.expander("☁️ CDN Tunnel Abuse", expanded=True):
+                cdn = domain_data.get('cdn_provider', '')
+                st.warning(f"**CDN tunnel abuse suspected** — Domain resolves to **{cdn}** IPs (looks reputable), but shows suspicious signals suggesting the hidden origin server is attacker-controlled.")
+                evidence = domain_data.get('cdn_tunnel_evidence', '')
+                if evidence:
+                    st.code(evidence.replace(';', '\n'), language=None)
+                st.caption(f"The domain's SSL cert is a {cdn} universal/edge cert — it proves nothing about the origin server. Cloudflare Tunnels and similar services let anyone proxy through CDN IPs.")
+        elif domain_data.get('is_cdn_hosted') and domain_data.get('cdn_provider'):
+            st.info(f"☁️ **CDN-hosted** ({domain_data['cdn_provider']}) — Origin server hidden behind CDN proxy. No abuse indicators detected.")
 
 
 def admin_view():
@@ -1045,12 +1108,14 @@ def admin_view():
             "Content/Phishing": ['credential_form', 'brand_impersonation', 'phishing_paths',
                                 'malware_links', 'minimal_shell', 'js_redirect',
                                 'phishing_kit_filename_strong', 'phishing_kit_detected', 'exfil_drop_script',
-                                'form_action_kit_strong', 'suspicious_page_title', 'whois_privacy'],
+                                'form_action_kit_strong', 'suspicious_page_title', 'whois_privacy',
+                                'oauth_phish'],
             "Domain Name Patterns": ['suspicious_prefix', 'suspicious_suffix', 
                                      'tech_support_tld', 'domain_brand_impersonation',
                                      'brand_spoofing_keyword',
-                                     'tld_variant_spoofing'],
-            "Hosting Provider": ['hosting_budget_shared', 'hosting_free', 'hosting_suspect'],
+                                     'tld_variant_spoofing', 'homoglyph_domain'],
+            "Hosting Provider": ['hosting_budget_shared', 'hosting_free', 'hosting_suspect',
+                                 'cdn_tunnel_suspect'],
             "Nameserver Risk": ['ns_dynamic_dns', 'ns_parking', 'ns_lame_delegation', 'ns_free_dns', 'ns_single_ns'],
             "Bonuses (Reduce Score)": ['has_bimi', 'has_mta_sts'],
             "VirusTotal": ['vt_malicious_high', 'vt_malicious_medium', 'vt_malicious_low',
@@ -1062,7 +1127,7 @@ def admin_view():
                                                     'mx_hijack_high', 'mx_hijack_medium',
                                                     'subdomain_delegation_high', 'subdomain_delegation_medium'],
             "Empty Page / Cert Transparency": ['empty_page', 'ct_recent_issuance', 'ct_no_history',
-                                                'ct_reactivated', 'ct_gap_large'],
+                                                'ct_reactivated', 'ct_gap_large', 'quishing_profile'],
         }
         
         new_weights = {}
@@ -1152,6 +1217,18 @@ def admin_view():
                 "ct_no_history": "Zero certificates found in CT logs — domain may never have been used for HTTPS",
                 "ct_reactivated": "Aged domain with long CT gap (6+ months) then recent cert — likely purchased from auction/expiry",
                 "ct_gap_large": "CT gap ≥12 months without reactivation — domain was inactive for extended period",
+            },
+            "OAuth / Consent Phishing": {
+                "oauth_phish": "Page contains outbound links to Microsoft/Google OAuth authorization endpoints with suspicious parameters (response_type=code, redirect_uri, excessive scopes). Attacker tricks users into granting malicious app permissions instead of harvesting passwords directly.",
+            },
+            "Homoglyph / IDN Spoofing": {
+                "homoglyph_domain": "Domain uses Unicode/IDN homoglyphs (Cyrillic а, Greek ο, etc.) to visually impersonate a protected brand. The punycode (xn--) representation decodes to characters that look identical to Latin letters in most fonts.",
+            },
+            "QR Code Phishing (Quishing)": {
+                "quishing_profile": "Domain matches the behavioral fingerprint of a QR code phishing landing page: quishing-associated TLD (.page, .link, .click), minimal content, new domain, no CT history, and/or credential form or OAuth phish endpoint.",
+            },
+            "CDN Tunnel Abuse": {
+                "cdn_tunnel_suspect": "Domain resolves to CDN/proxy provider IPs (Cloudflare, Fastly, etc.) but shows suspicious signals: new domain, no CT history, minimal content, or credential forms. The CDN's universal SSL cert masks the hidden attacker-controlled origin server.",
             },
             "Trust & Authentication": {
                 "has_bimi": "BIMI record present — brand logo authentication (high trust)",
@@ -1294,6 +1371,18 @@ def admin_view():
                 "ct_no_history": "Zero certificates found in Certificate Transparency logs — domain may never have been used for HTTPS",
                 "ct_reactivated": "Aged domain with long CT gap (6+ months) then recent cert — likely purchased from auction/expiry to exploit reputation",
                 "ct_gap_large": "CT gap ≥12 months — domain had extended period of inactivity in cert logs",
+            },
+            "OAuth / Consent Phishing": {
+                "oauth_phish": "Page contains OAuth authorization endpoint links (Microsoft/Google) — consent phishing bypasses credential form detection",
+            },
+            "Homoglyph / IDN Spoofing": {
+                "homoglyph_domain": "Domain uses Unicode/IDN homoglyphs to visually impersonate a protected brand — Cyrillic а, Greek ο, etc. look identical to Latin in most fonts",
+            },
+            "QR Code Phishing (Quishing)": {
+                "quishing_profile": "Domain matches quishing behavioral fingerprint — minimal content, new domain, phishing TLD, no CT history",
+            },
+            "CDN Tunnel Abuse": {
+                "cdn_tunnel_suspect": "Domain behind CDN proxy with suspicious signals — attacker may use CDN tunnel to hide phishing origin behind reputable IPs",
             },
         }
         
