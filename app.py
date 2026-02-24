@@ -278,6 +278,11 @@ def display_results(results: list):
             # Hidden injection
             if row.get('hacklink_hidden_injection') and row.get('hacklink_hidden_injection_confidence') == 'HIGH':
                 parts.append("💉 Hidden inject")
+            # MX hijack
+            if row.get('mx_provider_mismatch'):
+                conf = row.get('mx_hijack_confidence', '')
+                ghost = row.get('mx_ghost_provider', '')
+                parts.append(f"🔓 MX hijack ({ghost}, {conf})")
             # Spam links
             spam_ct = row.get('hacklink_spam_link_count', 0)
             if spam_ct > 0:
@@ -347,6 +352,7 @@ def display_results(results: list):
             "domain_transfer_lock_missing": st.column_config.CheckboxColumn("🔓 No Lock", width="small"),
             "is_empty_page": st.column_config.CheckboxColumn("📄 Empty", width="small"),
             "ct_log_count": st.column_config.NumberColumn("📜 CT Certs", width="small"),
+            "mx_provider_mismatch": st.column_config.CheckboxColumn("🔓 MX Hijack", width="small"),
             "asn_display": st.column_config.TextColumn("ASN", width="medium"),
             "rules_triggered": st.column_config.TextColumn("Rules Fired", width="medium"),
             "summary": st.column_config.TextColumn("Summary", width="large"),
@@ -360,7 +366,7 @@ def display_results(results: list):
             desired_defaults = ['domain', 'risk_score', 'recommendation', 'summary', 
                         'vt_malicious_count', 'hacklink_detected',
                         'hacklink_malicious_script', 'hacklink_hidden_injection',
-                        'domain_transfer_lock_missing',
+                        'domain_transfer_lock_missing', 'mx_provider_mismatch',
                         'asn_display', 'rules_triggered',
                         'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
             safe_defaults = [c for c in desired_defaults if c in all_cols]
@@ -395,7 +401,9 @@ def display_results(results: list):
             # Summary CSV (just key columns)
             summary_csv = BytesIO()
             summary_cols = ['domain', 'risk_score', 'recommendation', 'score_breakdown', 
-                           'phishing_kit_filename', 'hacklink_spam_links_found', 'summary']
+                           'phishing_kit_filename', 'hacklink_spam_links_found',
+                           'mx_provider_mismatch', 'mx_ghost_provider', 'mx_hijack_confidence',
+                           'summary']
             summary_cols = [c for c in summary_cols if c in df.columns]
             df[summary_cols].to_csv(summary_csv, index=False)
             summary_csv.seek(0)
@@ -860,6 +868,7 @@ def display_results(results: list):
         has_takeover_signal = (
             domain_data.get('domain_transfer_lock_missing') or 
             domain_data.get('whois_recently_updated') or
+            domain_data.get('mx_provider_mismatch') or
             (domain_data.get('ct_recent_issuance') and domain_data.get('domain_age_days', 0) > 365)
         )
         if has_takeover_signal:
@@ -883,6 +892,19 @@ def display_results(results: list):
                 statuses = domain_data.get('whois_statuses', '')
                 if statuses:
                     st.caption(f"Domain statuses: {statuses.replace(';', ', ')}")
+                
+                # MX Hijack Fingerprint (v7.3.1)
+                if domain_data.get('mx_provider_mismatch'):
+                    confidence = domain_data.get('mx_hijack_confidence', '')
+                    ghost = domain_data.get('mx_ghost_provider', '')
+                    evidence = domain_data.get('mx_ghost_evidence', '').replace(';', '\n• ')
+                    if confidence == "HIGH":
+                        st.error(f"**🚨 MX HIJACK FINGERPRINT** — {ghost} ghost detected (HIGH confidence)")
+                    elif confidence == "MEDIUM":
+                        st.warning(f"**⚠️ MX Provider Mismatch** — {ghost} ghost detected (MEDIUM confidence)")
+                    else:
+                        st.info(f"**MX Provider Mismatch** — {ghost} residual detected (LOW — possible legitimate migration)")
+                    st.code(f"• {evidence}", language=None)
                 
                 if domain_data.get('domain_transfer_lock_missing'):
                     age = domain_data.get('domain_age_days', -1)
@@ -992,7 +1014,8 @@ def admin_view():
             "Hacklink / SEO Spam": ['hacklink_detected', 'hacklink_keywords', 'hacklink_wp_compromised',
                                     'hacklink_vulnerable_plugins', 'hacklink_spam_links'],
             "Malicious Script / Hidden Injection": ['malicious_script', 'hidden_injection', 'cpanel_detected'],
-            "Transfer Lock / Domain Takeover": ['transfer_lock_missing', 'whois_recently_updated'],
+            "Transfer Lock / Domain Takeover": ['transfer_lock_missing', 'whois_recently_updated',
+                                                    'mx_hijack_high', 'mx_hijack_medium'],
             "Empty Page / Cert Transparency": ['empty_page', 'ct_recent_issuance', 'ct_no_history'],
         }
         
@@ -1065,6 +1088,9 @@ def admin_view():
                 "mx_disposable": "Disposable/temporary MX provider — commonly used for spam",
                 "mx_selfhosted": "Self-hosted MX — mail server on own domain, no external oversight",
                 "mx_mail_prefix": "MX is mail.{domain} — common phishing infrastructure template pattern",
+                "mx_hijack_high": "MX hijack fingerprint (HIGH) — SPF/DKIM ghosts enterprise provider but MX changed to self-hosted/budget; strong domain compromise indicator",
+                "mx_hijack_medium": "MX provider mismatch (MEDIUM) — SPF references enterprise provider but MX doesn't match; possible hijack or stale migration",
+                "mx_hijack_low": "MX provider mismatch (LOW) — DKIM-only ghost detected; likely residual from legitimate migration (informational, 0 points)",
             },
             "DNS": {
                 "no_ptr": "No PTR (reverse DNS) record — enterprise filters may reject",
@@ -1198,6 +1224,8 @@ def admin_view():
                 "transfer_lock_missing": "Domain missing clientTransferProhibited status — not locked against unauthorized transfers",
                 "whois_recently_updated": "WHOIS record updated within last 30 days — possible ownership change, transfer, or DNS hijack",
                 "domain_gt_1yr": "Domain registered more than 1 year ago — established (used in takeover combos)",
+                "mx_hijack_high": "MX hijack fingerprint (HIGH) — SPF/DKIM still references enterprise provider (Google/Microsoft) but MX changed to self-hosted or budget; strong indicator of domain compromise",
+                "mx_hijack_medium": "MX provider mismatch (MEDIUM) — SPF references enterprise provider but MX doesn't match; could be hijack or stale migration",
             },
             "Empty Page": {
                 "empty_page": "Reachable domain returns empty or near-empty content (<50 chars) — parked, abandoned, or stripped post-compromise",
