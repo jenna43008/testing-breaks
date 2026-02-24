@@ -950,7 +950,7 @@ class HacklinkKeywordScanner:
             findings.extend(meta_anomalies)
 
         # ----- 7. Excessive Outbound Links to Gambling/Pharma -----
-        spam_links = self._count_spam_outbound_links(page_content)
+        spam_links, spam_link_urls = self._count_spam_outbound_links(page_content)
         if spam_links > 10:
             score = min(score + 10, 30)
             hacklink_content_score += 10
@@ -1081,6 +1081,7 @@ class HacklinkKeywordScanner:
             "wp_plugins": wp_plugins,
             "vulnerable_plugins": vulnerable_plugins,
             "spam_link_count": spam_links,
+            "spam_link_urls": spam_link_urls,
             "malicious_script_confidence": malicious_script_confidence,
             "malicious_script_signals": [s[0] for s in soc_signals],
             "malicious_script_score": soc_score_val,
@@ -1375,20 +1376,23 @@ class HacklinkKeywordScanner:
 
         return findings
 
-    def _count_spam_outbound_links(self, content: str) -> int:
-        """Count outbound links to known spam categories.
+    def _count_spam_outbound_links(self, content: str) -> tuple:
+        """Count outbound links to known spam categories and return matching URLs.
         
         Uses URL-segment-aware matching: short keywords must appear as
         standalone domain labels or path segments (delimited by . / - _)
         to avoid false positives like 'bet' matching 'alphabet.com' or
         'sex' matching 'essex.gov.uk'.
+        
+        Returns:
+            tuple: (count: int, urls: list[str]) — count and list of matching URLs
         """
         # Extract all outbound hrefs first
         hrefs = re.findall(
             r'href=["\']https?://([^"\']+)["\']', content, re.IGNORECASE
         )
         if not hrefs:
-            return 0
+            return 0, []
 
         # Long/specific terms — safe for substring matching in URLs
         _SPAM_URL_PHRASES = [
@@ -1409,16 +1413,19 @@ class HacklinkKeywordScanner:
         )
 
         count = 0
+        matched_urls = []
         for href in hrefs:
             href_lower = href.lower()
             # Check long phrases (substring OK)
             if any(phrase in href_lower for phrase in _SPAM_URL_PHRASES):
                 count += 1
+                matched_urls.append(href)
                 continue
             # Check short terms (segment-boundary match)
             if _SPAM_URL_SEGMENT_RE.search(href_lower):
                 count += 1
-        return count
+                matched_urls.append(href)
+        return count, matched_urls[:20]  # Cap at 20 to avoid bloat
 
     def _extract_wp_plugins(self, content: str) -> List[str]:
         """Extract WordPress plugin slugs from page source HTML."""
