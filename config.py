@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "check_rdap": True,
     "admin_password": "admin123",  # CHANGE THIS!
     "vt_api_key": "3976cc546c3ac01b8f50773c46a5c4a7e508709ae23b62ab4d82436222367d8",   # VirusTotal API key (hardcoded)
-    "config_version": "7.3",              # Used for weight migration between versions
+    "config_version": "7.4",              # Used for weight migration between versions
     
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
@@ -1256,6 +1256,22 @@ def load_config() -> dict:
                             if saved_val >= old_max:  # User hasn't manually lowered it
                                 merged['weights'][signal] = new_val
                         merged['config_version'] = '7.3'
+                    
+                    # v7.4 migration: registration_opaque bumped from 20→25.
+                    # Opaque registration (both RDAP + WHOIS failed) is a stronger
+                    # standalone signal than originally scored — domains where we
+                    # can't verify age/registrar deserve more scrutiny, especially
+                    # when combined with placeholder content or temp redirects.
+                    if saved_version < '7.4':
+                        v74_bumps = {
+                            # signal: (old_max, new_val) — bump if saved ≤ old_max
+                            'registration_opaque': (20, 25),
+                        }
+                        for signal, (old_val, new_val) in v74_bumps.items():
+                            saved_val = loaded['weights'].get(signal, old_val)
+                            if saved_val <= old_val:  # User hasn't bumped it above old default
+                                merged['weights'][signal] = new_val
+                        merged['config_version'] = '7.4'
                 # Legacy: if old config has combos, ignore them (now in rules)
                 loaded.pop('combos', None)
                 loaded.pop('disabled_combos', None)
