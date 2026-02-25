@@ -325,6 +325,9 @@ def display_results(results: list):
             # Exfil
             if row.get('has_exfil_drop_script'):
                 parts.append("📡 Exfil")
+            # v7.5: Client-side harvest combo
+            if row.get('has_harvest_combo'):
+                parts.append("🕸️ Harvest combo")
             return ' · '.join(parts) if parts else ''
         
         # Build from full df (has all fields), then attach to summary_df
@@ -377,6 +380,7 @@ def display_results(results: list):
             "recommendation": st.column_config.TextColumn("Result", width="small"),
             "high_risk_phish_infra": st.column_config.CheckboxColumn("🚨 Phish Infra", width="small"),
             "phishing_kit_detected": st.column_config.CheckboxColumn("🎣 Kit", width="small"),
+            "has_harvest_combo": st.column_config.CheckboxColumn("🕸️ Harvest", width="small"),
             "vt_malicious_count": st.column_config.NumberColumn("🛡️ VT Mal", width="small"),
             "hacklink_detected": st.column_config.CheckboxColumn("🕷️ Hacklink", width="small"),
             "hacklink_malicious_script": st.column_config.CheckboxColumn("💀 Mal Script", width="small"),
@@ -506,6 +510,11 @@ def display_results(results: list):
                 # Show exfil banner only if kit composite didn't already fire
                 st.error("### 📡 EXFIL DROP SCRIPT")
                 st.caption(domain_data.get('exfil_drop_details', '').replace(';', ' · '))
+            
+            # v7.5: Client-side harvest combo banner
+            if domain_data.get('has_harvest_combo'):
+                st.warning("### 🕸️ CLIENT-SIDE HARVEST COMBO")
+                st.caption(domain_data.get('harvest_combo_reason', ''))
             
             # ASN display
             asn_display = domain_data.get('asn_display', '')
@@ -710,13 +719,15 @@ def display_results(results: list):
             elif domain_data.get('ns_is_lame_delegation'):
                 st.markdown("**NS Records:** 🔴 Lame delegation (0 NS records)")
         
-        # === PHISHING KIT DETAILS (v7.3 + v7.4) ===
+        # === PHISHING KIT DETAILS (v7.3 + v7.4 + v7.5) ===
         has_any_kit = (
             domain_data.get('phishing_kit_detected')
             or domain_data.get('has_phishing_kit_filename')
             or domain_data.get('has_exfil_drop_script')
             or domain_data.get('has_form_action_kit')
             or domain_data.get('has_suspicious_page_title')
+            or domain_data.get('has_harvest_combo')
+            or domain_data.get('has_harvest_signals')
         )
         if has_any_kit:
             with st.expander("🎣 Phishing Kit Detection", expanded=True):
@@ -747,6 +758,22 @@ def display_results(results: list):
                         service = domain_data.get('whois_privacy_service', 'Unknown')
                         st.markdown(f"**WHOIS Privacy:** {service}")
                         st.caption(f"Privacy-protected registrant on {domain_data.get('domain_age_days', '?')}d-old domain")
+                
+                # v7.5: Client-side harvest detection
+                if domain_data.get('has_harvest_signals'):
+                    st.divider()
+                    harvest_signals = domain_data.get('harvest_signals', '').replace(';', ', ')
+                    harvest_details = domain_data.get('harvest_details', '').replace(';', '\n- ')
+                    if domain_data.get('has_harvest_combo'):
+                        st.error(f"**🕸️ Client-Side Harvest Combo**")
+                        st.caption(domain_data.get('harvest_combo_reason', ''))
+                        st.markdown(f"**Harvest Signals:** {harvest_signals}")
+                        st.markdown(f"- {harvest_details}")
+                    else:
+                        st.info(f"**🕸️ Client-Side Harvest (uncorroborated — not scored)**")
+                        st.markdown(f"**Harvest Signals:** {harvest_signals}")
+                        st.markdown(f"- {harvest_details}")
+                        st.caption("Credential harvesting code detected but no corroborating phishing signals found")
         
         # === VIRUSTOTAL REPUTATION ===
         if domain_data.get('vt_available'):
@@ -1119,7 +1146,7 @@ def admin_view():
                                 'malware_links', 'minimal_shell', 'js_redirect',
                                 'phishing_kit_filename_strong', 'phishing_kit_detected', 'exfil_drop_script',
                                 'form_action_kit_strong', 'suspicious_page_title', 'whois_privacy',
-                                'oauth_phish'],
+                                'client_side_harvest_combo', 'oauth_phish'],
             "Domain Name Patterns": ['suspicious_prefix', 'suspicious_suffix', 
                                      'tech_support_tld', 'domain_brand_impersonation',
                                      'brand_spoofing_keyword',
@@ -1329,6 +1356,7 @@ def admin_view():
                 "exfil_drop_script": "Credential exfiltration code in page source (Telegram bot tokens, Discord webhooks, base64 payloads, hardcoded email recipients, cross-domain JS fetch/XHR)",
                 "suspicious_page_title": "Page title matches phishing lure pattern (e.g., 'Verify Your Identity', 'Account Suspended', 'Secure Document Portal')",
                 "phishing_kit_detected": "Composite: multiple phishing kit indicators confirmed — live kit running on this domain",
+                "client_side_harvest_combo": "Client-side credential harvesting code (input value reads, keyloggers, sendBeacon, image pixel exfil, cookie theft, FormData send) corroborated by another phishing indicator (weak kit filename, credential form, brand impersonation, suspicious page title, phishing paths, etc.)",
                 "whois_privacy": "WHOIS registrant uses privacy/proxy service — very common, only scored in combos with young domain + phishing infrastructure",
             },
             "Nameserver Risk": {
