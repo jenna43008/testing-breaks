@@ -1060,7 +1060,6 @@ def display_results(results: list):
         contact_reuse_json = domain_data.get('contact_reuse_results', '')
         if contact_reuse_json:
             try:
-                import json
                 cr_data = json.loads(contact_reuse_json)
                 cr_matches = cr_data.get("matches", [])
                 if cr_matches:
