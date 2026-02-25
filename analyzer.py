@@ -4180,8 +4180,8 @@ def rdap_lookup(domain: str, timeout: float) -> Tuple[str, int, bool, str]:
         base = '.'.join(parts[-3:]) if len(parts) > 2 and parts[-2] in ['co', 'com', 'org', 'net'] else '.'.join(parts[-2:])
         tld = parts[-1].lower() if parts else ""
         
-        # Try rdap.org bootstrap first, then direct registry endpoints as fallback.
-        # rdap.org rate-limits to 10 req/10s and may 429 from shared cloud IPs.
+        # Direct registry endpoints for known TLDs — more reliable than rdap.org
+        # which rate-limits (10 req/10s) and may omit reregistration events.
         _DIRECT_RDAP = {
             "app": "https://pubapi.registry.google/rdap/domain/",
             "dev": "https://pubapi.registry.google/rdap/domain/",
@@ -4197,9 +4197,13 @@ def rdap_lookup(domain: str, timeout: float) -> Tuple[str, int, bool, str]:
             "ai": "https://rdap.nic.ai/domain/",
         }
         
-        urls_to_try = [f"https://rdap.org/domain/{base}"]
+        urls_to_try = []
+        # Try direct registry endpoint FIRST for known TLDs — more reliable,
+        # includes reregistration events that rdap.org may omit.
         if tld in _DIRECT_RDAP:
             urls_to_try.append(f"{_DIRECT_RDAP[tld]}{base}")
+        # Fallback to rdap.org bootstrap (handles all TLDs but rate-limits)
+        urls_to_try.append(f"https://rdap.org/domain/{base}")
         
         data = None
         for url in urls_to_try:
@@ -4989,7 +4993,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     if res.mx_exists and not res.mx_is_null:
         if res.mx_provider_type == "enterprise":
-            positives.append("Enterprise MX (Google/Microsoft/Proofpoint)")
+            if res.content_is_facade:
+                positives.append("Enterprise MX (suppressed — content facade)")
+            else:
+                positives.append("Enterprise MX (Google/Microsoft/Proofpoint)")
         else:
             positives.append("MX configured")
     
