@@ -150,6 +150,17 @@ CDN_WHITELIST = {
     "www.hostinger.com", "hpanel.hostinger.com",
     "hostinger.com",  # Base domain — catches ALL *.hostinger.com subdomains
     
+    # Webflow (website builder platform)
+    "website-files.com",  # Base domain — catches cdn.prod.website-files.com etc.
+    "webflow.com",  # Base domain — catches assets.webflow.com, global-uploads.webflow.com etc.
+    "assets-global.website-files.com",
+    
+    # Vercel / Next.js
+    "vercel.com", "vercel.live", "va.vercel-scripts.com",
+    
+    # Netlify
+    "netlify.com", "netlify.app",
+    
     # reCAPTCHA / security
     "www.google.com", "www.recaptcha.net",
     "challenges.cloudflare.com", "js.hcaptcha.com",
@@ -842,7 +853,10 @@ class HacklinkKeywordScanner:
         # SEO poisoning / hacklink injection pattern.
         # Only contributes if at least one script signal already exists —
         # CSS hiding alone should never start a malicious_script detection.
-        if (hidden_high_found or hidden_low_found) and soc_signals:
+        # IMPORTANT: Only use hidden_HIGH (suspicious external links in hidden
+        # content) as corroboration.  hidden_LOW (benign_links_only = responsive
+        # menus, mobile navs) is NORMAL web design and must NOT escalate.
+        if hidden_high_found and soc_signals:
             soc_signals.append(("CSS_HIDING_PRESENT", 1))
 
         soc_score_val = sum(w for _, w in soc_signals)
@@ -887,7 +901,10 @@ class HacklinkKeywordScanner:
         # the definitive SEO poisoning pattern.  Even if individual script
         # signals don't reach the HIGH threshold on their own, CSS hiding
         # provides strong corroboration that the site is compromised.
-        if malicious_script_confidence == "MEDIUM" and (hidden_high_found or hidden_low_found):
+        # IMPORTANT: Only hidden_HIGH (suspicious external links in hidden
+        # content) justifies escalation.  hidden_LOW (benign_links_only =
+        # responsive menus, mobile navs) is NORMAL and must NOT escalate.
+        if malicious_script_confidence == "MEDIUM" and hidden_high_found:
             malicious_script_confidence = "HIGH"
             injection_patterns.append(
                 "malicious_script: ESCALATED to HIGH "
@@ -928,8 +945,9 @@ class HacklinkKeywordScanner:
         wp_compromised = False
         is_wordpress = bool(re.search(r'wp-content|wp-includes|wordpress', content_lower))
         is_cpanel = bool(re.search(
-            r'cpanel|whm\.autopkg|cpsess[a-f0-9]+|/frontend/|webmail\.\w+\.\w+|'
-            r'powered\s*by\s*cpanel|cpanel\s*login|2082|2083|2086|2087',
+            r'cpanel|whm\.autopkg|cpsess[a-f0-9]{10,}|'
+            r'powered\s*by\s*cpanel|cpanel\s*login|'
+            r'[:"]208[2367]\b',
             content_lower
         ))
 
