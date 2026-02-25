@@ -1056,6 +1056,28 @@ def display_results(results: list):
                     for script in script_list:
                         st.text(f"  • {script}")
         
+        # === CONTACT CROSS-REFERENCE (OSINT) ===
+        contact_reuse_json = domain_data.get('contact_reuse_results', '')
+        if contact_reuse_json:
+            try:
+                import json
+                cr_data = json.loads(contact_reuse_json)
+                cr_matches = cr_data.get("matches", [])
+                if cr_matches:
+                    with st.expander(f"🌐 Contact Cross-Reference ({sum(len(m['found_on']) for m in cr_matches)} other domains)", expanded=True):
+                        st.markdown("*Contact info from this page was found on other domains:*")
+                        for match in cr_matches:
+                            icon = "📧" if match["type"] == "email" else "📞"
+                            contact = match["contact"]
+                            domains = match["found_on"]
+                            st.markdown(f"**{icon} `{contact}`** — found on {len(domains)} other domain(s):")
+                            for d in domains:
+                                st.text(f"  • {d}")
+                        searched = cr_data.get("searched", 0)
+                        st.caption(f"ℹ️ Informational only — {searched} web search(es) performed. Same contact on unrelated domains may indicate coordinated activity.")
+            except Exception:
+                pass
+        
         # === DOMAIN TAKEOVER / TRANSFER LOCK ===
         has_takeover_signal = (
             domain_data.get('domain_transfer_lock_missing') or 
