@@ -62,9 +62,9 @@ DEFAULT_CONFIG = {
         "content_cross_domain_email": 35,      # Emails on page belong to different domain (content cloning)
         "content_broker_page": 20,             # Domain broker / parking / for-sale page (3+ phrases)
         "content_privacy_email": 12,           # Privacy email (proton/tutanota) as business contact on page
-        "content_placeholder": 10,             # Placeholder content (lorem ipsum, coming soon)
+        "content_placeholder": 20,             # Placeholder content (lorem ipsum, coming soon)
         "content_facade": 30,                  # SPA shell: title present but <30 visible words + external JS
-        "registration_opaque": 8,              # Both RDAP+WHOIS failed — cannot determine age/registrar (standalone)
+        "registration_opaque": 15,              # Both RDAP+WHOIS failed — cannot determine age/registrar (standalone)
         "registration_opaque_with_risk": 20,   # Registration opaque + content risk signals present (facade/mismatch/broker)
         "domain_reregistered_recent_with_risk": 18,  # Dropped & re-registered ≤90d + content risk
         "domain_reregistered_recent": 6,             # Dropped & re-registered ≤90d, no content risk
