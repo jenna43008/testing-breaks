@@ -57,6 +57,13 @@ DEFAULT_CONFIG = {
         "hidden_injection_css_only": 0,     # CSS hiding patterns (display:none etc.) without confirmed injection — too common on legitimate sites
         "cpanel_detected": 25,              # cPanel hosting (common hacklink target, not malicious alone)
         
+        # === CONTENT IDENTITY VERIFICATION ===
+        "content_title_mismatch": 25,          # <title> claims one business, body shows another (facade)
+        "content_cross_domain_email": 35,      # Emails on page belong to different domain (content cloning)
+        "content_broker_page": 20,             # Domain broker / parking / for-sale page (3+ phrases)
+        "content_privacy_email": 12,           # Privacy email (proton/tutanota) as business contact on page
+        "content_placeholder": 10,             # Placeholder content (lorem ipsum, coming soon)
+        
         # === TRANSFER LOCK / DOMAIN TAKEOVER ===
         "transfer_lock_recent": 35,        # Transfer lock recently added (post-compromise lockdown signal)
         "whois_recently_updated": 10,      # WHOIS updated in last 30 days
