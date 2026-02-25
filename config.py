@@ -63,7 +63,7 @@ DEFAULT_CONFIG = {
         "content_broker_page": 20,             # Domain broker / parking / for-sale page (3+ phrases)
         "content_privacy_email": 12,           # Privacy email (proton/tutanota) as business contact on page
         "content_placeholder": 10,             # Placeholder content (lorem ipsum, coming soon)
-        "content_facade": 25,                  # SPA shell: title present but <30 visible words + external JS
+        "content_facade": 30,                  # SPA shell: title present but <30 visible words + external JS
         "registration_opaque": 8,              # Both RDAP+WHOIS failed — cannot determine age/registrar (standalone)
         "registration_opaque_with_risk": 20,   # Registration opaque + content risk signals present (facade/mismatch/broker)
         "domain_reregistered_recent_with_risk": 18,  # Dropped & re-registered ≤90d + content risk
@@ -493,6 +493,15 @@ DEFAULT_CONFIG = {
         {"name": "combo_techsupport_tld_cred_form", "score": 22, "label": "tech support tld + credential form", "category": "Tech Support Scam", "enabled": True, "if_all": ["tech_support_tld", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_techsupport_tld_new_30d", "score": 18, "label": "tech support tld + domain <30d", "category": "Tech Support Scam", "enabled": True, "if_all": ["tech_support_tld", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_techsupport_tld_no_https", "score": 15, "label": "tech support tld + no https", "category": "Tech Support Scam", "enabled": True, "if_all": ["tech_support_tld", "no_https"], "if_any": [], "if_not": []},
+
+        # --- Content Facade Combos ---
+        # SPA shell (content_facade) combined with weak email auth = classic scam domain setup.
+        # These combo scores STACK on top of the individual signal scores.
+        {"name": "combo_facade_no_dkim", "score": 10, "label": "content facade + no DKIM", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_facade_external_js", "score": 5, "label": "content facade + external JS loader", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "external_js"], "if_any": [], "if_not": []},
+        {"name": "combo_facade_missing_trust", "score": 8, "label": "content facade + no corporate footprint", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "missing_trust_signals"], "if_any": [], "if_not": []},
+        {"name": "combo_facade_opaque_reg", "score": 10, "label": "content facade + registration opaque", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "registration_opaque"], "if_any": [], "if_not": []},
+        {"name": "combo_facade_reregistered", "score": 10, "label": "content facade + domain re-registered", "category": "Content Identity", "enabled": True, "if_all": ["content_facade"], "if_any": ["domain_reregistered_recent", "domain_reregistered"], "if_not": []},
 
         # --- VirusTotal Combos (8 rules) ---
         {"name": "vt_malicious_brand", "score": 30, "label": "VT malicious + brand impersonation", "category": "VirusTotal", "enabled": True, "if_all": ["domain_brand_impersonation"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
