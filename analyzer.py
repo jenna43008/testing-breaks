@@ -4205,10 +4205,12 @@ def rdap_lookup(domain: str, timeout: float) -> Tuple[str, int, bool, str]:
         # Fallback to rdap.org bootstrap (handles all TLDs but rate-limits)
         urls_to_try.append(f"https://rdap.org/domain/{base}")
         
+        _headers = {"User-Agent": "ConfigChecker-RDAP/1.0 (domain-verification-tool)", "Accept": "application/rdap+json, application/json"}
+        
         data = None
         for url in urls_to_try:
             try:
-                r = requests.get(url, timeout=timeout, allow_redirects=True)
+                r = requests.get(url, timeout=timeout, headers=_headers, allow_redirects=True)
                 if r.status_code == 200:
                     data = r.json()
                     break
@@ -5435,7 +5437,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 add("app_store_medium", weights.get('app_store_medium', -10))
         elif res.app_store_confidence == "low":
             # v6.2: Fixed indentation — was incorrectly attached to outer if
-            add("app_store_low", weights.get('app_store_low', -3))
+            # Suppress when content_facade — an SPA shell shouldn't get app store credit
+            if not res.content_is_facade:
+                add("app_store_low", weights.get('app_store_low', -3))
     
     # Blacklists - HIGH weight, these are real fraud signals
     if res.domain_blacklist_count > 0:
@@ -5725,7 +5729,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             add("vt_negative_community", weights.get('vt_negative_community', 10))
         
         if mal == 0 and sus == 0 and res.vt_total_vendors >= 50:
-            add("vt_clean", weights.get('vt_clean', -5))
+            # Don't credit VT clean scan of a content facade (SPA shell with no real content)
+            if not res.content_is_facade:
+                add("vt_clean", weights.get('vt_clean', -5))
     
     # === HACKLINK / SEO SPAM SCORING ===
     if res.hacklink_detected:
