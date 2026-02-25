@@ -162,6 +162,12 @@ try:
 except Exception:
     HACKLINK_SCANNER_AVAILABLE = False
 
+try:
+    from content_checks import check_content_identity
+    CONTENT_CHECKS_AVAILABLE = True
+except Exception:
+    CONTENT_CHECKS_AVAILABLE = False
+
 
 # ============================================================================
 # DATA CLASS
@@ -455,6 +461,21 @@ class DomainApprovalResult:
     hacklink_hidden_injection_confidence: str = "" # HIGH = hidden+links, LOW = CSS-only (legit pattern)
     hacklink_is_cpanel: bool = False              # cPanel hosting environment detected
     hacklink_suspicious_scripts: str = ""         # Semicolon-separated suspicious external script URLs
+    
+    # === CONTENT IDENTITY VERIFICATION ===
+    content_title_body_mismatch: bool = False      # <title> claims one business, body shows another
+    content_title_body_detail: str = ""             # Human-readable mismatch explanation
+    content_cross_domain_emails: str = ""           # Semicolon-sep emails from different domain found on page
+    content_cross_domain_email_domains: str = ""    # Which foreign domains those emails belong to
+    content_page_privacy_emails: str = ""           # Privacy provider emails found on page (proton, tutanota)
+    content_page_freemail_contacts: str = ""        # Freemail used as business contact on page
+    content_is_broker_page: bool = False             # Domain broker / parking / for-sale page detected
+    content_broker_indicators: str = ""              # Which broker phrases matched
+    content_is_placeholder: bool = False             # Placeholder content (lorem ipsum, coming soon)
+    content_page_emails: str = ""                    # All emails found on page
+    content_page_phones: str = ""                    # All phone numbers found on page
+    content_identity_hash: str = ""                  # Normalized content hash (for clone detection)
+    content_structure_hash: str = ""                 # DOM structure hash (for layout clone detection)
     
     # === WHOIS ENRICHMENT / TRANSFER LOCK ===
     whois_registrar: str = ""                    # Registrar name from WHOIS
@@ -5359,6 +5380,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             "opaque_entity", "sensitive_fields", "phishing_js", "doc_lure",
             "vt_malicious", "vt_malicious_medium", "vt_suspicious",
             "blocked_asn", "cpanel_detected",
+            "content_title_mismatch", "content_cross_domain_email",
+            "content_broker_page",
         }
         has_content_risk = bool(signals & _CONTENT_RISK_SIGNALS)
 
@@ -5632,6 +5655,22 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.hacklink_is_cpanel:
         add("cpanel_detected", weights.get('cpanel_detected', 8))
     
+    # === CONTENT IDENTITY VERIFICATION ===
+    if res.content_title_body_mismatch:
+        add("content_title_mismatch", weights.get('content_title_mismatch', 25))
+    
+    if res.content_cross_domain_emails:
+        add("content_cross_domain_email", weights.get('content_cross_domain_email', 35))
+    
+    if res.content_is_broker_page:
+        add("content_broker_page", weights.get('content_broker_page', 20))
+    
+    if res.content_page_privacy_emails:
+        add("content_privacy_email", weights.get('content_privacy_email', 12))
+    
+    if res.content_is_placeholder:
+        add("content_placeholder", weights.get('content_placeholder', 10))
+    
     # === TRANSFER LOCK / WHOIS ENRICHMENT ===
     # Transfer lock and WHOIS updates are tracked as zero-point markers.
     # Like domain age, they only add points when actual content/infrastructure
@@ -5656,6 +5695,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         "subdomain_delegation_high", "subdomain_delegation_medium",
         "ct_reactivated",
         "oauth_phish", "homoglyph_domain", "cdn_tunnel_suspect", "quishing_profile",
+        "content_title_mismatch", "content_cross_domain_email", "content_broker_page",
     }
     if (res.domain_transfer_lock_recent or res.whois_recently_updated):
         has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
@@ -6471,6 +6511,44 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                 res.hacklink_suspicious_scripts = ";".join(sus_scripts[:10])
         except Exception:
             pass  # Non-critical — don't break analysis if hacklink check fails
+    
+    # === CONTENT IDENTITY VERIFICATION ===
+    # Scans page content for identity mismatches, cloned content, cross-domain
+    # email references, domain broker facades, and placeholder pages.
+    # Reuses pre-fetched content — no duplicate HTTP requests.
+    if CONTENT_CHECKS_AVAILABLE:
+        try:
+            content_str = content.decode('utf-8', errors='replace') if isinstance(content, bytes) else content
+            cc = check_content_identity(domain, content=content_str)
+            res.content_title_body_mismatch = cc.get("title_body_mismatch", False)
+            res.content_title_body_detail = cc.get("title_body_mismatch_detail", "")
+            xd_emails = cc.get("cross_domain_emails", [])
+            if xd_emails:
+                res.content_cross_domain_emails = ";".join(xd_emails[:10])
+            xd_domains = cc.get("cross_domain_email_domains", [])
+            if xd_domains:
+                res.content_cross_domain_email_domains = ";".join(xd_domains[:10])
+            priv_emails = cc.get("page_privacy_emails", [])
+            if priv_emails:
+                res.content_page_privacy_emails = ";".join(priv_emails[:10])
+            free_emails = cc.get("page_freemail_contacts", [])
+            if free_emails:
+                res.content_page_freemail_contacts = ";".join(free_emails[:10])
+            res.content_is_broker_page = cc.get("is_broker_page", False)
+            broker_ind = cc.get("broker_indicators", [])
+            if broker_ind:
+                res.content_broker_indicators = ";".join(broker_ind[:10])
+            res.content_is_placeholder = cc.get("is_placeholder", False)
+            page_emails = cc.get("page_emails", [])
+            if page_emails:
+                res.content_page_emails = ";".join(page_emails[:20])
+            page_phones = cc.get("page_phones", [])
+            if page_phones:
+                res.content_page_phones = ";".join(page_phones[:10])
+            res.content_identity_hash = cc.get("content_hash", "")
+            res.content_structure_hash = cc.get("structure_hash", "")
+        except Exception:
+            pass  # Non-critical — don't break analysis if content check fails
     
     # RDAP
     if check_rdap:
