@@ -480,6 +480,7 @@ class DomainApprovalResult:
     content_facade_detail: str = ""                  # Explanation of why facade was flagged
     content_external_script_domains: str = ""        # Non-CDN external script domains (semicolon-sep)
     content_visible_word_count: int = -1             # Number of visible words on page (-1 = not checked)
+    registration_opaque: bool = False                # Both RDAP and WHOIS failed — cannot determine domain age/registrar
     
     # === WHOIS ENRICHMENT / TRANSFER LOCK ===
     whois_registrar: str = ""                    # Registrar name from WHOIS
@@ -4614,6 +4615,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append(f"PRIVACY EMAIL ON PAGE → {res.content_page_privacy_emails.replace(';', ', ')}")
     if res.content_is_placeholder:
         all_issues.append("PLACEHOLDER CONTENT → Page contains template/placeholder text (lorem ipsum, coming soon)")
+    if res.registration_opaque:
+        all_issues.append("REGISTRATION OPAQUE → Both RDAP and WHOIS failed to return domain creation date/registrar — registration data hidden or unavailable")
     
     # === TRANSFER LOCK / DOMAIN TAKEOVER ===
     if res.domain_transfer_lock_recent:
@@ -5055,12 +5058,13 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('SUSPICIOUS EXTERNAL SCRIPTS', 0),  # Not a scored signal — informational only
             ('VT THREAT NAMES', 0),  # Informational detail, not a risk signal
             ('CT RECENT CERT ISSUANCE', weights.get('ct_recent_issuance', 3)),  # Minor standalone
-            ('CONTENT FACADE', weights.get('content_facade', 18)),
+            ('CONTENT FACADE', weights.get('content_facade', 25)),
             ('CONTENT TITLE/BODY MISMATCH', weights.get('content_title_mismatch', 25)),
             ('CROSS-DOMAIN EMAILS ON PAGE', weights.get('content_cross_domain_email', 35)),
             ('BROKER/PARKING PAGE', weights.get('content_broker_page', 20)),
             ('PRIVACY EMAIL ON PAGE', weights.get('content_privacy_email', 12)),
             ('PLACEHOLDER CONTENT', weights.get('content_placeholder', 10)),
+            ('REGISTRATION OPAQUE', weights.get('registration_opaque', 15)),
         ]
         for prefix, w in _map:
             if prefix in text:
@@ -5192,6 +5196,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('BROKER/PARKING PAGE', ['content_broker_page']),
         ('PRIVACY EMAIL ON PAGE', ['content_privacy_email']),
         ('PLACEHOLDER CONTENT', ['content_placeholder']),
+        ('REGISTRATION OPAQUE', ['registration_opaque']),
         # Catch-all for domain age (must be LAST — "DOMAIN" matches broadly)
         ('DOMAIN', ['new_domain_with_risk']),
     ]
@@ -5310,8 +5315,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("null_mx", weights.get('null_mx', 12))
     
     # MX provider type scoring (v4.7)
+    # NOTE: mx_enterprise bonus is SUPPRESSED when content_facade is detected.
+    # A $6/month Google Workspace subscription does not legitimize a domain
+    # that serves no real content — only an external JS shell with a title tag.
     if res.mx_provider_type == "enterprise":
-        add("mx_enterprise", weights.get('mx_enterprise_bonus', -5))
+        if not res.content_is_facade:
+            add("mx_enterprise", weights.get('mx_enterprise_bonus', -5))
     elif res.mx_provider_type == "disposable":
         add("mx_disposable", weights.get('mx_disposable', 10))
     elif res.mx_provider_type == "selfhosted":
@@ -5413,7 +5422,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             "vt_malicious", "vt_malicious_medium", "vt_suspicious",
             "blocked_asn", "cpanel_detected",
             "content_title_mismatch", "content_cross_domain_email",
-            "content_broker_page", "content_facade",
+            "content_broker_page", "content_facade", "registration_opaque",
         }
         has_content_risk = bool(signals & _CONTENT_RISK_SIGNALS)
 
@@ -5704,7 +5713,23 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("content_placeholder", weights.get('content_placeholder', 10))
     
     if res.content_is_facade:
-        add("content_facade", weights.get('content_facade', 18))
+        add("content_facade", weights.get('content_facade', 25))
+    
+    # === REGISTRATION OPACITY ===
+    # Both RDAP and WHOIS failed to return domain creation date.
+    # Legitimate domains almost always have accessible registration data.
+    # Scored conditionally: standalone is mild, but combined with content
+    # risk signals (facade, mismatch, broker) it becomes much more significant.
+    if res.registration_opaque:
+        _content_risk_present = (
+            res.content_is_facade or res.content_title_body_mismatch or
+            res.content_cross_domain_emails or res.content_is_broker_page or
+            res.content_is_placeholder
+        )
+        if _content_risk_present:
+            add("registration_opaque", weights.get('registration_opaque_with_risk', 20))
+        else:
+            add("registration_opaque", weights.get('registration_opaque', 8))
     
     # === TRANSFER LOCK / WHOIS ENRICHMENT ===
     # Transfer lock and WHOIS updates are tracked as zero-point markers.
@@ -5730,7 +5755,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         "subdomain_delegation_high", "subdomain_delegation_medium",
         "ct_reactivated",
         "oauth_phish", "homoglyph_domain", "cdn_tunnel_suspect", "quishing_profile",
-        "content_title_mismatch", "content_cross_domain_email", "content_broker_page", "content_facade",
+        "content_title_mismatch", "content_cross_domain_email", "content_broker_page", "content_facade", "registration_opaque",
     }
     if (res.domain_transfer_lock_recent or res.whois_recently_updated):
         has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
@@ -6602,6 +6627,11 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.whois_created, res.domain_age_days = whois_lookup(domain)
         if res.domain_age_days >= 0:
             res.domain_age_source = "whois"
+    
+    # Both RDAP and WHOIS failed — cannot determine domain age/registrar
+    # Legitimate domains almost always have accessible registration data.
+    if check_rdap and res.domain_age_days < 0 and not res.domain_age_source:
+        res.registration_opaque = True
     
     # === WHOIS ENRICHMENT (transfer lock, registrar, update recency) ===
     if check_rdap:
