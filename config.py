@@ -200,7 +200,7 @@ DEFAULT_CONFIG = {
         "hosting_budget_shared": 10,   # Hostinger, GoDaddy shared, Namecheap shared, etc.
         "hosting_free": 12,           # 000webhost, InfinityFree, AwardSpace, etc.
         "hosting_suspect": 20,        # Known bulletproof / abuse-tolerant hosts
-        "hosting_platform": 20,        # v6.2: Dev platforms (Render, Netlify, Vercel) — mild signal
+        "hosting_platform": 8,         # v7.3: Dev platforms (Render, Netlify, Vercel) — mild signal; these are mainstream enterprise platforms
         
         # === NAMESERVER RISK SIGNALS ===
         "ns_parking": 15,             # Domain delegated to parking/placeholder NS (sedoparking, bodis, etc.)
