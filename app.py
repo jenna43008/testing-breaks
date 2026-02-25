@@ -936,6 +936,71 @@ def display_results(results: list):
                     st.warning(f"**⚠️ Suspicious Scripts ({len(scripts)}):** External JS from untrusted domains")
                     st.code('\n'.join(s[:120] for s in scripts[:5]), language=None)
         
+        # === CONTENT IDENTITY VERIFICATION ===
+        has_content_identity = (
+            domain_data.get('content_title_body_mismatch') or
+            domain_data.get('content_cross_domain_emails') or
+            domain_data.get('content_is_broker_page') or
+            domain_data.get('content_page_privacy_emails') or
+            domain_data.get('content_is_placeholder')
+        )
+        if has_content_identity:
+            with st.expander("🔍 Content Identity Verification", expanded=True):
+                ci_col1, ci_col2, ci_col3 = st.columns(3)
+                with ci_col1:
+                    mismatch = domain_data.get('content_title_body_mismatch', False)
+                    icon = "🔴" if mismatch else "🟢"
+                    st.metric(f"{icon} Title/Body Match", "MISMATCH" if mismatch else "OK")
+                with ci_col2:
+                    xd = domain_data.get('content_cross_domain_emails', '')
+                    xd_count = len(xd.split(';')) if xd else 0
+                    icon = "🔴" if xd_count > 0 else "🟢"
+                    st.metric(f"{icon} Cross-Domain Emails", xd_count)
+                with ci_col3:
+                    broker = domain_data.get('content_is_broker_page', False)
+                    icon = "🟠" if broker else "🟢"
+                    st.metric(f"{icon} Broker Page", "YES" if broker else "No")
+                
+                if mismatch:
+                    detail = domain_data.get('content_title_body_detail', '')
+                    st.error(f"**🔴 Title/Body Mismatch:** {detail}")
+                
+                xd_emails = domain_data.get('content_cross_domain_emails', '')
+                xd_domains = domain_data.get('content_cross_domain_email_domains', '')
+                if xd_emails:
+                    emails_list = xd_emails.split(';')
+                    domains_list = xd_domains.split(';') if xd_domains else []
+                    st.error(
+                        f"**🔴 Cross-Domain Emails ({len(emails_list)}):** "
+                        f"Page contains emails from a different domain: "
+                        f"**{', '.join(domains_list)}**"
+                    )
+                    st.code('\n'.join(emails_list[:10]), language=None)
+                
+                priv = domain_data.get('content_page_privacy_emails', '')
+                if priv:
+                    st.warning(f"**🟠 Privacy Emails on Page:** {priv.replace(';', ', ')}")
+                
+                free = domain_data.get('content_page_freemail_contacts', '')
+                if free:
+                    st.info(f"**ℹ️ Freemail Contacts:** {free.replace(';', ', ')}")
+                
+                if broker:
+                    indicators = domain_data.get('content_broker_indicators', '')
+                    st.warning(f"**🟠 Broker Page Indicators:** {indicators.replace(';', ', ')}")
+                
+                if domain_data.get('content_is_placeholder'):
+                    st.warning("**🟠 Placeholder Content:** Page contains template/placeholder text")
+                
+                all_emails = domain_data.get('content_page_emails', '')
+                all_phones = domain_data.get('content_page_phones', '')
+                if all_emails or all_phones:
+                    st.caption("📋 Contact info extracted from page:")
+                    if all_emails:
+                        st.text(f"Emails: {all_emails.replace(';', ', ')}")
+                    if all_phones:
+                        st.text(f"Phones: {all_phones.replace(';', ', ')}")
+        
         # === DOMAIN TAKEOVER / TRANSFER LOCK ===
         has_takeover_signal = (
             domain_data.get('domain_transfer_lock_missing') or 
@@ -1160,6 +1225,8 @@ def admin_view():
             "Hacklink / SEO Spam": ['hacklink_detected', 'hacklink_keywords', 'hacklink_wp_compromised',
                                     'hacklink_vulnerable_plugins', 'hacklink_spam_links'],
             "Malicious Script / Hidden Injection": ['malicious_script', 'hidden_injection', 'cpanel_detected'],
+            "Content Identity": ['content_title_mismatch', 'content_cross_domain_email',
+                                'content_broker_page', 'content_privacy_email', 'content_placeholder'],
             "Transfer Lock / Domain Takeover": ['transfer_lock_missing', 'whois_recently_updated',
                                                     'mx_hijack_high', 'mx_hijack_medium',
                                                     'subdomain_delegation_high', 'subdomain_delegation_medium'],
@@ -1422,6 +1489,13 @@ def admin_view():
             "CDN Tunnel Abuse": {
                 "cdn_tunnel_suspect": "Domain behind CDN proxy with suspicious signals — attacker may use CDN tunnel to hide phishing origin behind reputable IPs",
             },
+            "Content Identity": {
+                "content_title_mismatch": "Page <title> claims one business but body content shows a completely different business — facade or content cloning",
+                "content_cross_domain_email": "Email addresses on page belong to a different domain — strongest indicator of cloned content (e.g., kigs.app showing @topdot.com emails)",
+                "content_broker_page": "Page is a domain broker, parking, or for-sale page — 3+ broker phrases detected (domain brokerage, submit inquiry, premium domain, etc.)",
+                "content_privacy_email": "Privacy email (Proton, Tutanota) used as business contact on page — legitimate businesses use their own domain email",
+                "content_placeholder": "Placeholder or template content detected (lorem ipsum, coming soon, under construction)",
+            },
         }
         
         for group_name, signals in signal_groups.items():
@@ -1465,6 +1539,7 @@ def admin_view():
             'Hacklink / SEO Spam': '🕷️',
             'Malicious Script': '💀',
             'Domain Takeover': '🔓',
+            'Content Identity': '🔍',
         }
         
         # Show positive signals first, then phishing templates, then rest alphabetically
