@@ -476,6 +476,10 @@ class DomainApprovalResult:
     content_page_phones: str = ""                    # All phone numbers found on page
     content_identity_hash: str = ""                  # Normalized content hash (for clone detection)
     content_structure_hash: str = ""                 # DOM structure hash (for layout clone detection)
+    content_is_facade: bool = False                  # SPA shell: title present but <30 visible words + external JS
+    content_facade_detail: str = ""                  # Explanation of why facade was flagged
+    content_external_script_domains: str = ""        # Non-CDN external script domains (semicolon-sep)
+    content_visible_word_count: int = -1             # Number of visible words on page (-1 = not checked)
     
     # === WHOIS ENRICHMENT / TRANSFER LOCK ===
     whois_registrar: str = ""                    # Registrar name from WHOIS
@@ -4595,6 +4599,22 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         scripts = res.hacklink_suspicious_scripts.replace(";", ", ")[:120]
         all_issues.append(f"SUSPICIOUS EXTERNAL SCRIPTS ({scripts}) → Third-party scripts from known-bad or suspicious domains")
     
+    # === CONTENT IDENTITY VERIFICATION ===
+    if res.content_is_facade:
+        wc = res.content_visible_word_count
+        all_issues.append(f"CONTENT FACADE → Page title present but only {wc} visible words; content loaded entirely via external JS (SPA shell)")
+    if res.content_title_body_mismatch:
+        all_issues.append(f"CONTENT TITLE/BODY MISMATCH → {res.content_title_body_detail[:120]}")
+    if res.content_cross_domain_emails:
+        domains = res.content_cross_domain_email_domains.replace(";", ", ")
+        all_issues.append(f"CROSS-DOMAIN EMAILS ON PAGE → Page contains emails from: {domains}")
+    if res.content_is_broker_page:
+        all_issues.append(f"BROKER/PARKING PAGE → Domain broker or for-sale page detected: {res.content_broker_indicators[:100]}")
+    if res.content_page_privacy_emails:
+        all_issues.append(f"PRIVACY EMAIL ON PAGE → {res.content_page_privacy_emails.replace(';', ', ')}")
+    if res.content_is_placeholder:
+        all_issues.append("PLACEHOLDER CONTENT → Page contains template/placeholder text (lorem ipsum, coming soon)")
+    
     # === TRANSFER LOCK / DOMAIN TAKEOVER ===
     if res.domain_transfer_lock_recent:
         days = res.whois_recently_updated_days
@@ -5035,6 +5055,12 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('SUSPICIOUS EXTERNAL SCRIPTS', 0),  # Not a scored signal — informational only
             ('VT THREAT NAMES', 0),  # Informational detail, not a risk signal
             ('CT RECENT CERT ISSUANCE', weights.get('ct_recent_issuance', 3)),  # Minor standalone
+            ('CONTENT FACADE', weights.get('content_facade', 18)),
+            ('CONTENT TITLE/BODY MISMATCH', weights.get('content_title_mismatch', 25)),
+            ('CROSS-DOMAIN EMAILS ON PAGE', weights.get('content_cross_domain_email', 35)),
+            ('BROKER/PARKING PAGE', weights.get('content_broker_page', 20)),
+            ('PRIVACY EMAIL ON PAGE', weights.get('content_privacy_email', 12)),
+            ('PLACEHOLDER CONTENT', weights.get('content_placeholder', 10)),
         ]
         for prefix, w in _map:
             if prefix in text:
@@ -5160,6 +5186,12 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('SPAM LINKS', ['hacklink_spam_links']),
         ('MALICIOUS SCRIPT', ['malicious_script']),
         ('CSS HIDING PATTERNS', ['hidden_injection']),
+        ('CONTENT FACADE', ['content_facade']),
+        ('CONTENT TITLE/BODY MISMATCH', ['content_title_mismatch']),
+        ('CROSS-DOMAIN EMAILS ON PAGE', ['content_cross_domain_email']),
+        ('BROKER/PARKING PAGE', ['content_broker_page']),
+        ('PRIVACY EMAIL ON PAGE', ['content_privacy_email']),
+        ('PLACEHOLDER CONTENT', ['content_placeholder']),
         # Catch-all for domain age (must be LAST — "DOMAIN" matches broadly)
         ('DOMAIN', ['new_domain_with_risk']),
     ]
@@ -5381,7 +5413,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             "vt_malicious", "vt_malicious_medium", "vt_suspicious",
             "blocked_asn", "cpanel_detected",
             "content_title_mismatch", "content_cross_domain_email",
-            "content_broker_page",
+            "content_broker_page", "content_facade",
         }
         has_content_risk = bool(signals & _CONTENT_RISK_SIGNALS)
 
@@ -5671,6 +5703,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.content_is_placeholder:
         add("content_placeholder", weights.get('content_placeholder', 10))
     
+    if res.content_is_facade:
+        add("content_facade", weights.get('content_facade', 18))
+    
     # === TRANSFER LOCK / WHOIS ENRICHMENT ===
     # Transfer lock and WHOIS updates are tracked as zero-point markers.
     # Like domain age, they only add points when actual content/infrastructure
@@ -5695,7 +5730,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         "subdomain_delegation_high", "subdomain_delegation_medium",
         "ct_reactivated",
         "oauth_phish", "homoglyph_domain", "cdn_tunnel_suspect", "quishing_profile",
-        "content_title_mismatch", "content_cross_domain_email", "content_broker_page",
+        "content_title_mismatch", "content_cross_domain_email", "content_broker_page", "content_facade",
     }
     if (res.domain_transfer_lock_recent or res.whois_recently_updated):
         has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
@@ -6547,6 +6582,12 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                 res.content_page_phones = ";".join(page_phones[:10])
             res.content_identity_hash = cc.get("content_hash", "")
             res.content_structure_hash = cc.get("structure_hash", "")
+            res.content_is_facade = cc.get("is_content_facade", False)
+            res.content_facade_detail = cc.get("facade_detail", "")
+            ext_scripts = cc.get("external_script_domains", [])
+            if ext_scripts:
+                res.content_external_script_domains = ";".join(ext_scripts[:10])
+            res.content_visible_word_count = cc.get("visible_word_count", -1)
         except Exception:
             pass  # Non-critical — don't break analysis if content check fails
     
