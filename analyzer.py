@@ -4201,10 +4201,9 @@ def rdap_lookup(domain: str, timeout: float) -> Tuple[str, int, bool, str]:
             "com": "https://rdap.verisign.com/com/v1/domain/",
             "net": "https://rdap.verisign.com/net/v1/domain/",
             "org": "https://rdap.org/domain/",
-            "io": "https://rdap.nic.io/domain/",
-            "co": "https://rdap.nic.co/domain/",
-            "me": "https://rdap.nic.me/domain/",
-            "ai": "https://rdap.nic.ai/domain/",
+            "io": "https://rdap.identitydigital.services/rdap/domain/",
+            "me": "https://rdap.identitydigital.services/rdap/domain/",
+            "ai": "https://rdap.identitydigital.services/rdap/domain/",
         }
         
         urls_to_try = []
