@@ -637,20 +637,31 @@ def display_results(results: list):
                 st.markdown(f"DMARC: {dmarc}")
             
             age_days = domain_data.get('domain_age_days', -1)
+            age_source = domain_data.get('domain_age_source', '')
+            rdap_created = domain_data.get('rdap_created', '')
             if age_days >= 0:
+                _age_date = rdap_created[:10] if rdap_created else ''
+                _age_src = f" via {age_source.upper()}" if age_source else ''
+                _age_date_str = f" (created {_age_date})" if _age_date else ''
                 if age_days < 7:
-                    st.markdown(f"**Domain Age:** 🔴 {age_days} days")
+                    st.markdown(f"**Domain Age:** 🔴 {age_days} days{_age_date_str}{_age_src}")
                 elif age_days < 30:
-                    st.markdown(f"**Domain Age:** 🟠 {age_days} days")
+                    st.markdown(f"**Domain Age:** 🟠 {age_days} days{_age_date_str}{_age_src}")
                 elif age_days < 90:
-                    st.markdown(f"**Domain Age:** 🟡 {age_days} days")
+                    st.markdown(f"**Domain Age:** 🟡 {age_days} days{_age_date_str}{_age_src}")
                 elif age_days < 365:
-                    st.markdown(f"**Domain Age:** {age_days} days")
+                    st.markdown(f"**Domain Age:** {age_days} days{_age_date_str}{_age_src}")
                 else:
                     years = age_days // 365
-                    st.markdown(f"**Domain Age:** {age_days} days (~{years}yr)")
+                    st.markdown(f"**Domain Age:** {age_days} days (~{years}yr){_age_date_str}{_age_src}")
             else:
                 st.markdown("**Domain Age:** ⚠️ Unknown (RDAP/WHOIS lookup failed)")
+            
+            # Reregistration indicator
+            if domain_data.get('domain_reregistered'):
+                _rereg_date = domain_data.get('domain_reregistered_date', '')[:10]
+                _rereg_days = domain_data.get('domain_reregistered_days', -1)
+                st.markdown(f"**⚠️ Re-registered:** {_rereg_date} ({_rereg_days}d ago) — domain was dropped and re-bought")
             
             # WHOIS privacy indicator
             if domain_data.get('whois_privacy'):
