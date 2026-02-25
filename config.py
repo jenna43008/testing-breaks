@@ -66,6 +66,9 @@ DEFAULT_CONFIG = {
         "content_facade": 25,                  # SPA shell: title present but <30 visible words + external JS
         "registration_opaque": 8,              # Both RDAP+WHOIS failed — cannot determine age/registrar (standalone)
         "registration_opaque_with_risk": 20,   # Registration opaque + content risk signals present (facade/mismatch/broker)
+        "domain_reregistered_recent_with_risk": 18,  # Dropped & re-registered ≤90d + content risk
+        "domain_reregistered_recent": 6,             # Dropped & re-registered ≤90d, no content risk
+        "domain_reregistered_with_risk": 10,          # Dropped & re-registered >90d + content risk
         
         # === TRANSFER LOCK / DOMAIN TAKEOVER ===
         "transfer_lock_recent": 35,        # Transfer lock recently added (post-compromise lockdown signal)
