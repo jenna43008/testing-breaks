@@ -3,24 +3,27 @@ Content Identity Verification
 ==============================
 Detects domains that pass DNS/email infrastructure checks but have
 suspicious web content: cloned pages, identity mismatches, domain
-broker facades, cross-domain email references.
+broker facades, cross-domain email references, SPA shell facades.
 
 Plugs into analyzer.py alongside VirusTotal and hacklink checks.
 Reuses pre-fetched page content (no duplicate HTTP requests).
 
-VERSION: 1.0 (Feb 2026)
+VERSION: 1.1 (Feb 2026)
 - Title vs body identity mismatch
 - Cross-domain email detection (kigs.app showing @topdot.com emails)
 - Privacy/freemail/disposable email on business page
 - Domain broker / parking / for-sale detection
 - Placeholder / template content detection
 - Content + structure hashing for cross-domain clone detection
+- SPA shell / content facade detection (title but no body content)
+- External script domain extraction
 """
 
 import re
 import hashlib
 import logging
-from typing import Dict, List
+from typing import Dict, List, Set
+from urllib.parse import urlparse
 
 log = logging.getLogger("content_checks")
 
@@ -72,6 +75,25 @@ IGNORE_EMAIL_DOMAINS = {
     "gstatic.com", "facebook.com", "twitter.com", "github.com",
 }
 
+# Known-good CDN/framework script hosts — don't flag these as suspicious external scripts
+KNOWN_SCRIPT_HOSTS = {
+    "cdnjs.cloudflare.com", "cdn.cloudflare.com", "ajax.cloudflare.com",
+    "cdn.jsdelivr.net", "unpkg.com", "ajax.googleapis.com",
+    "fonts.googleapis.com", "maps.googleapis.com", "www.googleapis.com",
+    "www.google-analytics.com", "www.googletagmanager.com",
+    "connect.facebook.net", "platform.twitter.com",
+    "js.stripe.com", "checkout.stripe.com",
+    "cdn.shopify.com", "assets.squarespace.com",
+    "static.cloudflareinsights.com", "challenges.cloudflare.com",
+    "www.recaptcha.net", "www.gstatic.com",
+    "code.jquery.com", "stackpath.bootstrapcdn.com",
+    "maxcdn.bootstrapcdn.com", "cdn.bootcss.com",
+    "use.fontawesome.com", "kit.fontawesome.com",
+    "polyfill.io", "cdn.polyfill.io",
+    "d3js.org", "cdn.plot.ly",
+    "hm.baidu.com", "s.yimg.com",
+}
+
 
 # ─────────────────────────────────────────────
 # EXTRACTION HELPERS
@@ -99,7 +121,11 @@ def _extract_title(html: str) -> str:
 def _visible_text(html: str) -> str:
     text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.I)
     text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.I)
+    text = re.sub(r"<noscript[^>]*>.*?</noscript>", "", text, flags=re.DOTALL | re.I)
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
     text = re.sub(r"<[^>]+>", " ", text)
+    # Remove URLs
+    text = re.sub(r"https?://\S+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 def _content_hash(text: str) -> str:
@@ -110,6 +136,57 @@ def _content_hash(text: str) -> str:
 def _structure_hash(html: str) -> str:
     tags = re.findall(r"<(/?\w+)", html)
     return hashlib.sha256(" ".join(tags[:500]).encode()).hexdigest()
+
+def _extract_external_script_domains(html: str, page_domain: str) -> List[str]:
+    """Extract domains of external <script src="..."> that aren't known CDNs."""
+    src_urls = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html, re.I)
+    domains = set()
+    page_base = page_domain.lower().split(".")[-2] if "." in page_domain else page_domain.lower()
+
+    for url in src_urls:
+        try:
+            parsed = urlparse(url)
+            host = parsed.netloc.lower() or ""
+            if not host and url.startswith("//"):
+                host = url.split("//")[1].split("/")[0].lower()
+            if not host:
+                continue
+            # Skip if it's the page's own domain
+            if page_domain.lower() in host or page_base in host:
+                continue
+            # Skip known CDN/framework hosts
+            if host in KNOWN_SCRIPT_HOSTS:
+                continue
+            domains.add(host)
+        except Exception:
+            continue
+    return sorted(domains)
+
+def _extract_all_script_domains(html: str, page_domain: str) -> List[str]:
+    """Extract ALL external script domains (including CDNs) for visibility."""
+    src_urls = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html, re.I)
+    domains = set()
+    page_base = page_domain.lower().split(".")[-2] if "." in page_domain else page_domain.lower()
+
+    for url in src_urls:
+        try:
+            parsed = urlparse(url)
+            host = parsed.netloc.lower() or ""
+            if not host and url.startswith("//"):
+                host = url.split("//")[1].split("/")[0].lower()
+            if not host:
+                continue
+            if page_domain.lower() in host or page_base in host:
+                continue
+            domains.add(host)
+        except Exception:
+            continue
+    return sorted(domains)
+
+def _word_count(text: str) -> int:
+    """Count meaningful words (3+ chars, alpha only)."""
+    words = re.findall(r"\b[a-zA-Z]{3,}\b", text)
+    return len(words)
 
 
 # ─────────────────────────────────────────────
@@ -144,6 +221,12 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
         "content_hash": "",
         "structure_hash": "",
         "title": "",
+        # SPA shell / content facade
+        "is_content_facade": False,
+        "facade_detail": "",
+        "external_script_domains": [],
+        "all_script_domains": [],
+        "visible_word_count": 0,
     }
 
     if not content or len(content) < 50:
@@ -154,18 +237,55 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
     visible = _visible_text(html)
     emails = _extract_emails(html)
     phones = _extract_phones(visible)
+    word_count = _word_count(visible)
+    ext_script_domains = _extract_external_script_domains(html, domain)
+    all_script_domains = _extract_all_script_domains(html, domain)
 
     result["title"] = title
     result["page_emails"] = emails
     result["page_phones"] = phones
     result["content_hash"] = _content_hash(visible)
     result["structure_hash"] = _structure_hash(html)
+    result["external_script_domains"] = ext_script_domains
+    result["all_script_domains"] = all_script_domains
+    result["visible_word_count"] = word_count
 
     domain_lower = domain.lower()
     domain_base = domain_lower.split(".")[0]
 
-    # ── CHECK 1: Title vs Body mismatch ──
-    if title and len(visible) > 200:
+    # ── CHECK 1: SPA Shell / Content Facade ──
+    # Page has a title but virtually no visible body text.
+    # Combined with external script loading, this is suspicious:
+    # the domain claims to be something (via title) but serves
+    # no actual content — everything is loaded via JS from elsewhere.
+    has_title = bool(title and len(title.strip()) > 3)
+    has_scripts = bool(re.search(r'<script', html, re.I))
+    has_external_scripts = bool(re.search(r'<script[^>]+src=', html, re.I))
+
+    if has_title and word_count < 30:
+        # Very few visible words — this is a shell page
+        if has_external_scripts:
+            result["is_content_facade"] = True
+            parts = [
+                f"Title claims '{title}' but page body has only {word_count} visible words",
+                f"Content loaded entirely via external JavaScript",
+            ]
+            if ext_script_domains:
+                parts.append(f"Non-CDN scripts from: {', '.join(ext_script_domains[:5])}")
+            elif all_script_domains:
+                parts.append(f"Scripts from: {', '.join(all_script_domains[:5])}")
+            result["facade_detail"] = " — ".join(parts)
+        elif has_scripts and word_count < 10:
+            # Inline scripts only but still almost empty
+            result["is_content_facade"] = True
+            result["facade_detail"] = (
+                f"Title claims '{title}' but page body has only {word_count} "
+                f"visible words — likely SPA shell or redirect page"
+            )
+
+    # ── CHECK 2: Title vs Body mismatch ──
+    # Only check if there's enough body content to compare against
+    if title and word_count > 50:
         title_words = set(re.findall(r"\b[a-z]{4,}\b", title.lower()))
         stopwords = {"this", "that", "with", "from", "your", "have", "been",
                      "will", "about", "more", "what", "when", "which", "their",
@@ -183,7 +303,7 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
                     f"keywords found in body ({ratio:.0%} match)"
                 )
 
-    # ── CHECK 2: Cross-domain emails ──
+    # ── CHECK 3: Cross-domain emails ──
     for email in emails:
         if "@" not in email:
             continue
@@ -198,7 +318,7 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
         if email_domain not in result["cross_domain_email_domains"]:
             result["cross_domain_email_domains"].append(email_domain)
 
-    # ── CHECK 3: Privacy / freemail / disposable on page ──
+    # ── CHECK 4: Privacy / freemail / disposable on page ──
     for email in emails:
         if "@" not in email:
             continue
@@ -210,14 +330,14 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
         elif email_domain in FREEMAIL_DOMAINS:
             result["page_freemail_contacts"].append(email)
 
-    # ── CHECK 4: Domain broker / parking / for-sale page ──
+    # ── CHECK 5: Domain broker / parking / for-sale page ──
     text_lower = visible.lower()
     matched_phrases = [p for p in BROKER_PARKING_PHRASES if p in text_lower]
     result["broker_indicators"] = matched_phrases
     if len(matched_phrases) >= 3:
         result["is_broker_page"] = True
 
-    # ── CHECK 5: Placeholder / template content ──
+    # ── CHECK 6: Placeholder / template content ──
     matched_placeholders = [p for p in PLACEHOLDER_PHRASES if p in text_lower]
     result["placeholder_phrases"] = matched_placeholders
     if matched_placeholders:
