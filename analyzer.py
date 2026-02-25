@@ -3689,9 +3689,27 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     # Telegram bot tokens, Discord webhooks, base64-encoded exfil payloads
     # in page source are near-certain indicators of a live phishing kit.
     # v7.5: Extract matched values (emails, tokens, URLs) for analyst visibility.
+    # v7.5.1: Same-domain exclusion for js_email_exfil — a site's own contact
+    #         email hardcoded in JS (e.g. "contato@example.com.br" on example.com.br)
+    #         is a contact form, not credential exfiltration.
+    _analyzed_domain_lower = domain.lower().strip('.')
     for pattern_re, signal_name, description in EXFIL_DROP_PATTERNS:
         match = pattern_re.search(content)
         if match:
+            # Same-domain suppression for hardcoded email signals
+            if signal_name == 'js_email_exfil' and match.lastindex and match.lastindex >= 1:
+                try:
+                    email_addr = match.group(1).decode('utf-8', errors='replace').lower()
+                    email_domain = email_addr.split('@', 1)[1].strip('.')
+                    # Suppress if email domain matches or is parent of the analyzed domain
+                    # e.g. email=info@example.com on domain=example.com → suppress
+                    # e.g. email=contact@example.com on domain=shop.example.com → suppress
+                    if (email_domain == _analyzed_domain_lower
+                            or _analyzed_domain_lower.endswith('.' + email_domain)):
+                        continue  # Same-domain contact email — not exfil
+                except Exception:
+                    pass  # If we can't parse, let it fire as normal
+            
             result["exfil_signals"].append(signal_name)
             detail = description
             # If regex has a capture group, extract and append the value
