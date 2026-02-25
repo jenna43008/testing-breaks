@@ -479,6 +479,7 @@ class DomainApprovalResult:
     content_is_facade: bool = False                  # SPA shell: title present but <30 visible words + external JS
     content_facade_detail: str = ""                  # Explanation of why facade was flagged
     content_external_script_domains: str = ""        # Non-CDN external script domains (semicolon-sep)
+    content_external_link_domains: str = ""          # All external domains linked via <a href> (semicolon-sep, with paths)
     content_visible_word_count: int = -1             # Number of visible words on page (-1 = not checked)
     registration_opaque: bool = False                # Both RDAP and WHOIS failed — cannot determine domain age/registrar
     domain_reregistered: bool = False                # RDAP shows a reregistration event (domain was dropped + re-bought)
@@ -6706,6 +6707,9 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             ext_scripts = cc.get("external_script_domains", [])
             if ext_scripts:
                 res.content_external_script_domains = ";".join(ext_scripts[:10])
+            ext_links = cc.get("external_link_domains", [])
+            if ext_links:
+                res.content_external_link_domains = ";".join(ext_links[:20])
             res.content_visible_word_count = cc.get("visible_word_count", -1)
         except Exception:
             pass  # Non-critical — don't break analysis if content check fails
