@@ -14,7 +14,11 @@ VERSION: 7.5.1 (Feb 2026)
   suppressed when form target is a known parking domain, (3) malicious_script
   suppressed when parking page + all external scripts are from known providers
   (CookieYes, HugeDomains analytics → SocGholish false positive), (4) phishing
-  kit composite defense-in-depth: parking-artifact evidence alone cannot fire.
+  kit composite defense-in-depth: parking-artifact evidence alone cannot fire,
+  (5) js_redirect suppressed on parking pages (purchase flow JS navigation),
+  (6) transfer_lock_recent + transfer_lock_with_risk suppressed on parking pages
+  (marketplace locks domains for sale — expected behavior, not post-compromise),
+  (7) pattern match indicator only shows malicious_script when actually scored.
   New constants: KNOWN_PARKING_DOMAINS (25 domains), KNOWN_PARKING_SCRIPT_DOMAINS (10).
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
@@ -4744,7 +4748,20 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append(f"SPAM LINKS ({res.hacklink_spam_link_count} hidden links) → Hidden outbound spam links injected into page")
     
     # === MALICIOUS SCRIPT / HIDDEN INJECTION (HIGH-VALUE SIGNALS) ===
-    if res.hacklink_malicious_script:
+    # v7.5.1: Suppress on parking pages when all external scripts are from known
+    # parking providers (CookieYes, HugeDomains, Google analytics).
+    _suppress_ms_issue = False
+    if res.hacklink_malicious_script and res.is_parking_page:
+        _ext = [d.strip().lower() for d in
+                (res.content_external_script_domains or "").split(";") if d.strip()]
+        if _ext:
+            _suppress_ms_issue = not any(d not in KNOWN_PARKING_SCRIPT_DOMAINS for d in _ext)
+        else:
+            _ms_sigs = set((res.hacklink_malicious_script_signals or "").split(";"))
+            _suppress_ms_issue = _ms_sigs.issubset(
+                {"UNKNOWN_EXTERNAL_SCRIPT", "HIGH_ENTROPY_PATH", "JQUERY_MASQUERADE", ""})
+    
+    if res.hacklink_malicious_script and not _suppress_ms_issue:
         conf = res.hacklink_malicious_script_confidence
         signals = res.hacklink_malicious_script_signals.replace(";", ", ")[:100] if res.hacklink_malicious_script_signals else "unknown"
         if conf == "HIGH":
@@ -5755,7 +5772,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.is_minimal_shell and not res.is_empty_page:
         add("minimal_shell", weights.get('minimal_shell', 15))
     if res.has_js_redirect:
-        add("js_redirect", weights.get('js_redirect', 12))
+        # v7.5.1: Suppress on parking pages — parking providers (HugeDomains, Sedo)
+        # use JS redirects for domain purchase flows and navigation.
+        if not res.is_parking_page:
+            add("js_redirect", weights.get('js_redirect', 12))
     if res.has_meta_refresh:
         add("meta_refresh", weights.get('meta_refresh', 5))
     if res.has_external_js:
@@ -5964,35 +5984,41 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # Like domain age, they only add points when actual content/infrastructure
     # risk signals are present — a WHOIS update alone could be auto-renewal,
     # contact info change, privacy protection, registrar migration, etc.
-    if res.domain_transfer_lock_recent:
-        add("transfer_lock_recent", 0)
-    elif res.whois_recently_updated:
-        add("whois_recently_updated", 0)
-    
-    # Only score transfer lock / WHOIS update when content risk is present
-    _TRANSFER_RISK_SIGNALS = {
-        "hacklink_keywords", "hidden_injection", "hacklink_wp_compromised",
-        "hacklink_spam_links", "hacklink_vulnerable_plugins", "malicious_script",
-        "js_redirect", "minimal_shell", "empty_page",
-        "hosting_suspect", "hosting_free", "typosquat_detected",
-        "redirect_cross_domain", "cross_domain_brand_link",
-        "tld_variant_spoof", "domain_brand_impersonation",
-        "opaque_entity", "sensitive_fields", "phishing_js", "doc_lure",
-        "vt_malicious", "vt_malicious_medium", "vt_suspicious",
-        "blocked_asn", "mx_hijack_high", "mx_hijack_medium",
-        "subdomain_delegation_high", "subdomain_delegation_medium",
-        "ct_reactivated",
-        "oauth_phish", "homoglyph_domain", "cdn_tunnel_suspect", "quishing_profile",
-        "content_title_mismatch", "content_cross_domain_email", "content_broker_page", "content_facade", "registration_opaque",
-        "domain_reregistered_recent", "domain_reregistered",
-    }
-    if (res.domain_transfer_lock_recent or res.whois_recently_updated):
-        has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
-        if has_transfer_risk:
-            if res.domain_transfer_lock_recent:
-                add("transfer_lock_with_risk", weights.get('transfer_lock_recent', 15))
-            else:
-                add("whois_updated_with_risk", weights.get('whois_recently_updated', 10))
+    #
+    # v7.5.1: Suppress entirely on parking pages — domain marketplaces
+    # (HugeDomains, Sedo, Afternic) routinely add transfer locks to protect
+    # domains listed for sale.  A recent lock on a parked domain is expected
+    # marketplace behavior, not a post-compromise lockdown signal.
+    if not res.is_parking_page:
+        if res.domain_transfer_lock_recent:
+            add("transfer_lock_recent", 0)
+        elif res.whois_recently_updated:
+            add("whois_recently_updated", 0)
+        
+        # Only score transfer lock / WHOIS update when content risk is present
+        _TRANSFER_RISK_SIGNALS = {
+            "hacklink_keywords", "hidden_injection", "hacklink_wp_compromised",
+            "hacklink_spam_links", "hacklink_vulnerable_plugins", "malicious_script",
+            "js_redirect", "minimal_shell", "empty_page",
+            "hosting_suspect", "hosting_free", "typosquat_detected",
+            "redirect_cross_domain", "cross_domain_brand_link",
+            "tld_variant_spoof", "domain_brand_impersonation",
+            "opaque_entity", "sensitive_fields", "phishing_js", "doc_lure",
+            "vt_malicious", "vt_malicious_medium", "vt_suspicious",
+            "blocked_asn", "mx_hijack_high", "mx_hijack_medium",
+            "subdomain_delegation_high", "subdomain_delegation_medium",
+            "ct_reactivated",
+            "oauth_phish", "homoglyph_domain", "cdn_tunnel_suspect", "quishing_profile",
+            "content_title_mismatch", "content_cross_domain_email", "content_broker_page", "content_facade", "registration_opaque",
+            "domain_reregistered_recent", "domain_reregistered",
+        }
+        if (res.domain_transfer_lock_recent or res.whois_recently_updated):
+            has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
+            if has_transfer_risk:
+                if res.domain_transfer_lock_recent:
+                    add("transfer_lock_with_risk", weights.get('transfer_lock_recent', 15))
+                else:
+                    add("whois_updated_with_risk", weights.get('whois_recently_updated', 10))
     
     # === MX HIJACK FINGERPRINT (v7.3.1) ===
     if res.mx_provider_mismatch:
@@ -6261,7 +6287,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         _hl_signals.append("hidden content injection")
     if res.hacklink_wp_compromised:
         _hl_signals.append("WP compromised")
-    if res.hacklink_malicious_script:
+    # v7.5.1: Only show malicious script in pattern if it was actually scored
+    # (not suppressed by parking page exclusion)
+    if res.hacklink_malicious_script and "malicious_script" in signals:
         _hl_signals.append("malicious script")
     if res.hacklink_spam_link_count >= 5:
         _hl_signals.append(f"{res.hacklink_spam_link_count} spam links")
