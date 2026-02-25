@@ -481,6 +481,9 @@ class DomainApprovalResult:
     content_external_script_domains: str = ""        # Non-CDN external script domains (semicolon-sep)
     content_visible_word_count: int = -1             # Number of visible words on page (-1 = not checked)
     registration_opaque: bool = False                # Both RDAP and WHOIS failed — cannot determine domain age/registrar
+    domain_reregistered: bool = False                # RDAP shows a reregistration event (domain was dropped + re-bought)
+    domain_reregistered_date: str = ""               # When the domain was re-registered
+    domain_reregistered_days: int = -1               # Days since reregistration
     
     # === WHOIS ENRICHMENT / TRANSFER LOCK ===
     whois_registrar: str = ""                    # Registrar name from WHOIS
@@ -4168,24 +4171,78 @@ def check_corporate_trust_signals(domain: str, timeout: float = 3.0) -> Dict:
     return result
 
 
-def rdap_lookup(domain: str, timeout: float) -> Tuple[str, int]:
+def rdap_lookup(domain: str, timeout: float) -> Tuple[str, int, bool, str]:
+    """Returns: (effective_date_iso, age_days, is_reregistered, rereg_date_iso)"""
     if not REQUESTS_AVAILABLE:
-        return "", -1
+        return "", -1, False, ""
     try:
         parts = domain.split('.')
         base = '.'.join(parts[-3:]) if len(parts) > 2 and parts[-2] in ['co', 'com', 'org', 'net'] else '.'.join(parts[-2:])
-        r = requests.get(f"https://rdap.org/domain/{base}", timeout=timeout)
-        if r.status_code != 200:
-            return "", -1
-        for ev in r.json().get("events", []):
-            if ev.get("eventAction", "").lower() == "registration":
-                created = ev.get("eventDate")
-                if created:
-                    dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                    return dt.isoformat(), (datetime.now(timezone.utc) - dt).days
-        return "", -1
+        tld = parts[-1].lower() if parts else ""
+        
+        # Try rdap.org bootstrap first, then direct registry endpoints as fallback.
+        # rdap.org rate-limits to 10 req/10s and may 429 from shared cloud IPs.
+        _DIRECT_RDAP = {
+            "app": "https://pubapi.registry.google/rdap/domain/",
+            "dev": "https://pubapi.registry.google/rdap/domain/",
+            "page": "https://pubapi.registry.google/rdap/domain/",
+            "new": "https://pubapi.registry.google/rdap/domain/",
+            "google": "https://pubapi.registry.google/rdap/domain/",
+            "com": "https://rdap.verisign.com/com/v1/domain/",
+            "net": "https://rdap.verisign.com/net/v1/domain/",
+            "org": "https://rdap.org/domain/",
+            "io": "https://rdap.nic.io/domain/",
+            "co": "https://rdap.nic.co/domain/",
+            "me": "https://rdap.nic.me/domain/",
+            "ai": "https://rdap.nic.ai/domain/",
+        }
+        
+        urls_to_try = [f"https://rdap.org/domain/{base}"]
+        if tld in _DIRECT_RDAP:
+            urls_to_try.append(f"{_DIRECT_RDAP[tld]}{base}")
+        
+        data = None
+        for url in urls_to_try:
+            try:
+                r = requests.get(url, timeout=timeout, allow_redirects=True)
+                if r.status_code == 200:
+                    data = r.json()
+                    break
+            except Exception:
+                continue
+        
+        if not data:
+            return "", -1, False, ""
+        
+        # Parse events — look for registration, reregistration, and last changed
+        created = None
+        reregistered = None
+        for ev in data.get("events", []):
+            action = ev.get("eventAction", "").lower()
+            date_str = ev.get("eventDate", "")
+            if not date_str:
+                continue
+            if action == "registration" and not created:
+                created = date_str
+            elif action == "reregistration":
+                reregistered = date_str
+        
+        # Use reregistration date if present (domain was dropped and re-registered)
+        # — this gives a more accurate "effective age" than original registration
+        use_date = reregistered or created
+        is_rereg = bool(reregistered)
+        rereg_iso = ""
+        if reregistered:
+            try:
+                rereg_iso = datetime.fromisoformat(reregistered.replace("Z", "+00:00")).isoformat()
+            except Exception:
+                pass
+        if use_date:
+            dt = datetime.fromisoformat(use_date.replace("Z", "+00:00"))
+            return dt.isoformat(), (datetime.now(timezone.utc) - dt).days, is_rereg, rereg_iso
+        return "", -1, False, ""
     except:
-        return "", -1
+        return "", -1, False, ""
 
 
 def whois_lookup(domain: str) -> Tuple[str, int]:
@@ -4617,6 +4674,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append("PLACEHOLDER CONTENT → Page contains template/placeholder text (lorem ipsum, coming soon)")
     if res.registration_opaque:
         all_issues.append("REGISTRATION OPAQUE → Both RDAP and WHOIS failed to return domain creation date/registrar — registration data hidden or unavailable")
+    if res.domain_reregistered:
+        _rereg_age = f"{res.domain_reregistered_days}d ago" if res.domain_reregistered_days >= 0 else "unknown date"
+        _rereg_dt = res.domain_reregistered_date[:10] if res.domain_reregistered_date else "?"
+        all_issues.append(f"DOMAIN RE-REGISTERED ({_rereg_dt}, {_rereg_age}) → Domain was dropped and re-registered — possible expired domain takeover for residual reputation")
     
     # === TRANSFER LOCK / DOMAIN TAKEOVER ===
     if res.domain_transfer_lock_recent:
@@ -5065,6 +5126,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('PRIVACY EMAIL ON PAGE', weights.get('content_privacy_email', 12)),
             ('PLACEHOLDER CONTENT', weights.get('content_placeholder', 10)),
             ('REGISTRATION OPAQUE', weights.get('registration_opaque', 15)),
+            ('DOMAIN RE-REGISTERED', weights.get('domain_reregistered_recent', 10)),
         ]
         for prefix, w in _map:
             if prefix in text:
@@ -5197,6 +5259,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('PRIVACY EMAIL ON PAGE', ['content_privacy_email']),
         ('PLACEHOLDER CONTENT', ['content_placeholder']),
         ('REGISTRATION OPAQUE', ['registration_opaque']),
+        ('DOMAIN RE-REGISTERED', ['domain_reregistered_recent', 'domain_reregistered']),
         # Catch-all for domain age (must be LAST — "DOMAIN" matches broadly)
         ('DOMAIN', ['new_domain_with_risk']),
     ]
@@ -5423,6 +5486,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             "blocked_asn", "cpanel_detected",
             "content_title_mismatch", "content_cross_domain_email",
             "content_broker_page", "content_facade", "registration_opaque",
+            "domain_reregistered_recent", "domain_reregistered",
         }
         has_content_risk = bool(signals & _CONTENT_RISK_SIGNALS)
 
@@ -5731,6 +5795,22 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         else:
             add("registration_opaque", weights.get('registration_opaque', 8))
     
+    # === DOMAIN REREGISTRATION ===
+    # Domain was dropped and re-registered (RDAP "reregistration" event).
+    # Common tactic: buy an expired domain for residual reputation,
+    # then use it for spam/phishing. Scored higher with content risk.
+    if res.domain_reregistered and res.domain_reregistered_days >= 0:
+        _content_risk_present = (
+            res.content_is_facade or res.content_title_body_mismatch or
+            res.content_cross_domain_emails or res.content_is_broker_page
+        )
+        if res.domain_reregistered_days <= 90 and _content_risk_present:
+            add("domain_reregistered_recent", weights.get('domain_reregistered_recent_with_risk', 18))
+        elif res.domain_reregistered_days <= 90:
+            add("domain_reregistered_recent", weights.get('domain_reregistered_recent', 6))
+        elif _content_risk_present:
+            add("domain_reregistered", weights.get('domain_reregistered_with_risk', 10))
+    
     # === TRANSFER LOCK / WHOIS ENRICHMENT ===
     # Transfer lock and WHOIS updates are tracked as zero-point markers.
     # Like domain age, they only add points when actual content/infrastructure
@@ -5756,6 +5836,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         "ct_reactivated",
         "oauth_phish", "homoglyph_domain", "cdn_tunnel_suspect", "quishing_profile",
         "content_title_mismatch", "content_cross_domain_email", "content_broker_page", "content_facade", "registration_opaque",
+        "domain_reregistered_recent", "domain_reregistered",
     }
     if (res.domain_transfer_lock_recent or res.whois_recently_updated):
         has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
@@ -6618,9 +6699,18 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     
     # RDAP
     if check_rdap:
-        res.rdap_created, res.domain_age_days = rdap_lookup(domain, timeout)
+        res.rdap_created, res.domain_age_days, _is_rereg, _rereg_date = rdap_lookup(domain, timeout)
         if res.domain_age_days >= 0:
             res.domain_age_source = "rdap"
+        if _is_rereg:
+            res.domain_reregistered = True
+            res.domain_reregistered_date = _rereg_date
+            if _rereg_date:
+                try:
+                    _rd = datetime.fromisoformat(_rereg_date)
+                    res.domain_reregistered_days = (datetime.now(timezone.utc) - _rd).days
+                except Exception:
+                    pass
     
     # WHOIS fallback if RDAP returned no creation date
     if check_rdap and res.domain_age_days < 0:
