@@ -480,6 +480,7 @@ class DomainApprovalResult:
     content_facade_detail: str = ""                  # Explanation of why facade was flagged
     content_external_script_domains: str = ""        # Non-CDN external script domains (semicolon-sep)
     content_external_link_domains: str = ""          # All external domains linked via <a href> (semicolon-sep, with paths)
+    contact_reuse_results: str = ""                   # JSON: contact info found on other domains (OSINT cross-reference)
     content_visible_word_count: int = -1             # Number of visible words on page (-1 = not checked)
     registration_opaque: bool = False                # Both RDAP and WHOIS failed — cannot determine domain age/registrar
     domain_reregistered: bool = False                # RDAP shows a reregistration event (domain was dropped + re-bought)
@@ -4778,6 +4779,19 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     elif res.is_cdn_hosted:
         positives.append(f"CDN-hosted ({res.cdn_provider}) — origin hidden but no abuse indicators")
     
+    # === CONTACT CROSS-REFERENCE (OSINT) ===
+    if res.contact_reuse_results:
+        try:
+            import json as _json
+            _cr = _json.loads(res.contact_reuse_results)
+            for _m in _cr.get("matches", []):
+                _icon = "📧" if _m["type"] == "email" else "📞"
+                _contact = _m["contact"]
+                _doms = ", ".join(_m["found_on"][:5])
+                all_issues.append(f"{_icon} SHARED CONTACT ({_contact}) → also found on: {_doms}")
+        except Exception:
+            pass
+    
     # === EMAIL AUTHENTICATION ===
     if not res.dmarc_exists:
         all_issues.append("NO DMARC → Gmail/Yahoo now REQUIRE DMARC; expect 10-30% lower inbox placement")
@@ -6721,6 +6735,21 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.content_visible_word_count = cc.get("visible_word_count", -1)
         except Exception:
             pass  # Non-critical — don't break analysis if content check fails
+    
+    # === CONTACT CROSS-REFERENCE (OSINT) ===
+    # Search web for emails/phones found on the page appearing on other domains.
+    # Informational only — helps analysts spot coordinated campaigns.
+    try:
+        from contact_osint import search_contact_reuse
+        import json as _json
+        _emails = res.content_page_emails.split(";") if res.content_page_emails else []
+        _phones = res.content_page_phones.split(";") if res.content_page_phones else []
+        if _emails or _phones:
+            _osint = search_contact_reuse(_emails, _phones, domain, timeout=8)
+            if _osint.get("matches"):
+                res.contact_reuse_results = _json.dumps(_osint)
+    except Exception:
+        pass  # Non-critical — never break analysis for OSINT lookup failure
     
     # RDAP
     if check_rdap:
