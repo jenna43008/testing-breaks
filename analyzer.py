@@ -320,6 +320,13 @@ class DomainApprovalResult:
     exfil_drop_details: str = ""               # Human-readable descriptions
     phishing_kit_detected: bool = False        # Composite: multiple kit signals confirm a kit
     phishing_kit_reason: str = ""              # Human-readable explanation of kit detection
+    
+    # === CLIENT-SIDE HARVEST DETECTION (v7.5) ===
+    has_harvest_signals: bool = False           # Any client-side harvest pattern matched
+    harvest_signals: str = ""                  # Semicolon-separated harvest signal names
+    harvest_details: str = ""                  # Human-readable descriptions with extracted values
+    has_harvest_combo: bool = False             # Combo: harvest + corroborating signal
+    harvest_combo_reason: str = ""             # What harvest + what corroborating signal(s)
     has_form_action_kit: bool = False           # <form action="gate.php"> targets kit filename
     form_action_kit_target: str = ""           # Which kit filename the form posts to
     form_action_kit_strong: bool = False        # True if form targets strong kit filename
@@ -601,26 +608,103 @@ PHISHING_KIT_FILENAMES_WEAK = [
 import re as _re
 EXFIL_DROP_PATTERNS = [
     # Telegram Bot API tokens — format: bot{8-10 digits}:{35 alphanumeric+_-}
-    (_re.compile(rb'bot\d{8,10}:AA[A-Za-z0-9_\-]{30,}', _re.IGNORECASE),
+    # Capture group: full bot token
+    (_re.compile(rb'(bot\d{8,12}:[A-Za-z0-9_\-]{35})', _re.IGNORECASE),
      'telegram_bot_token', 'Telegram bot token (credential exfiltration)'),
     # Telegram API sendMessage endpoint
-    (_re.compile(rb'api\.telegram\.org/bot', _re.IGNORECASE),
+    # Capture group: full API URL
+    (_re.compile(rb'(https?://api\.telegram\.org/bot[A-Za-z0-9_:/-]+)', _re.IGNORECASE),
      'telegram_api', 'Telegram API call (credential exfiltration)'),
     # Discord webhook URLs — format: discord.com/api/webhooks/{id}/{token}
-    (_re.compile(rb'discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_\-]+', _re.IGNORECASE),
+    # Capture group: full webhook URL
+    (_re.compile(rb'(https?://(?:discord(?:app)?\.com|canary\.discord\.com)/api/webhooks/\d+/[A-Za-z0-9_\-]+)', _re.IGNORECASE),
      'discord_webhook', 'Discord webhook URL (credential exfiltration)'),
     # Suspicious base64-encoded blocks near network calls
-    (_re.compile(rb'(?:atob|btoa|base64)\s*\(["\'][A-Za-z0-9+/=]{40,}["\']', _re.IGNORECASE),
+    # Capture group: the base64 payload string
+    (_re.compile(rb'(?:atob|btoa|base64)\s*\(\s*["\']([A-Za-z0-9+/=]{40,})["\']', _re.IGNORECASE),
      'base64_exfil', 'Base64-encoded exfiltration payload'),
     # Hardcoded email recipient in JS string context (kit exfil target)
-    (_re.compile(rb'''["'](?:to|email|recipient|receiver)["']\s*[:=]\s*["'][a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}["']''', _re.IGNORECASE),
+    # Capture group: the email address
+    (_re.compile(rb'''["'](?:to|email|recipient|receiver)["']\s*[:=]\s*["']([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})["']''', _re.IGNORECASE),
      'js_email_exfil', 'Hardcoded email in JavaScript (kit exfiltration target)'),
-    # JavaScript cross-domain POST — fetch() or XHR sending data to external domain
-    (_re.compile(rb'''fetch\s*\(\s*["']https?://[^"'/]+[^"']*["']\s*,\s*\{.*?method\s*:\s*["']POST["']''', _re.IGNORECASE | _re.DOTALL),
+    # JavaScript cross-domain POST — fetch() sending data to external domain
+    # Capture group: the target URL
+    (_re.compile(rb'''fetch\s*\(\s*["'](https?://[^"']+)["']\s*,\s*\{[^}]*method\s*:\s*["']POST["']''', _re.IGNORECASE | _re.DOTALL),
      'js_fetch_external_post', 'JavaScript fetch() POST to external domain'),
-    (_re.compile(rb'''\.open\s*\(\s*["']POST["']\s*,\s*["']https?://''', _re.IGNORECASE),
+    # XMLHttpRequest POST to external domain
+    # Capture group: the target URL
+    (_re.compile(rb'''\.open\s*\(\s*["']POST["']\s*,\s*["'](https?://[^"']+)["']''', _re.IGNORECASE),
      'js_xhr_external_post', 'XMLHttpRequest POST to external domain'),
 ]
+
+# Client-side credential harvesting patterns (v7.5).
+# These are NEVER scored alone — too common on legitimate sites.
+# They only fire as part of the client_side_harvest_combo signal when paired
+# with a corroborating lower-confidence phishing signal.
+# Each tuple: (compiled_regex, signal_name, description)
+CLIENT_SIDE_HARVEST_PATTERNS = [
+    # Input value harvesting on password / email / SSN / card fields
+    #   Matches: document.getElementById('password').value
+    #            document.querySelector('[name="email"]').value
+    #            $('#pass').val()
+    (_re.compile(
+        rb'''(?:getElementById|querySelector|getElementsByName|querySelectorAll|\$)\s*\('''
+        rb'''[^)]{0,80}(?:pass|pwd|email|user|login|ssn|card|cvv|pin|otp|token|credential|secret)'''
+        rb'''[^)]{0,40}\)'''
+        rb'''[^;]{0,60}\.(?:value|val\s*\(\s*\))''',
+        _re.IGNORECASE),
+     'harvest_input_value', 'Input value harvesting on sensitive field'),
+
+    # Keylogger: keydown/keypress/keyup event listener with data capture
+    #   Matches: addEventListener('keydown', function(e) { ... e.key ... })
+    (_re.compile(
+        rb'''addEventListener\s*\(\s*["'](?:keydown|keypress|keyup)["']\s*,\s*function'''
+        rb'''[^}]{0,300}(?:\.key|\.which|\.keyCode|\.charCode|String\.fromCharCode)''',
+        _re.IGNORECASE | _re.DOTALL),
+     'harvest_keylogger', 'Keylogger event listener capturing keystrokes'),
+
+    # navigator.sendBeacon() to external URL — stealthier than fetch
+    # Capture group: the external URL
+    (_re.compile(
+        rb'''navigator\s*\.\s*sendBeacon\s*\(\s*["'](https?://[^"']+)["']''',
+        _re.IGNORECASE),
+     'harvest_sendbeacon', 'navigator.sendBeacon() to external URL'),
+
+    # Image pixel exfiltration: new Image().src = url + stolen_data
+    # Capture group: the target URL
+    (_re.compile(
+        rb'''new\s+Image\s*\(\s*\)\s*\.\s*src\s*=\s*["']?(https?://[^"'\s;]+)["']?\s*\+''',
+        _re.IGNORECASE),
+     'harvest_img_pixel', 'Image pixel exfiltration (data appended to URL)'),
+
+    # document.cookie read in suspicious context (near exfil-like patterns)
+    (_re.compile(
+        rb'''document\s*\.\s*cookie.{0,300}(?:fetch|XMLHttpRequest|\.open|sendBeacon|new\s+Image|\.src\s*=|\.send\s*\()''',
+        _re.IGNORECASE | _re.DOTALL),
+     'harvest_cookie_theft', 'document.cookie read near exfiltration call'),
+
+    # FormData constructed from a form and sent cross-origin
+    (_re.compile(
+        rb'''new\s+FormData\s*\([^)]*\).{0,300}(?:fetch|\.send|sendBeacon)\s*\(''',
+        _re.IGNORECASE | _re.DOTALL),
+     'harvest_formdata_exfil', 'FormData constructed and sent externally'),
+]
+
+# Corroborating signals for harvest combo evaluation.
+# The combo fires when: ≥1 harvest pattern + ≥1 corroborating signal.
+# These are lower-confidence phishing signals that, alone, aren't conclusive
+# but become high-confidence when combined with active credential harvesting code.
+HARVEST_CORROBORATING_SIGNALS = {
+    "phishing_kit_filename_weak",     # login.php, verify.php, etc.
+    "has_suspicious_page_title",      # Phishing lure page title
+    "has_credential_form",            # <form> with password/email inputs
+    "form_posts_external",            # <form action="https://other-domain/...">
+    "brands_detected",                # Brand impersonation (Microsoft, PayPal, etc.)
+    "phishing_paths_found",           # /verify, /secure, /login in URL path
+    "has_sensitive_fields",           # SSN, card number, etc. in form
+    "doc_sharing_lure",               # Fake OneDrive/Google Docs lure
+    "has_suspicious_iframe",          # Hidden or off-screen iframe
+}
 
 # Suspicious page titles — common in phishing kit landing pages.
 # These are matched against <title> tag content (case-insensitive).
@@ -3343,6 +3427,9 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
         "exfil_signals": [], "exfil_details": [],
         "form_action_kit": "", "form_action_kit_strong": False,
         "page_title": "", "suspicious_title_match": "",
+        # Client-side harvest detection (v7.5)
+        "harvest_signals": [], "harvest_details": [],
+        "harvest_combo": False, "harvest_combo_reason": "",
         # OAuth consent phishing (v7.3.1)
         "oauth_phish": False, "oauth_evidence": [],
     }
@@ -3597,14 +3684,82 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
                 result["kit_filename_strong"] = False
                 break
     
-    # === EXFILTRATION / DROP SCRIPT DETECTION (v7.3) ===
+    # === EXFILTRATION / DROP SCRIPT DETECTION (v7.3, updated v7.5) ===
     # Scan raw HTML source for credential exfiltration patterns.
     # Telegram bot tokens, Discord webhooks, base64-encoded exfil payloads
     # in page source are near-certain indicators of a live phishing kit.
+    # v7.5: Extract matched values (emails, tokens, URLs) for analyst visibility.
     for pattern_re, signal_name, description in EXFIL_DROP_PATTERNS:
-        if pattern_re.search(content):
+        match = pattern_re.search(content)
+        if match:
             result["exfil_signals"].append(signal_name)
-            result["exfil_details"].append(description)
+            detail = description
+            # If regex has a capture group, extract and append the value
+            if match.lastindex and match.lastindex >= 1:
+                try:
+                    extracted = match.group(1).decode('utf-8', errors='replace')
+                    # Truncate very long values (e.g. base64 blobs) for readability
+                    if len(extracted) > 120:
+                        extracted = extracted[:60] + "..." + extracted[-20:]
+                    detail += f" → {extracted}"
+                except Exception:
+                    pass  # Fall back to description-only if decode fails
+            result["exfil_details"].append(detail)
+    
+    # === CLIENT-SIDE HARVEST DETECTION (v7.5) ===
+    # Detect credential harvesting code (input value reads, keyloggers,
+    # sendBeacon, image pixel exfil, cookie theft, FormData send).
+    # These are NEVER scored alone — only flagged for combo evaluation.
+    for pattern_re, signal_name, description in CLIENT_SIDE_HARVEST_PATTERNS:
+        match = pattern_re.search(content)
+        if match:
+            result["harvest_signals"].append(signal_name)
+            detail = description
+            if match.lastindex and match.lastindex >= 1:
+                try:
+                    extracted = match.group(1).decode('utf-8', errors='replace')
+                    if len(extracted) > 120:
+                        extracted = extracted[:60] + "..." + extracted[-20:]
+                    detail += f" → {extracted}"
+                except Exception:
+                    pass
+            result["harvest_details"].append(detail)
+    
+    # === HARVEST COMBO EVALUATION (v7.5) ===
+    # Check if any harvest signal is corroborated by other phishing indicators.
+    # Must run AFTER all content analysis (cred forms, brands, paths, titles).
+    if result["harvest_signals"]:
+        corroborating_found = []
+        # Map result dict keys to corroborating signal names
+        _harvest_corroboration_map = {
+            "credential_form": "has_credential_form",
+            "form_external": "form_posts_external",
+            "sensitive_fields": "has_sensitive_fields",
+            "suspicious_iframe": "has_suspicious_iframe",
+        }
+        # Check boolean flags from the result dict
+        for result_key, signal_label in _harvest_corroboration_map.items():
+            if result.get(result_key):
+                corroborating_found.append(signal_label)
+        # Check string/list fields that indicate presence when non-empty
+        if result.get("brands"):
+            corroborating_found.append("brands_detected")
+        if result.get("phishing_paths"):
+            corroborating_found.append("phishing_paths_found")
+        if result.get("suspicious_title_match"):
+            corroborating_found.append("has_suspicious_page_title")
+        # Kit filename (weak only — strong is already high-confidence on its own)
+        if result.get("kit_filename") and not result.get("kit_filename_strong"):
+            corroborating_found.append("phishing_kit_filename_weak")
+        
+        if corroborating_found:
+            result["harvest_combo"] = True
+            harvest_names = "; ".join(result["harvest_signals"])
+            corr_names = "; ".join(corroborating_found)
+            result["harvest_combo_reason"] = (
+                f"Client-side harvest [{harvest_names}] + "
+                f"corroborating [{corr_names}]"
+            )
     
     # === OAUTH CONSENT PHISHING DETECTION (v7.3.1) ===
     # Attackers set up pages that redirect to real Microsoft/Google OAuth
@@ -4321,6 +4476,15 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.has_suspicious_page_title:
         all_issues.append(f"SUSPICIOUS PAGE TITLE (\"{res.page_title[:60]}\") → Matches phishing lure pattern: \"{res.page_title_match}\"")
     
+    # v7.5: Client-side harvest combo
+    if res.has_harvest_combo:
+        harvest_detail = res.harvest_details.replace(";", "; ")
+        all_issues.append(f"CLIENT-SIDE HARVEST COMBO ({harvest_detail}) → {res.harvest_combo_reason}")
+    elif res.has_harvest_signals:
+        # Informational only — harvest detected but no corroboration (not scored)
+        harvest_detail = res.harvest_details.replace(";", "; ")
+        all_issues.append(f"CLIENT-SIDE HARVEST (uncorroborated, {harvest_detail}) → Credential harvesting code detected but no other phishing indicators")
+    
     # v7.4: WHOIS privacy — only surface as issue when combined with other risk factors
     if res.whois_privacy and res.domain_age_days >= 0 and res.domain_age_days < 90:
         all_issues.append(f"WHOIS PRIVACY ({res.whois_privacy_service}) → Privacy-protected registrant on {res.domain_age_days}d-old domain")
@@ -4745,6 +4909,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('PHISHING KIT FILENAME', weights.get('phishing_kit_filename_strong', 22)),
             ('FORM ACTION → KIT', weights.get('form_action_kit_strong', 25)),
             ('SUSPICIOUS TITLE', weights.get('suspicious_page_title', 5)),
+            ('HARVEST COMBO', weights.get('client_side_harvest_combo', 25)),
             ('CREDENTIAL FORM + BRAND', weights.get('credential_form', 10)),
             ('VULNERABLE WP PLUGINS', weights.get('hacklink_vulnerable_plugins', 25)),
             ('YOUNG DOMAIN + RISK', weights.get('young_domain_with_risk_7d', 25)),
@@ -4885,6 +5050,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('EXFIL DROP SCRIPT', ['exfil_drop_script']),
         ('FORM ACTION KIT', ['form_action_kit_strong', 'form_action_kit_weak']),
         ('SUSPICIOUS TITLE', ['suspicious_page_title']),
+        ('HARVEST COMBO', ['client_side_harvest_combo']),
         ('WHOIS PRIVACY', ['whois_privacy']),
         ('401 UNAUTHORIZED', ['access_restricted']),
         ('403 FORBIDDEN', ['access_restricted']),
@@ -5363,6 +5529,11 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_suspicious_page_title:
         add("suspicious_page_title", weights.get('suspicious_page_title', 5))
     
+    # === v7.5: CLIENT-SIDE HARVEST COMBO ===
+    # Only scored when harvest patterns are corroborated by other phishing signals.
+    if res.has_harvest_combo:
+        add("client_side_harvest_combo", weights.get('client_side_harvest_combo', 25))
+    
     # === v7.4: WHOIS PRIVACY ===
     # Standalone: very low weight (most legitimate domains use privacy too).
     # Value is as combo fuel with new_domain + credential_form + self-hosted MX.
@@ -5696,6 +5867,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         kit_evidence.append("form posts to external domain")
     if res.has_obfuscation:
         kit_evidence.append("obfuscated JS")
+    if res.has_harvest_combo:
+        kit_evidence.append(f"harvest combo: {res.harvest_signals}")
     
     if len(kit_evidence) >= 2 or res.has_exfil_drop_script:
         res.phishing_kit_detected = True
@@ -6105,6 +6278,15 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.has_exfil_drop_script = True
             res.exfil_drop_signals = ";".join(ca["exfil_signals"])
             res.exfil_drop_details = ";".join(ca["exfil_details"])
+        
+        # Client-side harvest detection (v7.5)
+        if ca["harvest_signals"]:
+            res.has_harvest_signals = True
+            res.harvest_signals = ";".join(ca["harvest_signals"])
+            res.harvest_details = ";".join(ca["harvest_details"])
+        if ca["harvest_combo"]:
+            res.has_harvest_combo = True
+            res.harvest_combo_reason = ca["harvest_combo_reason"]
         
         # v7.4: Form action kit filename + suspicious page title
         if ca["form_action_kit"]:
