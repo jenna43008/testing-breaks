@@ -1580,6 +1580,13 @@ def detect_subdomain_delegation_abuse(
     if not parent or parent == submitted_domain.lower().rstrip('.'):
         return result  # Not a subdomain
     
+    # www.example.com pointing to different infra than example.com is completely normal.
+    # Many legitimate sites use CDN for www while apex is on origin, or vice versa.
+    # Never flag www subdomains as delegation abuse.
+    subdomain_part = submitted_domain.lower().rstrip('.').replace(parent, '').rstrip('.')
+    if subdomain_part == 'www':
+        return result
+    
     result["is_subdomain"] = True
     result["parent_domain"] = parent
     
