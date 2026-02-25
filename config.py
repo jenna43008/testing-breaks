@@ -63,6 +63,7 @@ DEFAULT_CONFIG = {
         "content_broker_page": 20,             # Domain broker / parking / for-sale page (3+ phrases)
         "content_privacy_email": 12,           # Privacy email (proton/tutanota) as business contact on page
         "content_placeholder": 10,             # Placeholder content (lorem ipsum, coming soon)
+        "content_facade": 18,                  # SPA shell: title present but <30 visible words + external JS
         
         # === TRANSFER LOCK / DOMAIN TAKEOVER ===
         "transfer_lock_recent": 35,        # Transfer lock recently added (post-compromise lockdown signal)
