@@ -183,6 +183,63 @@ def _extract_all_script_domains(html: str, page_domain: str) -> List[str]:
             continue
     return sorted(domains)
 
+def _extract_external_link_domains(html: str, page_domain: str) -> List[str]:
+    """Extract all unique external domains linked via <a href=\"...\"> on the page.
+    
+    Returns sorted list of (domain, sample_path) tuples as strings like
+    "www.iubenda.com → /privacy-policy/219337" for analyst visibility.
+    Excludes same-domain links and common infrastructure (CDNs, fonts, analytics).
+    """
+    href_urls = re.findall(r'<a[^>]+href=["\']([^"\']+)["\']', html, re.I)
+    page_base = page_domain.lower().split(".")[-2] if "." in page_domain else page_domain.lower()
+    
+    # Infrastructure domains that aren't interesting for analysts
+    _INFRA_DOMAINS = {
+        "fonts.googleapis.com", "fonts.gstatic.com", "www.google.com",
+        "www.googletagmanager.com", "www.google-analytics.com",
+        "ajax.googleapis.com", "cdn.jsdelivr.net", "cdnjs.cloudflare.com",
+        "unpkg.com", "maxcdn.bootstrapcdn.com", "use.fontawesome.com",
+        "kit.fontawesome.com", "www.facebook.com", "twitter.com",
+        "x.com", "www.instagram.com", "www.linkedin.com", "www.youtube.com",
+        "t.me", "wa.me", "api.whatsapp.com",
+    }
+    
+    seen = {}  # domain -> first path seen
+    for url in href_urls:
+        try:
+            if not url.startswith("http"):
+                continue
+            parsed = urlparse(url)
+            host = parsed.netloc.lower().strip(".")
+            if not host:
+                continue
+            # Skip same-domain
+            if page_domain.lower() in host or host in page_domain.lower():
+                continue
+            if page_base in host.split("."):
+                continue
+            # Skip infrastructure
+            if host in _INFRA_DOMAINS:
+                continue
+            # Skip anchor/javascript links
+            if parsed.scheme not in ("http", "https"):
+                continue
+            if host not in seen:
+                path = parsed.path[:60] if parsed.path and parsed.path != "/" else ""
+                seen[host] = path
+        except Exception:
+            continue
+    
+    # Format as "domain → /path" for readability
+    results = []
+    for domain, path in sorted(seen.items()):
+        if path:
+            results.append(f"{domain} → {path}")
+        else:
+            results.append(domain)
+    return results[:20]  # Cap at 20 to avoid noise
+
+
 def _word_count(text: str) -> int:
     """Count meaningful words (3+ chars, alpha only)."""
     words = re.findall(r"\b[a-zA-Z]{3,}\b", text)
@@ -226,6 +283,7 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
         "facade_detail": "",
         "external_script_domains": [],
         "all_script_domains": [],
+        "external_link_domains": [],       # All external domains linked via <a href>
         "visible_word_count": 0,
     }
 
@@ -240,6 +298,7 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
     word_count = _word_count(visible)
     ext_script_domains = _extract_external_script_domains(html, domain)
     all_script_domains = _extract_all_script_domains(html, domain)
+    ext_link_domains = _extract_external_link_domains(html, domain)
 
     result["title"] = title
     result["page_emails"] = emails
@@ -248,6 +307,7 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
     result["structure_hash"] = _structure_hash(html)
     result["external_script_domains"] = ext_script_domains
     result["all_script_domains"] = all_script_domains
+    result["external_link_domains"] = ext_link_domains
     result["visible_word_count"] = word_count
 
     domain_lower = domain.lower()
