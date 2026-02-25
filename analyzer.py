@@ -3414,7 +3414,9 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
             # Non-redirect final response — fetch body with GET if caller wants content
             if fetch_content:
                 try:
-                    get_resp = session.get(current, allow_redirects=False, timeout=timeout, verify=True)
+                    # Use allow_redirects=True so auth pages that redirect to login get captured.
+                    # Many 401/403 pages serve full HTML with footer links (privacy policy etc.)
+                    get_resp = session.get(current, allow_redirects=True, timeout=timeout, verify=True)
                     result["content"] = get_resp.content[:50000]
                     result["content_length"] = len(result["content"])
                 except Exception as e:
@@ -4733,15 +4735,15 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         conf = res.subdomain_divergence_confidence
         if conf == "HIGH":
             all_issues.append(
-                f"🚨 SUBDOMAIN DELEGATION ABUSE ({res.parent_domain} → {domain}, HIGH confidence) → {evidence_str}"
+                f"🚨 SUBDOMAIN DELEGATION ABUSE ({res.parent_domain} → {res.domain}, HIGH confidence) → {evidence_str}"
             )
         elif conf == "MEDIUM":
             all_issues.append(
-                f"⚠️ SUBDOMAIN INFRA DIVERGENCE ({res.parent_domain} → {domain}, MEDIUM) → {evidence_str}"
+                f"⚠️ SUBDOMAIN INFRA DIVERGENCE ({res.parent_domain} → {res.domain}, MEDIUM) → {evidence_str}"
             )
         else:
             all_issues.append(
-                f"SUBDOMAIN INFRA DIVERGENCE ({res.parent_domain} → {domain}, LOW) → {evidence_str}"
+                f"SUBDOMAIN INFRA DIVERGENCE ({res.parent_domain} → {res.domain}, LOW) → {evidence_str}"
             )
     elif res.is_subdomain and res.parent_domain:
         positives.append(f"Subdomain of {res.parent_domain} — infrastructure matches parent")
