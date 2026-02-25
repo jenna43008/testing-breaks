@@ -163,6 +163,7 @@ DEFAULT_CONFIG = {
         "form_action_kit_strong": 25,         # v7.4: <form action="gate.php"> — near-certain kit
         "suspicious_page_title": 5,           # v7.4: "Verify Your Identity" etc — combo fuel
         "whois_privacy": 0,                   # v7.4: Privacy service — no standalone value, combo fuel
+        "client_side_harvest_combo": 25,      # v7.5: Harvest code (input reads, keyloggers, sendBeacon) + corroborating phishing signal
         "form_posts_external": 10,
         "suspicious_iframe": 15,
         "parking_page": 20,
@@ -386,6 +387,15 @@ DEFAULT_CONFIG = {
         {"name": "combo_lure_title_cred_form", "score": 12, "label": "suspicious page title + credential form", "category": "Phishing Kit", "enabled": True, "if_all": ["suspicious_page_title", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_lure_title_brand", "score": 15, "label": "suspicious page title + brand impersonation", "category": "Phishing Kit", "enabled": True, "if_all": ["suspicious_page_title", "brand_impersonation"], "if_any": [], "if_not": []},
         {"name": "combo_lure_title_new_30d", "score": 10, "label": "suspicious page title + domain <30d", "category": "Phishing Kit", "enabled": True, "if_all": ["suspicious_page_title", "domain_lt_30d"], "if_any": [], "if_not": []},
+
+        # --- v7.5: Client-Side Harvest Combo Escalators (4 rules) ---
+        # The harvest combo (input reads, keyloggers, sendBeacon, etc. + corroborating signal)
+        # is already scored at 25 pts.  These combos stack when harvest coincides with
+        # high-confidence exfil/kit indicators, since the combination is near-certain.
+        {"name": "combo_harvest_exfil", "score": 20, "label": "harvest combo + exfil drop script", "category": "Phishing Kit", "enabled": True, "if_all": ["client_side_harvest_combo", "exfil_drop_script"], "if_any": [], "if_not": []},
+        {"name": "combo_harvest_kit_strong", "score": 18, "label": "harvest combo + strong kit filename", "category": "Phishing Kit", "enabled": True, "if_all": ["client_side_harvest_combo", "phishing_kit_filename_strong"], "if_any": [], "if_not": []},
+        {"name": "combo_harvest_brand", "score": 15, "label": "harvest combo + brand impersonation", "category": "Phishing Kit", "enabled": True, "if_all": ["client_side_harvest_combo", "brand_impersonation"], "if_any": [], "if_not": []},
+        {"name": "combo_harvest_new_7d", "score": 15, "label": "harvest combo + domain <7d", "category": "Phishing Kit", "enabled": True, "if_all": ["client_side_harvest_combo", "domain_lt_7d"], "if_any": [], "if_not": []},
 
         # --- v7.4: WHOIS Privacy (3 rules) ---
         # Privacy services are legitimate and common — only meaningful as combo fuel
