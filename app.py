@@ -942,11 +942,12 @@ def display_results(results: list):
             domain_data.get('content_cross_domain_emails') or
             domain_data.get('content_is_broker_page') or
             domain_data.get('content_page_privacy_emails') or
-            domain_data.get('content_is_placeholder')
+            domain_data.get('content_is_placeholder') or
+            domain_data.get('content_is_facade')
         )
         if has_content_identity:
             with st.expander("🔍 Content Identity Verification", expanded=True):
-                ci_col1, ci_col2, ci_col3 = st.columns(3)
+                ci_col1, ci_col2, ci_col3, ci_col4 = st.columns(4)
                 with ci_col1:
                     mismatch = domain_data.get('content_title_body_mismatch', False)
                     icon = "🔴" if mismatch else "🟢"
@@ -960,6 +961,12 @@ def display_results(results: list):
                     broker = domain_data.get('content_is_broker_page', False)
                     icon = "🟠" if broker else "🟢"
                     st.metric(f"{icon} Broker Page", "YES" if broker else "No")
+                with ci_col4:
+                    facade = domain_data.get('content_is_facade', False)
+                    icon = "🔴" if facade else "🟢"
+                    wc = domain_data.get('content_visible_word_count', -1)
+                    label = f"YES ({wc} words)" if facade else "No"
+                    st.metric(f"{icon} Content Facade", label)
                 
                 if mismatch:
                     detail = domain_data.get('content_title_body_detail', '')
@@ -988,6 +995,16 @@ def display_results(results: list):
                 if broker:
                     indicators = domain_data.get('content_broker_indicators', '')
                     st.warning(f"**🟠 Broker Page Indicators:** {indicators.replace(';', ', ')}")
+                
+                if domain_data.get('content_is_facade'):
+                    facade_detail = domain_data.get('content_facade_detail', '')
+                    st.error(f"**🔴 Content Facade / SPA Shell:** {facade_detail}")
+                    ext_scripts = domain_data.get('content_external_script_domains', '')
+                    if ext_scripts:
+                        st.caption(f"External script domains: {ext_scripts.replace(';', ', ')}")
+                    wc = domain_data.get('content_visible_word_count', -1)
+                    if wc >= 0:
+                        st.caption(f"Visible word count: {wc}")
                 
                 if domain_data.get('content_is_placeholder'):
                     st.warning("**🟠 Placeholder Content:** Page contains template/placeholder text")
@@ -1226,7 +1243,8 @@ def admin_view():
                                     'hacklink_vulnerable_plugins', 'hacklink_spam_links'],
             "Malicious Script / Hidden Injection": ['malicious_script', 'hidden_injection', 'cpanel_detected'],
             "Content Identity": ['content_title_mismatch', 'content_cross_domain_email',
-                                'content_broker_page', 'content_privacy_email', 'content_placeholder'],
+                                'content_broker_page', 'content_privacy_email', 'content_placeholder',
+                                'content_facade'],
             "Transfer Lock / Domain Takeover": ['transfer_lock_missing', 'whois_recently_updated',
                                                     'mx_hijack_high', 'mx_hijack_medium',
                                                     'subdomain_delegation_high', 'subdomain_delegation_medium'],
@@ -1495,6 +1513,7 @@ def admin_view():
                 "content_broker_page": "Page is a domain broker, parking, or for-sale page — 3+ broker phrases detected (domain brokerage, submit inquiry, premium domain, etc.)",
                 "content_privacy_email": "Privacy email (Proton, Tutanota) used as business contact on page — legitimate businesses use their own domain email",
                 "content_placeholder": "Placeholder or template content detected (lorem ipsum, coming soon, under construction)",
+                "content_facade": "SPA shell / content facade — page title claims a business but body has <30 visible words, with content loaded entirely via external JavaScript",
             },
         }
         
