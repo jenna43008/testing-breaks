@@ -944,7 +944,8 @@ def display_results(results: list):
             domain_data.get('content_page_privacy_emails') or
             domain_data.get('content_is_placeholder') or
             domain_data.get('content_is_facade') or
-            domain_data.get('registration_opaque')
+            domain_data.get('registration_opaque') or
+            domain_data.get('domain_reregistered')
         )
         if has_content_identity:
             with st.expander("🔍 Content Identity Verification", expanded=True):
@@ -1012,6 +1013,12 @@ def display_results(results: list):
                 
                 if domain_data.get('registration_opaque'):
                     st.error("**🔴 Registration Opaque:** Both RDAP and WHOIS failed to return domain creation date/registrar — registration data hidden or unavailable")
+                
+                if domain_data.get('domain_reregistered'):
+                    _rereg_date = domain_data.get('domain_reregistered_date', '?')[:10]
+                    _rereg_days = domain_data.get('domain_reregistered_days', -1)
+                    _rereg_age = f"{_rereg_days}d ago" if _rereg_days >= 0 else "unknown"
+                    st.error(f"**🔴 Domain Re-Registered:** Dropped and re-registered on {_rereg_date} ({_rereg_age}) — possible expired domain takeover for residual reputation")
                 
                 all_emails = domain_data.get('content_page_emails', '')
                 all_phones = domain_data.get('content_page_phones', '')
@@ -1248,7 +1255,9 @@ def admin_view():
             "Malicious Script / Hidden Injection": ['malicious_script', 'hidden_injection', 'cpanel_detected'],
             "Content Identity": ['content_title_mismatch', 'content_cross_domain_email',
                                 'content_broker_page', 'content_privacy_email', 'content_placeholder',
-                                'content_facade', 'registration_opaque', 'registration_opaque_with_risk'],
+                                'content_facade', 'registration_opaque', 'registration_opaque_with_risk',
+                                'domain_reregistered_recent', 'domain_reregistered_recent_with_risk',
+                                'domain_reregistered_with_risk'],
             "Transfer Lock / Domain Takeover": ['transfer_lock_missing', 'whois_recently_updated',
                                                     'mx_hijack_high', 'mx_hijack_medium',
                                                     'subdomain_delegation_high', 'subdomain_delegation_medium'],
@@ -1520,6 +1529,9 @@ def admin_view():
                 "content_facade": "SPA shell / content facade — page title claims a business but body has <30 visible words, with content loaded entirely via external JavaScript",
                 "registration_opaque": "Both RDAP and WHOIS failed to return domain creation date — registration data hidden or unavailable (standalone, mild signal)",
                 "registration_opaque_with_risk": "Registration opaque COMBINED with content risk signals (facade/mismatch/broker) — much higher confidence of suspicious domain",
+                "domain_reregistered_recent": "Domain was dropped and re-registered within last 90 days (RDAP reregistration event) — common tactic to buy expired domains for residual reputation",
+                "domain_reregistered_recent_with_risk": "Domain re-registered ≤90d ago AND content risk signals present — high confidence expired domain takeover",
+                "domain_reregistered_with_risk": "Domain re-registered >90d ago but content risk signals present — moderate expired domain takeover signal",
             },
         }
         
