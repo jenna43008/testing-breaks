@@ -63,7 +63,7 @@ DEFAULT_CONFIG = {
         "content_broker_page": 20,             # Domain broker / parking / for-sale page (3+ phrases)
         "content_privacy_email": 12,           # Privacy email (proton/tutanota) as business contact on page
         "content_placeholder": 20,             # Placeholder content (lorem ipsum, coming soon)
-        "content_facade": 30,                  # SPA shell: title present but <30 visible words + external JS
+        "content_facade": 35,                  # SPA shell: title present but <30 visible words + external JS
         "registration_opaque": 25,              # Both RDAP+WHOIS failed — cannot determine age/registrar (standalone)
         "registration_opaque_with_risk": 20,   # Registration opaque + content risk signals present (facade/mismatch/broker)
         "domain_reregistered_recent_with_risk": 18,  # Dropped & re-registered ≤90d + content risk
@@ -167,7 +167,7 @@ DEFAULT_CONFIG = {
         "minimal_shell_email_auth_mitigated": -8,   # Shell site with SPF -all + DMARC reject — less likely phishing
         "js_redirect_email_auth_mitigated": -3,      # JS redirect with SPF -all + DMARC reject — nets to ~0
         "meta_refresh": 5,
-        "external_js_loader": 6,
+        "external_js_loader": 10,
         "obfuscated_js": 15,
         "phishing_paths": 25,
         "phishing_kit_filename_strong": 22,   # gate.php, process.php — almost never legitimate
