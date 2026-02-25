@@ -956,7 +956,9 @@ def display_results(results: list):
             domain_data.get('content_is_placeholder') or
             domain_data.get('content_is_facade') or
             domain_data.get('registration_opaque') or
-            domain_data.get('domain_reregistered')
+            domain_data.get('domain_reregistered') or
+            domain_data.get('content_external_link_domains') or
+            domain_data.get('content_page_emails')
         )
         if has_content_identity:
             with st.expander("🔍 Content Identity Verification", expanded=True):
@@ -1039,6 +1041,20 @@ def display_results(results: list):
                         st.text(f"Emails: {all_emails.replace(';', ', ')}")
                     if all_phones:
                         st.text(f"Phones: {all_phones.replace(';', ', ')}")
+                
+                ext_links = domain_data.get('content_external_link_domains', '')
+                if ext_links:
+                    link_list = ext_links.split(";")
+                    st.markdown(f"**🔗 External Domains Linked on Page ({len(link_list)}):**")
+                    for link in link_list:
+                        st.text(f"  • {link}")
+                
+                ext_scripts = domain_data.get('content_external_script_domains', '')
+                if ext_scripts:
+                    script_list = ext_scripts.split(";")
+                    st.markdown(f"**⚙️ External Script Sources ({len(script_list)}):**")
+                    for script in script_list:
+                        st.text(f"  • {script}")
         
         # === DOMAIN TAKEOVER / TRANSFER LOCK ===
         has_takeover_signal = (
