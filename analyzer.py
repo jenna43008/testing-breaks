@@ -4,6 +4,23 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 7.5.1 (Feb 2026)
+- PARKING PAGE FALSE POSITIVE SUPPRESSION: Parking pages (HugeDomains, Sedo,
+  GoDaddy, Afternic, Dan.com, etc.) no longer trigger phishing kit autofail.
+  Root cause: domain purchase forms POST to parking provider (→ form_posts_external)
+  and payment options reference Chase/PayPal/Stripe (→ brand_impersonation), which
+  combined to fire the 2-signal phishing kit composite = false autofail at score 100.
+  Fix: (1) brand detection suppressed on parking pages, (2) form_posts_external
+  suppressed when form target is a known parking domain, (3) malicious_script
+  suppressed when parking page + all external scripts are from known providers
+  (CookieYes, HugeDomains analytics → SocGholish false positive), (4) phishing
+  kit composite defense-in-depth: parking-artifact evidence alone cannot fire.
+  New constants: KNOWN_PARKING_DOMAINS (25 domains), KNOWN_PARKING_SCRIPT_DOMAINS (10).
+- CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
+  (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
+  Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
+  the %.domain prefix only matches certificates with subdomain SANs.
+
 VERSION: 7.5 (Feb 2026)
 - AUTOFAIL OVERRIDE: Deterministic DENY for confirmed threats regardless of score.
   Three conditions force instant denial that no bonus can override:
@@ -1028,6 +1045,45 @@ BRAND_KEYWORDS = [
 
 # Short keywords that need word boundary matching (to avoid false positives like "first" matching "irs")
 BRAND_KEYWORDS_SHORT = [b'irs', b'ups', b'dhl']
+
+# === KNOWN PARKING / DOMAIN-SALE PROVIDERS (v7.5) ===
+# When the page is a parking page AND external resources/forms point to these
+# domains, suppress brand detection, form_posts_external, and malicious script
+# signals to prevent false positives.  Parking pages include payment processor
+# references (Chase, PayPal, Stripe) from the domain purchase flow and cookie
+# consent / analytics scripts that trigger SocGholish false positives.
+KNOWN_PARKING_DOMAINS = {
+    "hugedomains.com", "www.hugedomains.com", "static.hugedomains.com",
+    "hugedomainsdns.com", "forsale.hugedomainsdns.com",
+    "domain-for-sale.hugedomainsdns.com",
+    "sedoparking.com", "www.sedoparking.com", "sedo.com",
+    "godaddy.com", "www.godaddy.com", "domaincontrol.com",
+    "afternic.com", "www.afternic.com",
+    "dan.com", "www.dan.com",
+    "undeveloped.com", "www.undeveloped.com",
+    "namebright.com", "www.namebright.com",
+    "bodis.com", "www.bodis.com",
+    "parkingcrew.net", "www.parkingcrew.net",
+    "domainmarket.com", "www.domainmarket.com",
+    "buydomains.com", "www.buydomains.com",
+    "porkbun.com", "www.porkbun.com",
+}
+
+# Benign external script domains commonly loaded on parking pages.
+# These should NOT trigger UNKNOWN_EXTERNAL_SCRIPT / malicious script
+# when the page is identified as a parking page.
+KNOWN_PARKING_SCRIPT_DOMAINS = {
+    "cdn-cookieyes.com",
+    "static.hugedomains.com",
+    "www.hugedomains.com",
+    "www.google.com",
+    "www.google-analytics.com",
+    "www.googletagmanager.com",
+    "cdn.sedoparking.com",
+    "pagead2.googlesyndication.com",
+    "www.googleadservices.com",
+    "cdn.bodis.com",
+}
 
 # === OAUTH CONSENT PHISHING PATTERNS (v7.3.1) ===
 # OAuth authorization endpoint patterns that indicate consent phishing.
@@ -4412,17 +4468,53 @@ def check_cert_transparency(domain: str, timeout: float = 8.0) -> dict:
     if not REQUESTS_AVAILABLE:
         return result
     try:
-        r = requests.get(
-            f"https://crt.sh/?q=%.{domain}&output=json",
-            timeout=timeout,
-            headers={"User-Agent": "DomainApproval/7.1"}
-        )
-        if r.status_code != 200:
+        # v7.5: Query both subdomain wildcard AND exact apex to catch apex-only certs.
+        # The %.domain query only matches subdomain certs; an apex-only cert
+        # (e.g., E8 cert for gthrr.com with no subdomain SANs) requires a
+        # separate exact query.
+        entries = []
+        ua = {"User-Agent": "DomainApproval/7.1"}
+
+        # Query 1: subdomain wildcard (%.domain.com)
+        try:
+            r1 = requests.get(
+                f"https://crt.sh/?q=%.{domain}&output=json",
+                timeout=timeout, headers=ua
+            )
+            if r1.status_code == 200:
+                sub_entries = r1.json()
+                if isinstance(sub_entries, list):
+                    entries.extend(sub_entries)
+        except Exception:
+            pass
+
+        # Query 2: exact apex domain — catches apex-only certs
+        try:
+            r2 = requests.get(
+                f"https://crt.sh/?q={domain}&output=json",
+                timeout=timeout, headers=ua
+            )
+            if r2.status_code == 200:
+                apex_entries = r2.json()
+                if isinstance(apex_entries, list):
+                    entries.extend(apex_entries)
+        except Exception:
+            pass
+
+        if not entries:
             return result
-        
-        entries = r.json()
-        if not isinstance(entries, list):
-            return result
+
+        # Deduplicate by crt.sh entry ID
+        seen_ids = set()
+        deduped = []
+        for entry in entries:
+            entry_id = entry.get("id") or entry.get("min_cert_id")
+            if entry_id and entry_id in seen_ids:
+                continue
+            if entry_id:
+                seen_ids.add(entry_id)
+            deduped.append(entry)
+        entries = deduped
         
         result["ct_count"] = len(entries)
         
@@ -5777,7 +5869,27 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     
     # === MALICIOUS SCRIPT INJECTION (SocGholish/FakeUpdates/obfuscated) ===
     # v7.2: Multi-signal confidence — HIGH gets full weight, MEDIUM gets reduced weight
-    if res.hacklink_malicious_script:
+    # v7.5: Suppress on parking pages when ALL external scripts are from known providers
+    _suppress_malicious_script = False
+    if res.hacklink_malicious_script and res.is_parking_page:
+        # Check if all external script domains are known parking providers
+        _ext_domains = [d.strip().lower() for d in
+                        (res.content_external_script_domains or "").split(";") if d.strip()]
+        if _ext_domains:
+            _unknown = [d for d in _ext_domains if d not in KNOWN_PARKING_SCRIPT_DOMAINS]
+            if not _unknown:
+                _suppress_malicious_script = True
+        else:
+            # No external scripts tracked — check the signals themselves
+            # If only UNKNOWN_EXTERNAL_SCRIPT + HIGH_ENTROPY_PATH + JQUERY_MASQUERADE
+            # and parking page is confirmed, suppress (these are CookieYes/HugeDomains artifacts)
+            _ms_sigs = set((res.hacklink_malicious_script_signals or "").split(";"))
+            _parking_artifact_sigs = {"UNKNOWN_EXTERNAL_SCRIPT", "HIGH_ENTROPY_PATH",
+                                      "JQUERY_MASQUERADE", ""}
+            if _ms_sigs.issubset(_parking_artifact_sigs):
+                _suppress_malicious_script = True
+    
+    if res.hacklink_malicious_script and not _suppress_malicious_script:
         if res.hacklink_malicious_script_confidence == "HIGH":
             add("malicious_script", weights.get('malicious_script', 100))
         elif res.hacklink_malicious_script_confidence == "MEDIUM":
@@ -6106,8 +6218,23 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         kit_evidence.append(f"harvest combo: {res.harvest_signals}")
     
     if len(kit_evidence) >= 2 or res.has_exfil_drop_script:
-        res.phishing_kit_detected = True
-        res.phishing_kit_reason = " + ".join(kit_evidence)
+        # v7.5 defense-in-depth: On parking pages, brand + form_external are
+        # artifacts of the domain purchase flow (suppressed upstream in v7.5).
+        # As a safety net, if the only evidence is parking-attributable signals
+        # and no exfil/kit-filename/credential-form is present, do NOT fire.
+        if res.is_parking_page and not res.has_exfil_drop_script:
+            _hard_evidence = [e for e in kit_evidence if not (
+                e.startswith("brand:") or
+                e == "form posts to external domain" or
+                e == "obfuscated JS"
+            )]
+            if len(_hard_evidence) >= 2:
+                res.phishing_kit_detected = True
+                res.phishing_kit_reason = " + ".join(kit_evidence)
+            # else: suppress — only soft/parking-artifact evidence on a parking page
+        else:
+            res.phishing_kit_detected = True
+            res.phishing_kit_reason = " + ".join(kit_evidence)
     
     # === BUILD PATTERN MATCH INDICATOR ===
     # Identifies known attack patterns for specialist visibility.
@@ -6503,6 +6630,41 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.has_suspicious_iframe = ca["suspicious_iframe"]
         res.is_parking_page = ca["parking"]
         res.phishing_paths_found = ";".join(ca["phishing_paths"])
+        
+        # === PARKING PAGE FALSE POSITIVE SUPPRESSION (v7.5) ===
+        # Parking pages (HugeDomains, Sedo, GoDaddy, etc.) contain brand references
+        # from payment processing (Chase, PayPal, Stripe) and purchase forms that
+        # POST to the parking provider domain.  These trigger brand_impersonation +
+        # form_posts_external, which fires the phishing kit composite = false autofail.
+        #
+        # When parking is confirmed, suppress:
+        #   1. brands_detected — payment processor refs are not impersonation
+        #   2. form_posts_external — only if form target is a known parking domain
+        if res.is_parking_page:
+            # Suppress brand detection entirely on parking pages
+            if res.brands_detected:
+                res.brands_detected = ""
+            
+            # Suppress form_posts_external if the target is a known parking domain
+            if res.form_posts_external:
+                _form_actions = re.findall(
+                    rb'<form[^>]+action=["\']([^"\']+)["\']',
+                    content.lower() if isinstance(content, bytes) else content.encode().lower()
+                )
+                _all_parking = True
+                for _fa in _form_actions:
+                    try:
+                        _fa_url = _fa.decode('utf-8', errors='ignore')
+                        if _fa_url.startswith(('http://', 'https://')):
+                            _fa_host = urlparse(_fa_url).netloc.lower()
+                            if _fa_host and _fa_host != urlparse(res.final_url).netloc.lower():
+                                if _fa_host not in KNOWN_PARKING_DOMAINS:
+                                    _all_parking = False
+                                    break
+                    except Exception:
+                        pass
+                if _all_parking:
+                    res.form_posts_external = False
         
         # Phishing kit detection (v7.3)
         if ca["kit_filename"]:
