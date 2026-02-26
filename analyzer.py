@@ -22,6 +22,23 @@ VERSION: 7.5.2 (Feb 2026)
       ICANN Redacted, Data Protected) is regulatory compliance, not deliberate evasion.
       Base weight reduced 10 → 5; further -3 for confirmed regulatory services.
       EU domain with ICANN redaction: ~2 points instead of 10.
+- NO-A-RECORD RECOVERY: Domains that exist in DNS but have no A record (mail-only,
+  API-only, dev infrastructure) are no longer instant-denied as "domain does not resolve".
+  The analyzer now probes for MX/TXT/NS/CNAME/AAAA records when A record fails.  If any
+  DNS records exist, analysis continues with all DNS-based checks (email auth, WHOIS, NS
+  risk, CT logs, etc.) while skipping IP-dependent checks (PTR, hosting provider, TLS,
+  HTTP content analysis).  True NXDOMAIN (zero DNS records) still triggers instant DENY.
+  Web-presence scoring signals (no_https, no_ptr, missing_trust_signals, opaque_entity)
+  are suppressed for no-A-record domains to prevent false positives.
+  New fields: no_a_record (bool), dns_records_found (str).
+- DEV / STAGING ENVIRONMENT DETECTION: New classifier identifies dev/staging/QA/sandbox
+  domains using structural signals: subdomain labels (qa.*, dev.*, staging.*, test.*, etc.),
+  deep subdomain depth (3+ levels), transactional-only MX (Mailgun, SendGrid, etc.),
+  no A record, and no web presence.  Classification is informational — flagged in issues
+  display and results but does not change scoring.  Helps analysts contextualize domains
+  that are infrastructure rather than production senders.
+  New fields: is_dev_staging (bool), dev_staging_evidence (str), dev_staging_confidence.
+  New function: detect_dev_staging().
 
 VERSION: 7.5.1 (Feb 2026)
 - PARKING PAGE FALSE POSITIVE SUPPRESSION: Parking pages (HugeDomains, Sedo,
@@ -228,6 +245,8 @@ class DomainApprovalResult:
     # === DNS / NETWORK ===
     resolved: bool = False
     ip_address: str = ""
+    no_a_record: bool = False                    # v7.5.2: Domain exists in DNS but has no A record (mail-only, dev infra, etc.)
+    dns_records_found: str = ""                  # v7.5.2: Which record types were found when no A record (e.g. "MX,TXT,NS")
     
     # === REVERSE DNS (PTR) ===
     ptr_record: str = ""
@@ -568,6 +587,11 @@ class DomainApprovalResult:
     subdomain_infra_divergent: bool = False      # Subdomain points to different infrastructure than parent
     subdomain_divergence_evidence: str = ""      # Evidence of divergence
     subdomain_divergence_confidence: str = ""    # HIGH, MEDIUM, LOW
+    
+    # === DEV / STAGING ENVIRONMENT DETECTION (v7.5.2) ===
+    is_dev_staging: bool = False                  # Likely dev/staging/QA/sandbox environment
+    dev_staging_evidence: str = ""                # Semicolon-separated evidence strings
+    dev_staging_confidence: str = ""              # HIGH, MEDIUM, LOW
     
     # === OAUTH CONSENT PHISHING (v7.3.1) ===
     has_oauth_phish: bool = False                # Page contains OAuth consent phishing patterns
@@ -2283,6 +2307,135 @@ def check_hosting_provider(domain: str, ip: str, ns_records: List[str] = None,
         result["provider"] = best_match["provider"]
         result["provider_type"] = best_match["provider_type"]
         result["detected_via"] = best_match["detected_via"]
+    
+    return result
+
+
+# ============================================================================
+# DEV / STAGING ENVIRONMENT DETECTION (v7.5.2)
+# ============================================================================
+
+# Subdomain labels that strongly indicate development/staging/QA environments
+_DEV_STAGING_LABELS = {
+    'qa', 'dev', 'staging', 'stage', 'stg', 'test', 'testing',
+    'uat', 'sandbox', 'beta', 'preprod', 'pre-prod', 'preview',
+    'demo', 'canary', 'nightly', 'ci', 'cd', 'build',
+    'integration', 'acceptance', 'perf', 'load-test',
+}
+
+# Domain segments (hyphenated) that suggest dev infrastructure
+_DEV_SEGMENT_PATTERNS = {
+    '-dev', '-staging', '-stage', '-stg', '-test', '-qa',
+    '-uat', '-sandbox', '-beta', '-preprod', '-preview', '-demo',
+}
+
+# Transactional-only MX providers (not primary business email)
+_TRANSACTIONAL_MX_PROVIDERS = {
+    'mailgun', 'sendgrid', 'postmark', 'onesignal', 'sparkpost',
+    'mandrill', 'ses', 'sendinblue', 'brevo', 'mailjet',
+    'customerio', 'intercom', 'pushwoosh',
+}
+
+
+def detect_dev_staging(
+    domain: str,
+    is_subdomain: bool,
+    parent_domain: str,
+    mx_provider_type: str,
+    mx_primary: str,
+    no_a_record: bool,
+    https_reachable: bool,
+) -> Dict:
+    """Detect whether a domain is likely a dev/staging/QA environment.
+    
+    Uses structural signals (subdomain labels, depth, MX type, TLD) to
+    classify domains that are development infrastructure rather than
+    production senders.
+    
+    Returns dict with: is_dev_staging (bool), evidence (list), confidence (str)
+    """
+    result = {
+        "is_dev_staging": False,
+        "evidence": [],
+        "confidence": "",
+    }
+    
+    domain_lower = domain.lower().rstrip('.')
+    parts = domain_lower.split('.')
+    
+    # === Signal 1: Subdomain label matches dev/staging patterns ===
+    dev_labels_found = []
+    if is_subdomain and parent_domain:
+        # Extract subdomain part(s) — everything before the parent domain
+        parent_lower = parent_domain.lower().rstrip('.')
+        if domain_lower.endswith('.' + parent_lower):
+            sub_part = domain_lower[:-(len(parent_lower) + 1)]
+            sub_labels = sub_part.split('.')
+            for label in sub_labels:
+                if label in _DEV_STAGING_LABELS:
+                    dev_labels_found.append(label)
+                # Also check for dev-prefixed labels like "dev-api", "staging-v2"
+                for seg in _DEV_SEGMENT_PATTERNS:
+                    if label.startswith(seg.lstrip('-') + '-') or label.endswith(seg):
+                        dev_labels_found.append(label)
+                        break
+    
+    if dev_labels_found:
+        result["evidence"].append(f"subdomain_labels: {','.join(set(dev_labels_found))}")
+    
+    # === Signal 2: Domain name segments (non-subdomain patterns) ===
+    base_name = parts[0] if parts else ""
+    for seg in _DEV_SEGMENT_PATTERNS:
+        if seg in base_name:
+            result["evidence"].append(f"domain_segment: '{seg}' in {base_name}")
+            break
+    
+    # === Signal 3: Deep subdomain depth (3+ levels = infrastructure tooling) ===
+    # qa.rowery.aexol.work = 4 parts, 2 subdomain levels deep
+    registrable = get_registrable_domain(domain_lower)
+    if registrable and domain_lower != registrable:
+        sub_part = domain_lower[:-(len(registrable) + 1)]
+        depth = len(sub_part.split('.'))
+        if depth >= 2:
+            result["evidence"].append(f"subdomain_depth: {depth} levels ({sub_part}.{registrable})")
+    
+    # === Signal 4: Transactional-only MX (Mailgun, SendGrid, etc.) ===
+    # Dev environments often use transactional providers for test emails,
+    # not primary business email providers
+    mx_lower = (mx_primary or "").lower()
+    mx_type_lower = (mx_provider_type or "").lower()
+    for txn_provider in _TRANSACTIONAL_MX_PROVIDERS:
+        if txn_provider in mx_lower or txn_provider in mx_type_lower:
+            result["evidence"].append(f"transactional_mx: {txn_provider}")
+            break
+    
+    # === Signal 5: No A record (mail-only / API-only infrastructure) ===
+    if no_a_record:
+        result["evidence"].append("no_a_record: domain has DNS records but no web server")
+    
+    # === Signal 6: No web presence despite having A record ===
+    if not no_a_record and not https_reachable:
+        result["evidence"].append("no_web_presence: has A record but HTTPS unreachable")
+    
+    # === Confidence scoring ===
+    ev_count = len(result["evidence"])
+    has_label = bool(dev_labels_found)
+    
+    if has_label and ev_count >= 3:
+        result["confidence"] = "HIGH"
+        result["is_dev_staging"] = True
+    elif has_label and ev_count >= 2:
+        result["confidence"] = "MEDIUM"
+        result["is_dev_staging"] = True
+    elif has_label:
+        # Single signal: subdomain label alone is enough to flag
+        result["confidence"] = "LOW"
+        result["is_dev_staging"] = True
+    elif ev_count >= 3:
+        # No dev label but multiple structural signals
+        result["confidence"] = "LOW"
+        result["is_dev_staging"] = True
+    # else: not enough evidence
     
     return result
 
@@ -4913,6 +5066,25 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     elif res.is_subdomain and res.parent_domain:
         positives.append(f"Subdomain of {res.parent_domain} — infrastructure matches parent")
     
+    # v7.5.2: Dev / Staging environment detection
+    if res.is_dev_staging:
+        evidence_str = res.dev_staging_evidence.replace(";", ", ")
+        if res.dev_staging_confidence == "HIGH":
+            all_issues.append(
+                f"DEV/STAGING ENVIRONMENT (HIGH confidence) → {evidence_str}"
+            )
+        else:
+            all_issues.append(
+                f"DEV/STAGING ENVIRONMENT ({res.dev_staging_confidence}) → {evidence_str}"
+            )
+    
+    # v7.5.2: No A record — domain exists in DNS but has no web server
+    if res.no_a_record:
+        all_issues.append(
+            f"NO A RECORD (mail-only / API-only) → DNS records found: {res.dns_records_found}; "
+            f"no web server to analyze"
+        )
+    
     # v7.3.1: OAuth consent phishing
     if res.has_oauth_phish:
         evidence_str = res.oauth_phish_evidence.replace(";", ", ")
@@ -5595,9 +5767,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.spf_exists and not res.spf_has_external_includes:
         add("spf_no_external_includes", weights.get('spf_no_external_includes', 3))
     
-    if not res.ptr_exists:
+    if not res.ptr_exists and not res.no_a_record:
         add("no_ptr", weights.get('no_ptr', 4))
-    elif not res.ptr_matches_forward:
+    elif res.ptr_exists and not res.ptr_matches_forward:
         add("ptr_mismatch", weights.get('ptr_mismatch', 5))
     
     if res.bimi_exists:
@@ -5765,7 +5937,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("ecommerce_no_identity", weights.get('ecommerce_no_identity', 15))
     
     # Web/TLS
-    if not res.https_valid:
+    # v7.5.2: Suppress web-presence signals for no-A-record domains.
+    # A mail-only domain with no web server isn't a security risk — it's a different
+    # architecture.  Penalizing no_https on a domain that has no A record is a false positive.
+    if not res.https_valid and not res.no_a_record:
         add("no_https", weights.get('no_https', 25))
     
     # v4.4: TLS failure markers — tracked for summary/rules but scored at 0.
@@ -5817,12 +5992,14 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # Don't flag on empty pages — obviously an empty page has no /about etc.
     # Don't flag when TLS failed — can't find /about if the server is unreachable;
     # that's already covered by no_https / tls_connection_failed.
-    if res.missing_trust_signals and not res.is_empty_page and not res.tls_connection_failed and not res.tls_handshake_failed:
+    # v7.5.2: Don't flag on no-A-record domains — no web server to check trust pages.
+    if res.missing_trust_signals and not res.is_empty_page and not res.tls_connection_failed and not res.tls_handshake_failed and not res.no_a_record:
         add("missing_trust_signals", weights.get('missing_trust_signals', 8))
     
     # Opaque entity - access blocked AND no corporate footprint
     # This is a classic B2B fraud / supplier impersonation pattern
-    if res.is_opaque_entity and not res.is_empty_page:
+    # v7.5.2: Don't flag on no-A-record domains.
+    if res.is_opaque_entity and not res.is_empty_page and not res.no_a_record:
         add("opaque_entity", weights.get('opaque_entity', 20))
     
     # Content
@@ -6452,14 +6629,32 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.ip_address = socket.gethostbyname(domain)
         res.resolved = True
     except:
-        res.recommendation = "DENY"
-        res.summary = "DENY: Domain does not resolve"
-        res.risk_level = "ERROR"
-        res.risk_score = 100
-        return asdict(res)
+        # v7.5.2: No A record does NOT mean the domain doesn't exist.
+        # Mail-only domains, dev infrastructure, and API-only services may
+        # have MX, TXT, NS, and CNAME records but no web server.
+        # Probe for other DNS record types before giving up.
+        _found_types = []
+        for _rtype in ('MX', 'TXT', 'NS', 'CNAME', 'AAAA'):
+            if dns_query(domain, _rtype):
+                _found_types.append(_rtype)
+        
+        if _found_types:
+            # Domain exists in DNS — just no A record.  Continue analysis
+            # with DNS-only checks (email auth, WHOIS, NS risk, CT, etc.)
+            res.no_a_record = True
+            res.dns_records_found = ",".join(_found_types)
+            # resolved stays False, ip_address stays empty
+        else:
+            # True NXDOMAIN — nothing exists at this domain
+            res.recommendation = "DENY"
+            res.summary = "DENY: Domain does not resolve (NXDOMAIN — no DNS records of any type)"
+            res.risk_level = "ERROR"
+            res.risk_score = 100
+            return asdict(res)
     
-    # PTR
-    res.ptr_exists, res.ptr_record, res.ptr_matches_forward = get_ptr_record(res.ip_address)
+    # PTR (requires IP — skip for no-A-record domains)
+    if res.ip_address:
+        res.ptr_exists, res.ptr_record, res.ptr_matches_forward = get_ptr_record(res.ip_address)
     
     # Domain characteristics
     domain_lower = domain.lower()
@@ -6588,7 +6783,9 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.domain_blacklist_count = bl_count
     res.domain_blacklist_inconclusive = bl_inconclusive
     
-    ip_bl_hits, ip_bl_count, ip_bl_inconclusive = check_ip_blacklists(res.ip_address, config['ip_blacklists'])
+    ip_bl_hits, ip_bl_count, ip_bl_inconclusive = [], 0, 0
+    if res.ip_address:
+        ip_bl_hits, ip_bl_count, ip_bl_inconclusive = check_ip_blacklists(res.ip_address, config['ip_blacklists'])
     res.ip_blacklists_hit = ";".join(ip_bl_hits)
     res.ip_blacklist_count = ip_bl_count
     res.ip_blacklist_inconclusive = ip_bl_inconclusive
@@ -6611,13 +6808,28 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.is_cdn_hosted, res.cdn_provider = detect_cdn_hosted(res.hosting_asn)
     
     # v7.3.1: Subdomain Delegation Abuse Detection
-    sub_result = detect_subdomain_delegation_abuse(
-        submitted_domain=domain,
-        submitted_ip=res.ip_address,
-        submitted_asn=res.hosting_asn,
-        submitted_mx_provider_type=res.mx_provider_type,
-        config=config,
-    )
+    # (Requires IP to compare child vs parent infrastructure)
+    sub_result = {
+        "is_subdomain": False, "parent_domain": "", "parent_ip": "",
+        "parent_asn": "", "parent_asn_org": "", "parent_mx_provider_type": "",
+        "divergent": False, "evidence": [], "confidence": "",
+    }
+    if res.ip_address:
+        sub_result = detect_subdomain_delegation_abuse(
+            submitted_domain=domain,
+            submitted_ip=res.ip_address,
+            submitted_asn=res.hosting_asn,
+            submitted_mx_provider_type=res.mx_provider_type,
+            config=config,
+        )
+    else:
+        # No IP: still determine if subdomain for other checks (NS inheritance, dev detection)
+        _parent = get_registrable_domain(domain)
+        if _parent and _parent != domain.lower().rstrip('.'):
+            sub_part = domain.lower().rstrip('.').replace(_parent, '').rstrip('.')
+            if sub_part != 'www':
+                sub_result["is_subdomain"] = True
+                sub_result["parent_domain"] = _parent
     res.is_subdomain = sub_result["is_subdomain"]
     res.parent_domain = sub_result["parent_domain"]
     res.parent_ip = sub_result["parent_ip"]
@@ -6651,60 +6863,65 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.ns_inherited_from_parent = True
     
     # TLS — v4.4: now captures handshake_failed and connection_failed separately
-    tls = check_tls(domain, timeout)
-    res.https_valid = tls["ok"]
-    res.tls_error = tls["error"]
-    res.tls_handshake_failed = tls["handshake_failed"]       # v4.4
-    res.tls_connection_failed = tls["connection_failed"]     # v4.4
-    res.cert_self_signed = tls["self_signed"]
-    res.cert_expired = tls["expired"]
-    res.cert_wrong_host = tls["wrong_host"]
+    # (Requires a web server to connect to — skip for no-A-record domains)
+    if res.ip_address:
+        tls = check_tls(domain, timeout)
+        res.https_valid = tls["ok"]
+        res.tls_error = tls["error"]
+        res.tls_handshake_failed = tls["handshake_failed"]       # v4.4
+        res.tls_connection_failed = tls["connection_failed"]     # v4.4
+        res.cert_self_signed = tls["self_signed"]
+        res.cert_expired = tls["expired"]
+        res.cert_wrong_host = tls["wrong_host"]
     
     # HTTP check
-    if REQUESTS_AVAILABLE:
-        try:
-            r = requests.head(f"http://{domain}", timeout=timeout, allow_redirects=False, verify=False)
-            res.http_reachable = r.status_code in [200, 301, 302, 307, 308]
-            res.http_status = r.status_code
-        except:
-            pass
-    
-    # HTTPS with redirects + content
-    https_result = follow_redirects(f"https://{domain}", timeout, fetch_content=True)
-    res.https_reachable = https_result["ok"]
-    res.https_status = https_result["initial_status"]
-    res.redirect_count = https_result["hops"]
-    res.redirect_chain = "→".join(str(s) for s in https_result["chain"])
-    res.redirect_domains = "→".join(https_result["domains"])
-    res.redirect_cross_domain = https_result["cross_domain"]
-    res.redirect_uses_temp = https_result["uses_temp"]
-    res.final_url = https_result["final_url"]
-    res.content_length = https_result["content_length"]
-    
-    all_statuses = https_result["all_statuses"]
-    res.status_codes_seen = ";".join(str(s) for s in sorted(all_statuses) if s > 0)
-    res.has_401 = 401 in all_statuses
-    res.has_403 = 403 in all_statuses
-    res.has_429 = 429 in all_statuses
-    res.has_503 = 503 in all_statuses
-    res.has_5xx = bool(all_statuses & {500, 502, 504})
-    
-    # Access restriction detection - 401/403 on what should be a public site is suspicious
-    if res.has_401 or res.has_403:
-        res.is_access_restricted = True
-        if res.has_401 and res.has_403:
-            res.access_restriction_note = "Both 401 Unauthorized and 403 Forbidden responses"
-        elif res.has_401:
-            res.access_restriction_note = "401 Unauthorized - requires authentication for public site"
-        else:
-            res.access_restriction_note = "403 Forbidden - access blocked"
-    
-    # Content analysis
-    content = https_result["content"]
-    if not content and res.http_reachable:
-        http_result = follow_redirects(f"http://{domain}", timeout, fetch_content=True)
-        content = http_result["content"]
-        res.content_length = http_result["content_length"]
+    # v7.5.2: Skip HTTP/HTTPS probes for no-A-record domains (no web server to connect to)
+    content = b""
+    if res.ip_address:
+        if REQUESTS_AVAILABLE:
+            try:
+                r = requests.head(f"http://{domain}", timeout=timeout, allow_redirects=False, verify=False)
+                res.http_reachable = r.status_code in [200, 301, 302, 307, 308]
+                res.http_status = r.status_code
+            except:
+                pass
+        
+        # HTTPS with redirects + content
+        https_result = follow_redirects(f"https://{domain}", timeout, fetch_content=True)
+        res.https_reachable = https_result["ok"]
+        res.https_status = https_result["initial_status"]
+        res.redirect_count = https_result["hops"]
+        res.redirect_chain = "→".join(str(s) for s in https_result["chain"])
+        res.redirect_domains = "→".join(https_result["domains"])
+        res.redirect_cross_domain = https_result["cross_domain"]
+        res.redirect_uses_temp = https_result["uses_temp"]
+        res.final_url = https_result["final_url"]
+        res.content_length = https_result["content_length"]
+        
+        all_statuses = https_result["all_statuses"]
+        res.status_codes_seen = ";".join(str(s) for s in sorted(all_statuses) if s > 0)
+        res.has_401 = 401 in all_statuses
+        res.has_403 = 403 in all_statuses
+        res.has_429 = 429 in all_statuses
+        res.has_503 = 503 in all_statuses
+        res.has_5xx = bool(all_statuses & {500, 502, 504})
+        
+        # Access restriction detection - 401/403 on what should be a public site is suspicious
+        if res.has_401 or res.has_403:
+            res.is_access_restricted = True
+            if res.has_401 and res.has_403:
+                res.access_restriction_note = "Both 401 Unauthorized and 403 Forbidden responses"
+            elif res.has_401:
+                res.access_restriction_note = "401 Unauthorized - requires authentication for public site"
+            else:
+                res.access_restriction_note = "403 Forbidden - access blocked"
+        
+        # Content analysis
+        content = https_result["content"]
+        if not content and res.http_reachable:
+            http_result = follow_redirects(f"http://{domain}", timeout, fetch_content=True)
+            content = http_result["content"]
+            res.content_length = http_result["content_length"]
     
     # === EMPTY PAGE DETECTION ===
     # A reachable domain that returns empty/near-empty content is suspicious
@@ -6832,7 +7049,8 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     
     # Corporate trust signal check - only if we got a 401/403 or couldn't reach the site
     # A domain that blocks access AND has no trust pages is highly suspicious
-    if res.is_access_restricted or res.is_minimal_shell or not res.https_reachable:
+    # v7.5.2: Skip for no-A-record domains (no web server to probe trust pages)
+    if res.ip_address and (res.is_access_restricted or res.is_minimal_shell or not res.https_reachable):
         trust_signals = check_corporate_trust_signals(domain, timeout=3.0)
         res.trust_pages_checked = ";".join(trust_signals["pages_checked"])
         res.trust_pages_found = ";".join(trust_signals["pages_found"])
@@ -6843,7 +7061,8 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.is_opaque_entity = True
     
     # App Store Presence Detection (legitimacy signal)
-    if APP_STORE_DETECTION_AVAILABLE:
+    # v7.5.2: Skip for no-A-record domains (needs AASA/assetlinks HTTP endpoints)
+    if APP_STORE_DETECTION_AVAILABLE and res.ip_address:
         try:
             app_result = check_app_store_presence(domain, content=content, timeout=5.0)
             res.app_store_has_presence = app_result.get("has_any_app_presence", False)
@@ -7122,6 +7341,23 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     if quishing["profile"]:
         res.quishing_profile = True
         res.quishing_evidence = ";".join(quishing["evidence"])
+    
+    # v7.5.2: Dev / Staging Environment Detection
+    # Classify domains likely used for development, QA, staging, or sandbox purposes.
+    # Informational signal — helps analysts understand context without auto-denying.
+    dev_staging = detect_dev_staging(
+        domain=domain,
+        is_subdomain=res.is_subdomain,
+        parent_domain=res.parent_domain,
+        mx_provider_type=res.mx_provider_type,
+        mx_primary=res.mx_primary,
+        no_a_record=res.no_a_record,
+        https_reachable=res.https_reachable,
+    )
+    if dev_staging["is_dev_staging"]:
+        res.is_dev_staging = True
+        res.dev_staging_evidence = ";".join(dev_staging["evidence"])
+        res.dev_staging_confidence = dev_staging["confidence"]
     
     # Score
     calculate_score(res, config)
