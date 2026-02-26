@@ -188,6 +188,7 @@ DEFAULT_CONFIG = {
         # === BONUSES (Reduce score) ===
         "has_bimi": -15,
         "has_mta_sts": -10,
+        "dev_staging_high": -15,          # v7.5.2: HIGH confidence dev/staging/QA — expected infra patterns, not attacker signals
         
         # === APP STORE PRESENCE BONUSES (Legitimacy signal) ===
         # Rare for bad actors to maintain real app store presence
@@ -741,6 +742,7 @@ DEFAULT_CONFIG = {
     # Example: terravision.eu is a real Italian transport company,
     # not spoofing terravision.com.
     "tld_variant_allowlist": [
+        "aexol.work",       # Polish software studio — .work is dev infra, .com is main business site
         # "terravision.eu",
         # "facts.ae",
     ],
