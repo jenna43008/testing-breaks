@@ -4,6 +4,25 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 7.5.2 (Feb 2026)
+- FALSE POSITIVE FIXES: Four scoring corrections based on qa.rowery.aexol.work analysis:
+  (1) LAME DELEGATION SUBDOMAIN FIX: Subdomains inherit NS records from parent zone —
+      querying NS for a subdomain returns 0 records, which is NORMAL behavior (RFC 1034).
+      Previously this scored +20 as "lame delegation".  Now only flags on apex domains.
+      New field: ns_inherited_from_parent (bool).
+  (2) PHISHING PATHS BENIGN AUTH FIX: Standard web app auth paths (/login, /signin,
+      /auth, /dashboard, /admin, /register, /sso, /oauth, /callback, /portal, /account)
+      no longer trigger phishing_paths (+25) when the redirect stays on the same host.
+      Cross-domain redirects to /login still flag correctly.
+      New constant: BENIGN_AUTH_PATHS.
+  (3) TEMP REDIRECT SAME-HOST FIX: 302/307 redirects that stay on the same registrable
+      domain (e.g. root → /login) are standard web app behavior, not URL cloaking.
+      redirect_temp_302_307 now only scores when redirect_cross_domain is also true.
+  (4) WHOIS PRIVACY GDPR FIX: ICANN/GDPR mandatory redaction (Withheld for Privacy,
+      ICANN Redacted, Data Protected) is regulatory compliance, not deliberate evasion.
+      Base weight reduced 10 → 5; further -3 for confirmed regulatory services.
+      EU domain with ICANN redaction: ~2 points instead of 10.
+
 VERSION: 7.5.1 (Feb 2026)
 - PARKING PAGE FALSE POSITIVE SUPPRESSION: Parking pages (HugeDomains, Sedo,
   GoDaddy, Afternic, Dan.com, etc.) no longer trigger phishing kit autofail.
@@ -434,6 +453,7 @@ class DomainApprovalResult:
     ns_is_free_dns: bool = False                 # NS using free/anonymous authoritative DNS
     ns_free_dns_match: str = ""                  # Which free DNS NS pattern matched
     ns_is_lame_delegation: bool = False          # Zero NS records (broken/abandoned)
+    ns_inherited_from_parent: bool = False        # Subdomain inherits NS from parent zone (not lame)
     ns_is_single_ns: bool = False                # Only 1 NS record (fragile/temporary)
     
     # === HIGH-RISK COMPOSITE INDICATORS ===
@@ -622,6 +642,16 @@ PHISHING_PATHS = [
     # /tunel/ is an attacker typo variant (3 additional hits).
     '/tunnel/', '/tunel/',
 ]
+
+# v7.5.2: BENIGN AUTH PATHS — standard web application authentication endpoints.
+# When the ONLY phishing path matches are these common auth paths AND the redirect
+# stayed on the same host (same registrable domain), suppress the phishing_paths
+# signal.  Cross-domain redirects to /login still flag correctly.
+BENIGN_AUTH_PATHS = {
+    '/login', '/signin', '/auth/', '/dashboard', '/admin',
+    '/register', '/sso', '/oauth', '/callback',
+    '/portal/', '/account',
+}
 
 # ============================================================================
 # PHISHING KIT DETECTION (v7.3)
@@ -3767,6 +3797,25 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
         if p in path:
             result["phishing_paths"].append(p)
     
+    # v7.5.2: Suppress benign auth paths when redirect stayed on same host.
+    # /login, /signin, /auth, /dashboard etc. are standard web app endpoints.
+    # Only suppress if ALL matched paths are benign AND final URL is same domain.
+    if result["phishing_paths"]:
+        final_host = urlparse(final_url).netloc.lower()
+        domain_lower = domain.lower().strip('.')
+        # Same-host check: final URL host matches or is subdomain of analyzed domain
+        _same_host = (
+            final_host == domain_lower
+            or final_host == f"www.{domain_lower}"
+            or final_host.endswith(f".{domain_lower}")
+            or domain_lower.endswith(f".{final_host.lstrip('www.')}")
+        )
+        if _same_host:
+            non_benign = [p for p in result["phishing_paths"] if p not in BENIGN_AUTH_PATHS]
+            if not non_benign:
+                # All matched paths are standard auth endpoints on same host
+                result["phishing_paths"] = []
+    
     # === PHISHING KIT FILENAME DETECTION (v7.3) ===
     # Check if the URL path ends with a known kit entry-point filename.
     path_basename = path.rsplit('/', 1)[-1] if '/' in path else path
@@ -4974,6 +5023,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     if res.ns_is_lame_delegation:
         all_issues.append("LAME DELEGATION (0 NS RECORDS) → Broken or abandoned domain; no functioning DNS")
+    elif res.ns_inherited_from_parent:
+        # Informational only — not scored
+        pass  # Subdomain NS inheritance is normal, no issue to display
     
     if res.ns_is_free_dns:
         all_issues.append(f"FREE DNS PROVIDER ({res.ns_free_dns_match}) → Minimal infrastructure investment; unusual for business senders")
@@ -4992,7 +5044,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append("CROSS-DOMAIN REDIRECT → Suspicious pattern common in phishing")
     
     if res.redirect_uses_temp:
-        all_issues.append("TEMP REDIRECTS (302/307) → Suggests URL cloaking; triggers filters")
+        if res.redirect_cross_domain:
+            all_issues.append("TEMP REDIRECTS (302/307) CROSS-DOMAIN → Suggests URL cloaking; triggers filters")
+        # Same-host temp redirects are informational only (standard web app behavior)
     
     # Check for strong email auth (used to annotate mitigated issues)
     _strong_email = (
@@ -5732,7 +5786,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.redirect_cross_domain:
         add("redirect_cross_domain", weights.get('redirect_cross_domain', 12))
     if res.redirect_uses_temp:
-        add("redirect_temp_302_307", weights.get('redirect_temp_302_307', 10))
+        # v7.5.2: Same-host temp redirects (e.g. root → /login on same domain) are
+        # standard web app behavior, not URL cloaking.  Only score when cross-domain.
+        if res.redirect_cross_domain:
+            add("redirect_temp_302_307", weights.get('redirect_temp_302_307', 10))
     
     # === STATUS CODE SIGNALS (per research: high-value early indicators) ===
     # 401 = unauthorized on public site - unusual
@@ -5829,8 +5886,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # === v7.4: WHOIS PRIVACY ===
     # Standalone: very low weight (most legitimate domains use privacy too).
     # Value is as combo fuel with new_domain + credential_form + self-hosted MX.
+    # v7.5.2: GDPR/ICANN mandatory redaction scores even lower — regulatory
+    # requirement, not deliberate evasion.
+    _REGULATORY_PRIVACY_SERVICES = {
+        'ICANN Redacted', 'Data Protected', 'Withheld for Privacy',
+    }
     if res.whois_privacy:
-        add("whois_privacy", weights.get('whois_privacy', 0))
+        _base_weight = weights.get('whois_privacy', 0)
+        # Reduce further for GDPR/ICANN regulatory redaction
+        if res.whois_privacy_service in _REGULATORY_PRIVACY_SERVICES:
+            _base_weight = max(0, _base_weight - 3)
+        add("whois_privacy", _base_weight)
     
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     if res.has_hijack_path_pattern:
@@ -6576,6 +6642,13 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.ns_free_dns_match = ns_risk["free_dns_match"]
     res.ns_is_lame_delegation = ns_risk["is_lame_delegation"]
     res.ns_is_single_ns = ns_risk["is_single_ns"]
+    
+    # v7.5.2: Subdomains inherit NS records from their parent zone — querying
+    # NS for a subdomain returns 0 records, which is NORMAL (not lame delegation).
+    # Only flag lame delegation on apex/registrable domains.
+    if res.ns_is_lame_delegation and res.is_subdomain:
+        res.ns_is_lame_delegation = False
+        res.ns_inherited_from_parent = True
     
     # TLS — v4.4: now captures handshake_failed and connection_failed separately
     tls = check_tls(domain, timeout)
