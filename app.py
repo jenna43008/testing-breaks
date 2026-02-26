@@ -619,17 +619,43 @@ def display_results(results: list):
                     "`lame_delegation` penalty suppressed."
                 )
             
-            # TLD variant reverse asymmetry (suppressed by stronger signup email)
+            # TLD variant analysis results — always show when data exists
             tld_summary = domain_data.get('tld_variant_summary', '')
-            if tld_summary and not domain_data.get('tld_variant_detected'):
-                if 'signup has DKIM' in tld_summary or 'signup stronger email' in tld_summary or 'signup DMARC' in tld_summary:
+            if tld_summary:
+                variant_domain = domain_data.get('tld_variant_domain', '')
+                variant_words = domain_data.get('tld_variant_content_words', 0)
+                signup_words = domain_data.get('tld_variant_signup_content_words', 0)
+                variant_has_email = domain_data.get('tld_variant_has_email_infra', False)
+                detected = domain_data.get('tld_variant_detected', False)
+                
+                if detected:
+                    # Variant WAS flagged — show the match that caused the penalty
                     _suppression_items.append(
-                        f"🔄 **TLD variant suppressed (reverse asymmetry)** — Signup domain has stronger email auth than the variant. "
-                        f"Spoofers don't invest in DKIM/DMARC. `tld_variant_spoofing` penalty suppressed."
+                        f"⚠️ **TLD variant DETECTED: `{variant_domain}`** — "
+                        f"Variant has {variant_words}w vs signup {signup_words}w | "
+                        f"Variant email infra: {'Yes' if variant_has_email else 'No'}\n\n"
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;`{tld_summary}`"
                     )
                 elif 'ALLOWLISTED' in tld_summary:
                     _suppression_items.append(
                         f"✅ **TLD variant allowlisted** — {tld_summary}"
+                    )
+                elif 'signup has DKIM' in tld_summary or 'signup stronger email' in tld_summary or 'signup DMARC' in tld_summary:
+                    # Suppressed by reverse asymmetry
+                    _suppression_items.append(
+                        f"🔄 **TLD variant suppressed (reverse asymmetry)** — Signup domain has stronger email auth than the variant. "
+                        f"Spoofers don't invest in DKIM/DMARC. `tld_variant_spoofing` penalty suppressed.\n\n"
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;`{tld_summary}`"
+                    )
+                elif 'CHECK ERROR' in tld_summary:
+                    _suppression_items.append(
+                        f"❗ **TLD variant check error** — {tld_summary}"
+                    )
+                else:
+                    # Checked but below threshold — show what was evaluated
+                    _suppression_items.append(
+                        f"ℹ️ **TLD variant checked (not triggered)** — Variants evaluated but asymmetry below threshold.\n\n"
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;`{tld_summary}`"
                     )
             
             # Safe script suppression (inferred: malicious_script raw flag is true but not in breakdown)
@@ -659,8 +685,8 @@ def display_results(results: list):
                     )
             
             if _suppression_items:
-                with st.expander(f"🔍 Active Suppressions & Context ({len(_suppression_items)})", expanded=True):
-                    st.caption("Signals below were detected but suppressed or reduced based on legitimacy context. This is expected behavior — not all signals indicate abuse.")
+                with st.expander(f"🔍 Legitimacy Checks & Context ({len(_suppression_items)})", expanded=True):
+                    st.caption("Detection context: what was checked, what was suppressed, and why. Suppressed signals were detected but reduced based on legitimacy evidence.")
                     for item in _suppression_items:
                         st.markdown(item)
                         st.markdown("")
