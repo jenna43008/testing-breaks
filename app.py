@@ -385,7 +385,7 @@ def display_results(results: list):
             "hacklink_detected": st.column_config.CheckboxColumn("🕷️ Hacklink", width="small"),
             "hacklink_malicious_script": st.column_config.CheckboxColumn("💀 Mal Script", width="small"),
             "hacklink_hidden_injection": st.column_config.CheckboxColumn("💀 Hidden Inj", width="small"),
-            "domain_transfer_lock_missing": st.column_config.CheckboxColumn("🔓 No Lock", width="small"),
+            "domain_transfer_lock_recent": st.column_config.CheckboxColumn("🔓 Lock Recent", width="small"),
             "is_empty_page": st.column_config.CheckboxColumn("📄 Empty", width="small"),
             "ct_log_count": st.column_config.NumberColumn("📜 CT Certs", width="small"),
             "mx_provider_mismatch": st.column_config.CheckboxColumn("🔓 MX Hijack", width="small"),
@@ -408,7 +408,7 @@ def display_results(results: list):
             desired_defaults = ['domain', 'risk_score', 'recommendation', 'summary', 
                         'vt_malicious_count', 'hacklink_detected',
                         'hacklink_malicious_script', 'hacklink_hidden_injection',
-                        'domain_transfer_lock_missing', 'mx_provider_mismatch',
+                        'domain_transfer_lock_recent', 'mx_provider_mismatch',
                         'subdomain_infra_divergent', 'ct_reactivated',
                         'has_oauth_phish', 'is_homoglyph_domain',
                         'quishing_profile', 'cdn_tunnel_suspect',
@@ -585,6 +585,86 @@ def display_results(results: list):
                 
                 st.caption(f"Net score: {total_penalty + total_bonus} → clamped to {domain_data['risk_score']}")
             
+            # === ACTIVE SUPPRESSIONS / LEGITIMACY CONTEXT (v7.5.2+) ===
+            # Shows the reviewer WHY certain signals were suppressed or not scored.
+            _suppression_items = []
+            
+            # No-A-record recovery
+            if domain_data.get('no_a_record'):
+                dns_found = domain_data.get('dns_records_found', 'unknown')
+                _suppression_items.append(
+                    f"📡 **Mail-only domain (no A record)** — DNS records found: {dns_found}. "
+                    f"Web-presence penalties suppressed: `no_https`, `no_ptr`, `missing_trust_signals`, `opaque_entity`."
+                )
+            
+            # Dev/staging environment detection
+            if domain_data.get('is_dev_staging'):
+                confidence = domain_data.get('dev_staging_confidence', '')
+                evidence = domain_data.get('dev_staging_evidence', '').replace(';', ', ')
+                if confidence == "HIGH":
+                    _suppression_items.append(
+                        f"🧪 **Dev/staging environment detected (HIGH confidence, -15 pts)** — Evidence: {evidence}. "
+                        f"Score reduced because dev/QA environments are not production abuse."
+                    )
+                elif confidence:
+                    _suppression_items.append(
+                        f"🧪 **Possible dev/staging environment ({confidence})** — Evidence: {evidence}. "
+                        f"Informational only (no score impact at {confidence} confidence)."
+                    )
+            
+            # NS inherited from parent (not lame delegation)
+            if domain_data.get('ns_inherited_from_parent'):
+                _suppression_items.append(
+                    "🔗 **NS inherited from parent zone** — Subdomain has 0 NS records because it inherits from the parent domain (RFC 1034). "
+                    "`lame_delegation` penalty suppressed."
+                )
+            
+            # TLD variant reverse asymmetry (suppressed by stronger signup email)
+            tld_summary = domain_data.get('tld_variant_summary', '')
+            if tld_summary and not domain_data.get('tld_variant_detected'):
+                if 'signup has DKIM' in tld_summary or 'signup stronger email' in tld_summary or 'signup DMARC' in tld_summary:
+                    _suppression_items.append(
+                        f"🔄 **TLD variant suppressed (reverse asymmetry)** — Signup domain has stronger email auth than the variant. "
+                        f"Spoofers don't invest in DKIM/DMARC. `tld_variant_spoofing` penalty suppressed."
+                    )
+                elif 'ALLOWLISTED' in tld_summary:
+                    _suppression_items.append(
+                        f"✅ **TLD variant allowlisted** — {tld_summary}"
+                    )
+            
+            # Safe script suppression (inferred: malicious_script raw flag is true but not in breakdown)
+            if domain_data.get('hacklink_malicious_script') and breakdown:
+                if 'malicious_script' not in breakdown:
+                    ext_scripts = domain_data.get('content_external_script_domains', '')
+                    if ext_scripts:
+                        _suppression_items.append(
+                            f"🛡️ **Malicious script detection suppressed** — All external scripts from known safe providers: "
+                            f"`{ext_scripts.replace(';', '`, `')}`. `malicious_script` penalty suppressed."
+                        )
+                    elif domain_data.get('is_parking_page'):
+                        _suppression_items.append(
+                            "🛡️ **Malicious script detection suppressed** — Parking page with known provider scripts. "
+                            "`malicious_script` penalty suppressed."
+                        )
+            
+            # Safe iframe suppression (inferred: iframe exists but suspicious_iframe not flagged)
+            # We can't check this directly without raw HTML, but if the issues mention iframe suppression we'd show it
+            
+            # Transfer lock suppressed on parking page
+            if domain_data.get('is_parking_page') and domain_data.get('domain_transfer_lock_recent'):
+                if breakdown and 'transfer_lock_recent' not in breakdown and 'transfer_lock_with_risk' not in breakdown:
+                    _suppression_items.append(
+                        "🏪 **Transfer lock suppressed (parking page)** — Domain marketplaces routinely add transfer locks "
+                        "to protect for-sale domains. `transfer_lock_recent` penalty suppressed."
+                    )
+            
+            if _suppression_items:
+                with st.expander(f"🔍 Active Suppressions & Context ({len(_suppression_items)})", expanded=True):
+                    st.caption("Signals below were detected but suppressed or reduced based on legitimacy context. This is expected behavior — not all signals indicate abuse.")
+                    for item in _suppression_items:
+                        st.markdown(item)
+                        st.markdown("")
+            
             # === ALL ISSUES LIST ===
             all_issues_raw = domain_data.get('all_issues_text', '')
             if all_issues_raw:
@@ -622,6 +702,22 @@ def display_results(results: list):
                             st.markdown(f"- {pts_badge} {display_text}")
             
             st.markdown("---")
+            
+            # === CONTEXT BANNERS (v7.5.2+) ===
+            # Prominent indicators for special domain types that affect analysis scope
+            if domain_data.get('no_a_record'):
+                dns_found = domain_data.get('dns_records_found', '')
+                st.info(f"📡 **Mail-only domain** — No A record (no web server). DNS records found: {dns_found}. Analysis limited to email auth, MX, WHOIS, NS, and CT logs. Web-presence penalties automatically suppressed.")
+            
+            if domain_data.get('is_dev_staging'):
+                confidence = domain_data.get('dev_staging_confidence', '')
+                evidence = domain_data.get('dev_staging_evidence', '').replace(';', ', ')
+                if confidence == "HIGH":
+                    st.info(f"🧪 **Dev/staging environment (HIGH confidence, -15 pts)** — {evidence}")
+                elif confidence == "MEDIUM":
+                    st.info(f"🧪 **Possible dev/staging environment (MEDIUM)** — {evidence}")
+                elif confidence == "LOW":
+                    st.info(f"🧪 **Possible dev/staging environment (LOW)** — {evidence}")
             
             # Key signals
             st.markdown("**Email Authentication:**")
@@ -1079,7 +1175,7 @@ def display_results(results: list):
         
         # === DOMAIN TAKEOVER / TRANSFER LOCK ===
         has_takeover_signal = (
-            domain_data.get('domain_transfer_lock_missing') or 
+            domain_data.get('domain_transfer_lock_recent') or 
             domain_data.get('whois_recently_updated') or
             domain_data.get('mx_provider_mismatch') or
             domain_data.get('subdomain_infra_divergent') or
@@ -1090,8 +1186,13 @@ def display_results(results: list):
                 tk_col1, tk_col2, tk_col3 = st.columns(3)
                 with tk_col1:
                     locked = domain_data.get('domain_transfer_locked', True)
-                    icon = "🟢" if locked else "🔴"
-                    st.metric(f"{icon} Transfer Lock", "Locked" if locked else "UNLOCKED")
+                    recent = domain_data.get('domain_transfer_lock_recent', False)
+                    if recent:
+                        st.metric("🟠 Transfer Lock", "RECENTLY ADDED")
+                    elif locked:
+                        st.metric("🟢 Transfer Lock", "Locked")
+                    else:
+                        st.metric("🔴 Transfer Lock", "UNLOCKED")
                 with tk_col2:
                     days = domain_data.get('whois_recently_updated_days', -1)
                     if days >= 0:
@@ -1139,12 +1240,15 @@ def display_results(results: list):
                     
                     st.code(f"• {sub_evidence}\n\nParent: {parent} → IP {parent_ip} (AS{parent_asn} {parent_asn_org}), MX: {parent_mx}", language=None)
                 
-                if domain_data.get('domain_transfer_lock_missing'):
+                if domain_data.get('domain_transfer_lock_recent'):
                     age = domain_data.get('domain_age_days', -1)
+                    whois_days = domain_data.get('whois_recently_updated_days', -1)
                     if age > 365:
-                        st.error(f"**⚠️ UNLOCKED + {age}d OLD** — Established domain without transfer lock is a strong takeover indicator")
+                        st.error(f"**⚠️ LOCK RECENTLY ADDED + {age}d OLD** — Established domain had transfer lock added recently; possible post-compromise lockdown")
+                    elif whois_days >= 0:
+                        st.warning(f"**Transfer lock recently added** (WHOIS updated {whois_days}d ago) — Monitor for post-compromise lockdown pattern")
                     else:
-                        st.warning("**Transfer lock missing** — Domain is not protected against unauthorized transfers")
+                        st.warning("**Transfer lock recently added** — Possible post-compromise lockdown response")
                 
                 if domain_data.get('whois_recently_updated'):
                     st.warning(f"**WHOIS recently updated** ({domain_data.get('whois_recently_updated_days')}d ago) — Possible ownership change, transfer, or DNS hijack")
@@ -1306,7 +1410,7 @@ def admin_view():
                                 'content_facade', 'registration_opaque', 'registration_opaque_with_risk',
                                 'domain_reregistered_recent', 'domain_reregistered_recent_with_risk',
                                 'domain_reregistered_with_risk'],
-            "Transfer Lock / Domain Takeover": ['transfer_lock_missing', 'whois_recently_updated',
+            "Transfer Lock / Domain Takeover": ['transfer_lock_recent', 'whois_recently_updated',
                                                     'mx_hijack_high', 'mx_hijack_medium',
                                                     'subdomain_delegation_high', 'subdomain_delegation_medium'],
             "Empty Page / Cert Transparency": ['empty_page', 'ct_recent_issuance', 'ct_no_history',
@@ -1539,7 +1643,7 @@ def admin_view():
                 "cpanel_detected": "cPanel shared hosting environment detected — cPanel servers are the #1 target for mass hacklink injection campaigns",
             },
             "Transfer Lock / Domain Takeover": {
-                "transfer_lock_missing": "Domain missing clientTransferProhibited status — not locked against unauthorized transfers",
+                "transfer_lock_recent": "Transfer lock recently added on established domain — possible post-compromise lockdown by owner or registrar",
                 "whois_recently_updated": "WHOIS record updated within last 30 days — possible ownership change, transfer, or DNS hijack",
                 "domain_gt_1yr": "Domain registered more than 1 year ago — established (used in takeover combos)",
                 "mx_hijack_high": "MX hijack fingerprint (HIGH) — SPF/DKIM still references enterprise provider (Google/Microsoft) but MX changed to self-hosted or budget; strong indicator of domain compromise",
