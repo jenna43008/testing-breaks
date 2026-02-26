@@ -175,7 +175,7 @@ DEFAULT_CONFIG = {
         "exfil_drop_script": 30,              # Telegram/Discord/base64 exfil in page source
         "form_action_kit_strong": 25,         # v7.4: <form action="gate.php"> — near-certain kit
         "suspicious_page_title": 5,           # v7.4: "Verify Your Identity" etc — combo fuel
-        "whois_privacy": 10,                   # v7.4: Privacy service — no standalone value, combo fuel
+        "whois_privacy": 5,                    # v7.5.2: Reduced from 10 — combo fuel only, GDPR/ICANN redaction is regulatory not evasion
         "client_side_harvest_combo": 25,      # v7.5: Harvest code (input reads, keyloggers, sendBeacon) + corroborating phishing signal
         "form_posts_external": 10,
         "suspicious_iframe": 15,
