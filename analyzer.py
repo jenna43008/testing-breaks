@@ -5328,6 +5328,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.mta_sts_exists:
         positives.append("MTA-STS enabled")
     
+    if res.is_dev_staging and res.dev_staging_confidence == "HIGH":
+        positives.append("Dev/staging environment (HIGH confidence)")
+    
     if res.app_store_has_presence:
         is_platform_fp = res.hosting_provider_type == "platform"
         if res.app_store_confidence == "high":
@@ -5494,6 +5497,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('PLACEHOLDER CONTENT', weights.get('content_placeholder', 10)),
             ('REGISTRATION OPAQUE', weights.get('registration_opaque', 15)),
             ('DOMAIN RE-REGISTERED', weights.get('domain_reregistered_recent', 10)),
+            ('DEV/STAGING ENVIRONMENT', weights.get('dev_staging_high', -15)),
+            ('NO A RECORD', 0),  # Informational — not a scored signal
         ]
         for prefix, w in _map:
             if prefix in text:
@@ -5627,6 +5632,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('PLACEHOLDER CONTENT', ['content_placeholder']),
         ('REGISTRATION OPAQUE', ['registration_opaque']),
         ('DOMAIN RE-REGISTERED', ['domain_reregistered_recent', 'domain_reregistered']),
+        ('DEV/STAGING ENVIRONMENT', ['dev_staging_high']),
+        ('NO A RECORD', []),  # Informational — not a scored signal
         # Catch-all for domain age (must be LAST — "DOMAIN" matches broadly)
         ('DOMAIN', ['new_domain_with_risk']),
     ]
@@ -5776,6 +5783,13 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("has_bimi", weights.get('has_bimi', -8))
     if res.mta_sts_exists:
         add("has_mta_sts", weights.get('has_mta_sts', -5))
+    
+    # v7.5.2: Dev / Staging environment — HIGH confidence classification reduces score.
+    # Dev/QA/staging domains are not production senders; the classification itself
+    # is strong context that many risk signals (no DKIM, transactional MX, etc.) are
+    # expected infrastructure patterns rather than attacker indicators.
+    if res.is_dev_staging and res.dev_staging_confidence == "HIGH":
+        add("dev_staging_high", weights.get('dev_staging_high', -15))
     
     # === APP STORE PRESENCE BONUS (Legitimacy Signal) ===
     # Tiered by confidence: high (verified deep links) > medium (page links/API) > low (keyword only)
