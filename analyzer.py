@@ -1143,6 +1143,122 @@ KNOWN_PARKING_SCRIPT_DOMAINS = {
     "cdn.bodis.com",
 }
 
+# v7.5.3: Known legitimate SaaS / website-builder script domains.
+# These should NOT trigger UNKNOWN_EXTERNAL_SCRIPT on ANY page (not just parking).
+# Webflow, Wix, Squarespace, etc. use hashed filenames and CloudFront CDNs that
+# look identical to SocGholish obfuscation but are completely benign.
+KNOWN_SAFE_SCRIPT_DOMAINS = {
+    # Website builders / CMS platforms
+    "assets.website-files.com",        # Webflow CDN
+    "d3e54v103j8qbb.cloudfront.net",   # Webflow CloudFront distribution
+    "uploads-ssl.webflow.com",         # Webflow uploads
+    "cdn.webflow.com",                 # Webflow
+    "static.wixstatic.com",            # Wix
+    "static.parastorage.com",          # Wix
+    "cdn.shopify.com",                 # Shopify
+    "cdn.squarespace.com",             # Squarespace
+    "static1.squarespace.com",         # Squarespace
+    "images.squarespace-cdn.com",      # Squarespace
+    "cdn.weebly.com",                  # Weebly
+    "f.hubspotusercontent00.net",      # HubSpot CMS
+    "f.hubspotusercontent10.net",      # HubSpot CMS
+    "f.hubspotusercontent20.net",      # HubSpot CMS
+    "f.hubspotusercontent30.net",      # HubSpot CMS
+    "f.hubspotusercontent40.net",      # HubSpot CMS
+    "js.hs-scripts.com",              # HubSpot tracking
+    "js.hs-analytics.net",            # HubSpot analytics
+    "js.hs-banner.com",               # HubSpot banner
+    "js.usemessages.com",             # HubSpot messages
+    "app.hubspot.com",                # HubSpot
+    # Form / widget / chat providers
+    "zfrmz.com",                       # Zoho Forms
+    "js.hsforms.net",                  # HubSpot Forms
+    "share.hsforms.com",               # HubSpot Forms
+    "embed.typeform.com",              # Typeform
+    "js.jotform.com",                  # JotForm
+    "embed.tawk.to",                   # Tawk.to chat
+    "cdn.livechatinc.com",             # LiveChat
+    "widget.intercom.io",              # Intercom
+    "js.driftt.com",                   # Drift chat
+    "cdn.crisp.chat",                  # Crisp chat
+    # Analytics & marketing (beyond Google)
+    "cdn.segment.com",                 # Segment
+    "cdn.amplitude.com",               # Amplitude
+    "cdn.mxpnl.com",                   # Mixpanel
+    "static.hotjar.com",               # Hotjar
+    "script.hotjar.com",               # Hotjar
+    "snap.licdn.com",                  # LinkedIn Insight
+    "connect.facebook.net",            # Facebook/Meta Pixel
+    "platform.twitter.com",            # Twitter/X
+    # Payment / scheduling / business
+    "js.stripe.com",                   # Stripe
+    "js.braintreegateway.com",         # Braintree
+    "cdn.calendly.com",                # Calendly
+    # Common CDNs (not always pre-filtered by hacklink checker)
+    "cdn.jsdelivr.net",                # jsDelivr
+    "unpkg.com",                       # unpkg
+    "cdnjs.cloudflare.com",            # Cloudflare cdnjs
+    "cdn.tailwindcss.com",             # Tailwind CSS
+    "use.fontawesome.com",             # Font Awesome
+    "kit.fontawesome.com",             # Font Awesome
+    "fonts.googleapis.com",            # Google Fonts
+    "ajax.googleapis.com",             # Google AJAX
+    "swiperjs.com",                    # Swiper.js (slider library)
+    "cdn.snipcart.com",                # Snipcart (e-commerce)
+    "cdn.paddle.com",                  # Paddle (payments)
+    "cdn.lottiefiles.com",             # Lottie animations
+    # Cookie / consent management
+    "cdn-cookieyes.com",               # CookieYes (also in parking list)
+    "cdn.cookielaw.org",               # OneTrust
+    "cdn.iubenda.com",                 # Iubenda
+}
+
+# v7.5.3: Known legitimate iframe source domains.
+# Hidden iframes (display:none, width=0) from these domains are form embeds,
+# chat widgets, analytics pixels, or reCAPTCHA — not malicious content loaders.
+KNOWN_SAFE_IFRAME_DOMAINS = {
+    # Form providers
+    "zfrmz.com",                       # Zoho Forms
+    "forms.zohopublic.com",            # Zoho Forms (alternate)
+    "js.hsforms.net",                  # HubSpot Forms
+    "share.hsforms.com",               # HubSpot Forms
+    "forms.hubspot.com",               # HubSpot Forms
+    "form.typeform.com",               # Typeform
+    "www.jotform.com",                 # JotForm
+    "form.jotform.com",                # JotForm
+    "formspree.io",                    # Formspree
+    "tally.so",                        # Tally Forms
+    "airtable.com",                    # Airtable Forms
+    # Chat widgets
+    "embed.tawk.to",                   # Tawk.to
+    "www.livechatinc.com",             # LiveChat
+    "widget.intercom.io",              # Intercom
+    "js.driftt.com",                   # Drift
+    "cdn.crisp.chat",                  # Crisp
+    # Analytics / tracking pixels
+    "td.doubleclick.net",              # Google DoubleClick
+    "bid.g.doubleclick.net",           # Google DoubleClick
+    "www.googletagmanager.com",        # GTM
+    "www.google.com",                  # Google (reCAPTCHA, maps)
+    "recaptcha.net",                   # reCAPTCHA
+    "www.recaptcha.net",               # reCAPTCHA
+    "www.google-analytics.com",        # Google Analytics
+    "connect.facebook.net",            # Facebook Pixel
+    "www.facebook.com",                # Facebook
+    # Payment / scheduling / booking
+    "js.stripe.com",                   # Stripe
+    "calendly.com",                    # Calendly
+    "app.acuityscheduling.com",        # Acuity Scheduling
+    # Media / social embeds
+    "player.vimeo.com",                # Vimeo
+    "fast.wistia.net",                 # Wistia
+    "www.youtube.com",                 # YouTube
+    "platform.twitter.com",            # Twitter
+    # Cookie consent
+    "cdn-cookieyes.com",               # CookieYes
+    "consent.cookiebot.com",           # Cookiebot
+}
+
 # === OAUTH CONSENT PHISHING PATTERNS (v7.3.1) ===
 # OAuth authorization endpoint patterns that indicate consent phishing.
 # Attackers redirect to real Microsoft/Google OAuth pages with malicious
@@ -3410,6 +3526,35 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
             asymmetry_score += 2
             score_reasons.append("company reg found")
         
+        # --- SIGNUP LEGITIMACY (v7.5.3: reverse asymmetry) ---
+        # If the signup domain has STRONGER email auth than the variant, it's less
+        # likely to be a spoof.  Spoofers don't invest in DKIM (requires DNS TXT
+        # records proving domain ownership) or full DMARC deployment.
+        # This prevents generic descriptive names (e.g., "lawbridge") from being
+        # flagged when the .com.ng has better email infrastructure than the .com.
+        
+        # DKIM on signup = domain ownership proof (spoofers almost never configure)
+        if signup_email["dkim_exists"]:
+            asymmetry_score -= 2
+            score_reasons.append("signup has DKIM (-2)")
+        
+        # Signup has more email auth than variant = reverse disparity
+        reverse_gap = signup_email["auth_count"] - variant_email["auth_count"]
+        if reverse_gap >= 2:
+            asymmetry_score -= 2
+            score_reasons.append(f"signup stronger email ({signup_email['auth_count']} vs {variant_email['auth_count']}, -2)")
+        elif reverse_gap >= 1:
+            asymmetry_score -= 1
+            score_reasons.append(f"signup email edge +{reverse_gap} (-1)")
+        
+        # Signup has DMARC but variant doesn't = serious infrastructure investment
+        if signup_email["dmarc_exists"] and not variant_email["dmarc_exists"]:
+            asymmetry_score -= 1
+            score_reasons.append("signup DMARC, variant none (-1)")
+        
+        # Floor at 0 — reverse asymmetry can neutralize but not invert
+        asymmetry_score = max(0, asymmetry_score)
+        
         diag = f"{variant_domain}: score={asymmetry_score} [{', '.join(score_reasons)}] words={variant_words} email={variant_email['auth_count']}/4 mx_ext={variant_email['mx_external']}"
         diagnostics.append(diag)
         
@@ -3887,8 +4032,33 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
             pass
     result["malware"] = list(set(result["malware"]))[:5]
     
-    if re.search(rb'<iframe[^>]*(?:display:\s*none|width=["\']?[01])', content_lower):
-        result["suspicious_iframe"] = True
+    # v7.5.3: Domain-aware hidden iframe detection.
+    # Hidden iframes from known form/widget/analytics providers (Zoho Forms, HubSpot,
+    # reCAPTCHA, etc.) are standard embeds, not malicious content loaders.
+    # Only flag as suspicious when at least one hidden iframe points to an unknown domain.
+    _hidden_iframes = re.findall(
+        rb'<iframe[^>]*(?:display:\s*none|width=["\']?[01])[^>]*>',
+        content_lower)
+    if not _hidden_iframes:
+        # Also catch reverse order: style before display
+        _hidden_iframes = re.findall(
+            rb'<iframe[^>]*(?:display:\s*none|width=["\']?[01])',
+            content_lower)
+    if _hidden_iframes:
+        _has_unknown_iframe = False
+        for _iframe_tag in _hidden_iframes:
+            _src_match = re.search(rb'src=["\'](?:https?://)?([^/"\'\s>]+)', _iframe_tag)
+            if _src_match:
+                _iframe_domain = _src_match.group(1).decode('utf-8', errors='ignore').lower()
+                if _iframe_domain not in KNOWN_SAFE_IFRAME_DOMAINS:
+                    _has_unknown_iframe = True
+                    break
+            else:
+                # No src attribute or can't parse — could be dynamically loaded, treat as suspicious
+                _has_unknown_iframe = True
+                break
+        if _has_unknown_iframe:
+            result["suspicious_iframe"] = True
     
     # Parking page detection — use full phrases for long strings, word-boundary
     # regex for short words to avoid false positives (e.g. "parked" inside CSS
@@ -4952,16 +5122,25 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     # === MALICIOUS SCRIPT / HIDDEN INJECTION (HIGH-VALUE SIGNALS) ===
     # v7.5.1: Suppress on parking pages when all external scripts are from known
     # parking providers (CookieYes, HugeDomains, Google analytics).
+    # v7.5.3: Also suppress on ANY page when all external scripts are from known
+    # legitimate SaaS providers (Webflow, Zoho, Wix, etc.) — their hash-based
+    # filenames and CloudFront CDNs trigger UNKNOWN_EXTERNAL_SCRIPT + HIGH_ENTROPY_PATH
+    # but are completely benign website-builder artifacts.
     _suppress_ms_issue = False
-    if res.hacklink_malicious_script and res.is_parking_page:
-        _ext = [d.strip().lower() for d in
-                (res.content_external_script_domains or "").split(";") if d.strip()]
-        if _ext:
-            _suppress_ms_issue = not any(d not in KNOWN_PARKING_SCRIPT_DOMAINS for d in _ext)
-        else:
-            _ms_sigs = set((res.hacklink_malicious_script_signals or "").split(";"))
-            _suppress_ms_issue = _ms_sigs.issubset(
-                {"UNKNOWN_EXTERNAL_SCRIPT", "HIGH_ENTROPY_PATH", "JQUERY_MASQUERADE", ""})
+    _ext = [d.strip().lower() for d in
+            (res.content_external_script_domains or "").split(";") if d.strip()]
+    if res.hacklink_malicious_script and _ext:
+        # Check safe SaaS domains first (applies to ALL pages)
+        if not any(d not in KNOWN_SAFE_SCRIPT_DOMAINS for d in _ext):
+            _suppress_ms_issue = True
+        # Then parking-specific domains (only on parking pages)
+        elif res.is_parking_page and not any(d not in KNOWN_PARKING_SCRIPT_DOMAINS for d in _ext):
+            _suppress_ms_issue = True
+    elif res.hacklink_malicious_script and not _ext and res.is_parking_page:
+        # No external scripts tracked — parking page signal-only suppression
+        _ms_sigs = set((res.hacklink_malicious_script_signals or "").split(";"))
+        _suppress_ms_issue = _ms_sigs.issubset(
+            {"UNKNOWN_EXTERNAL_SCRIPT", "HIGH_ENTROPY_PATH", "JQUERY_MASQUERADE", ""})
     
     if res.hacklink_malicious_script and not _suppress_ms_issue:
         conf = res.hacklink_malicious_script_confidence
@@ -6147,24 +6326,25 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # === MALICIOUS SCRIPT INJECTION (SocGholish/FakeUpdates/obfuscated) ===
     # v7.2: Multi-signal confidence — HIGH gets full weight, MEDIUM gets reduced weight
     # v7.5: Suppress on parking pages when ALL external scripts are from known providers
+    # v7.5.3: Also suppress on ANY page when ALL external scripts are from known
+    # legitimate SaaS providers (Webflow, Zoho, Wix, etc.)
     _suppress_malicious_script = False
-    if res.hacklink_malicious_script and res.is_parking_page:
-        # Check if all external script domains are known parking providers
-        _ext_domains = [d.strip().lower() for d in
-                        (res.content_external_script_domains or "").split(";") if d.strip()]
-        if _ext_domains:
-            _unknown = [d for d in _ext_domains if d not in KNOWN_PARKING_SCRIPT_DOMAINS]
-            if not _unknown:
-                _suppress_malicious_script = True
-        else:
-            # No external scripts tracked — check the signals themselves
-            # If only UNKNOWN_EXTERNAL_SCRIPT + HIGH_ENTROPY_PATH + JQUERY_MASQUERADE
-            # and parking page is confirmed, suppress (these are CookieYes/HugeDomains artifacts)
-            _ms_sigs = set((res.hacklink_malicious_script_signals or "").split(";"))
-            _parking_artifact_sigs = {"UNKNOWN_EXTERNAL_SCRIPT", "HIGH_ENTROPY_PATH",
-                                      "JQUERY_MASQUERADE", ""}
-            if _ms_sigs.issubset(_parking_artifact_sigs):
-                _suppress_malicious_script = True
+    _ext_domains = [d.strip().lower() for d in
+                    (res.content_external_script_domains or "").split(";") if d.strip()]
+    if res.hacklink_malicious_script and _ext_domains:
+        # Check safe SaaS domains first (applies to ALL pages)
+        if not any(d not in KNOWN_SAFE_SCRIPT_DOMAINS for d in _ext_domains):
+            _suppress_malicious_script = True
+        # Then parking-specific domains (only on parking pages)
+        elif res.is_parking_page and not any(d not in KNOWN_PARKING_SCRIPT_DOMAINS for d in _ext_domains):
+            _suppress_malicious_script = True
+    elif res.hacklink_malicious_script and not _ext_domains and res.is_parking_page:
+        # No external scripts tracked — parking page signal-only suppression
+        _ms_sigs = set((res.hacklink_malicious_script_signals or "").split(";"))
+        _parking_artifact_sigs = {"UNKNOWN_EXTERNAL_SCRIPT", "HIGH_ENTROPY_PATH",
+                                  "JQUERY_MASQUERADE", ""}
+        if _ms_sigs.issubset(_parking_artifact_sigs):
+            _suppress_malicious_script = True
     
     if res.hacklink_malicious_script and not _suppress_malicious_script:
         if res.hacklink_malicious_script_confidence == "HIGH":
