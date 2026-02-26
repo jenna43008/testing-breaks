@@ -4,6 +4,18 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 7.5.4 (Feb 2026)
+- BINARY CONTENT GUARD: Sites that serve direct binary responses (PE executables,
+  ELF, ZIP, PDF, images, archives) instead of HTML are now detected and content
+  analysis is skipped entirely.  Previously, binary bytes were parsed as HTML,
+  causing spurious regex matches — e.g. embedded PE import table strings ending
+  in ".exe" near bytes that resemble href="…" produced false MALWARE LINKS
+  detections (onlagelsin.com false positive: site returns raw .exe binary).
+  New helper: _is_binary_content() checks magic bytes + NUL-byte heuristic.
+  New fields: is_binary_content (bool), binary_magic (detected file type).
+  Guards added to: analyze_content(), analyze_ecommerce_indicators(),
+  check_hijacked_domain_indicators(), and main analysis flow.
+
 VERSION: 7.5.2 (Feb 2026)
 - FALSE POSITIVE FIXES: Four scoring corrections based on qa.rowery.aexol.work analysis:
   (1) LAME DELEGATION SUBDOMAIN FIX: Subdomains inherit NS records from parent zone —
@@ -360,6 +372,8 @@ class DomainApprovalResult:
     # === WEB: CONTENT ===
     content_length: int = -1
     content_hash: str = ""
+    is_binary_content: bool = False                # v7.5.4: Response is binary (exe, zip, pdf…), not HTML
+    binary_magic: str = ""                         # Detected file type (PE, ELF, ZIP, etc.)
     is_minimal_shell: bool = False
     has_js_redirect: bool = False
     has_meta_refresh: bool = False
@@ -3844,6 +3858,35 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
     return result
 
 
+def _is_binary_content(content: bytes) -> bool:
+    """
+    v7.5.4: Detect binary file content (PE, ELF, ZIP, PDF, images, etc.).
+    Binary data should never be parsed as HTML — it causes spurious pattern
+    matches (e.g. embedded PE strings like "kernel32.exe" near bytes that
+    resemble href="…" produce false malware-link detections).
+    """
+    _BINARY_MAGIC = (
+        b'MZ',          # PE executable (.exe, .dll, .scr)
+        b'\x7fELF',     # ELF (Linux executables)
+        b'PK\x03\x04',  # ZIP / DOCX / XLSX / APK / JAR
+        b'%PDF',         # PDF
+        b'\xca\xfe\xba\xbe',  # Mach-O / Java class
+        b'\x1f\x8b',    # gzip
+        b'Rar!',         # RAR archive
+        b'\x89PNG',      # PNG image
+        b'\xff\xd8\xff', # JPEG image
+        b'GIF8',         # GIF image
+    )
+    head = content[:8]
+    if any(head.startswith(m) for m in _BINARY_MAGIC):
+        return True
+    # Fallback: multiple NUL bytes in first 512 bytes = binary.
+    # HTML/text never contains NUL; binary files almost always do.
+    if content[:512].count(b'\x00') > 5:
+        return True
+    return False
+
+
 def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     result = {
         "minimal_shell": False, "js_redirect": False, "meta_refresh": False,
@@ -3863,6 +3906,10 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     }
     
     if not content:
+        return result
+    
+    # v7.5.4: Skip binary content — see _is_binary_content() docstring
+    if _is_binary_content(content):
         return result
     
     content_lower = content.lower()
@@ -4308,6 +4355,10 @@ def analyze_ecommerce_indicators(content: bytes, domain: str) -> Dict:
     if not content:
         return result
     
+    # v7.5.4: Skip binary content
+    if _is_binary_content(content):
+        return result
+    
     content_str = content.decode('utf-8', errors='ignore').lower()
     
     # === E-COMMERCE DETECTION ===
@@ -4526,6 +4577,10 @@ def check_hijacked_domain_indicators(content: bytes, final_url: str, redirect_ch
             break
     
     if not content:
+        return result
+    
+    # v7.5.4: Skip binary content
+    if _is_binary_content(content):
         return result
     
     content_lower = content.lower()
@@ -5207,6 +5262,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     # === EMPTY PAGE ===
     if res.is_empty_page:
         all_issues.append("EMPTY PAGE → Reachable domain returns empty/near-empty content; possibly parked, abandoned, or stripped post-compromise")
+    
+    # v7.5.4: Binary content detection
+    if res.is_binary_content:
+        all_issues.append(f"BINARY CONTENT ({res.binary_magic}) → Site serves a direct binary download instead of HTML; content analysis skipped to avoid false signals")
     
     # === CERTIFICATE TRANSPARENCY ===
     if res.ct_log_count == 0:
@@ -7128,6 +7187,35 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     
     if content:
         res.content_hash = hashlib.md5(content).hexdigest()[:12]
+        
+        # v7.5.4: Detect binary responses (exe, zip, pdf, images…).
+        # Skip HTML content analysis — binary bytes cause spurious regex matches.
+        if _is_binary_content(content):
+            res.is_binary_content = True
+            _h = content[:4]
+            if _h[:2] == b'MZ':
+                res.binary_magic = "PE executable"
+            elif _h == b'\x7fELF':
+                res.binary_magic = "ELF executable"
+            elif _h == b'PK\x03\x04':
+                res.binary_magic = "ZIP/archive"
+            elif _h == b'%PDF':
+                res.binary_magic = "PDF"
+            elif _h[:3] == b'\xff\xd8\xff':
+                res.binary_magic = "JPEG image"
+            elif _h[:4] == b'\x89PNG':
+                res.binary_magic = "PNG image"
+            elif _h[:4] == b'GIF8':
+                res.binary_magic = "GIF image"
+            elif _h[:2] == b'\x1f\x8b':
+                res.binary_magic = "gzip archive"
+            elif _h[:4] == b'Rar!':
+                res.binary_magic = "RAR archive"
+            else:
+                res.binary_magic = "binary (unknown)"
+    
+    # All HTML content analysis guarded — skip if binary
+    if content and not res.is_binary_content:
         ca = analyze_content(content, res.final_url, domain)
         res.is_minimal_shell = ca["minimal_shell"]
         res.has_js_redirect = ca["js_redirect"]
