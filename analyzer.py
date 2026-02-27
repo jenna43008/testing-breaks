@@ -2902,8 +2902,11 @@ UK_TLD_VARIANTS = [
     ('.org.uk', '.uk'),
 ]
 
-# Always-check TLD variants (appended to base name regardless of signup TLD)
-UNIVERSAL_TLD_VARIANTS = ['.com']
+# v7.6: Removed .com from universal variants — it caused false positives on
+# niche TLDs (.help, .xyz, .africa, etc.) where the .com is a completely
+# different business.  The .com check still happens for close-cousin TLDs
+# via EXTRA_TLD_VARIANTS (.co, .io, .net, .org, .app → .com).
+UNIVERSAL_TLD_VARIANTS = []
 
 # Additional pairs for non-UK domains
 EXTRA_TLD_VARIANTS = [
@@ -2995,11 +2998,9 @@ def _generate_tld_variants(domain: str) -> List[str]:
             if candidate != domain.lower():
                 variants.add(candidate)
     
-    # Always check .com if the signup domain isn't .com
-    if tld != '.com':
-        candidate = base + '.com'
-        if candidate != domain.lower():
-            variants.add(candidate)
+    # v7.6: Removed the universal .com check — it's now handled only by
+    # EXTRA_TLD_VARIANTS for specific TLD pairs (.co, .io, .net, .org, .app).
+    # Niche TLDs (.help, .xyz, .africa) no longer trigger .com comparisons.
     
     # If the signup IS .com, check .co.uk (common UK business TLD)
     if tld == '.com':
