@@ -17,7 +17,7 @@ DEFAULT_CONFIG = {
     "timeout": 10.0,
     "check_rdap": True,
     "admin_password": "admin123",  # CHANGE THIS!
-    "vt_api_key": "3976cc546c3ac01b8f50773c46a5c4a7e508709ae23b62ab4d82436222367d8",   # VirusTotal API key (hardcoded)
+    "vt_api_key": "73976cc546c3ac01b8f50773c46a5c4a7e508709ae23b62ab4d82436222367d8",   # VirusTotal API key (hardcoded)
     "config_version": "7.5",              # Used for weight migration between versions
     
     "weights": {
