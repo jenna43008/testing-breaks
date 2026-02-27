@@ -180,6 +180,8 @@ DEFAULT_CONFIG = {
         "form_action_kit_strong": 25,         # v7.4: <form action="gate.php"> — near-certain kit
         "suspicious_page_title": 5,           # v7.4: "Verify Your Identity" etc — combo fuel
         "whois_privacy": 5,                    # v7.5.2: Reduced from 10 — combo fuel only, GDPR/ICANN redaction is regulatory not evasion
+        "registrar_high_risk": 8,              # v7.6: High-risk registrar on new domain (<90d)
+        "registrar_high_risk_moderate": 4,     # v7.6: High-risk registrar on mid-age domain (90d-1yr)
         "client_side_harvest_combo": 25,      # v7.5: Harvest code (input reads, keyloggers, sendBeacon) + corroborating phishing signal
         "form_posts_external": 10,
         "suspicious_iframe": 15,
