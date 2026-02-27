@@ -5851,7 +5851,18 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_suspicious_suffix:
         add("suspicious_suffix", weights.get('suspicious_suffix', 15))
     if res.is_tech_support_tld:
-        add("tech_support_tld", weights.get('tech_support_tld', 18))
+        # v7.6: Reduce penalty when site has real content and VT clean.
+        # .help/.support/.tech TLDs have legitimate uses (therapy, documentation,
+        # customer service).  A site with substantial content and 0/93 VT flags
+        # is not a scam page — penalize lightly as TLD risk context, not as a
+        # primary abuse signal.  Full weight still applies to thin/empty sites
+        # or those with VT flags.
+        _is_vt_clean = res.vt_malicious_count == 0 and res.vt_total_vendors >= 50
+        _has_real_content = res.content_visible_word_count >= 100
+        if _is_vt_clean and _has_real_content:
+            add("tech_support_tld", weights.get('tech_support_tld_mitigated', 8))
+        else:
+            add("tech_support_tld", weights.get('tech_support_tld', 18))
     if res.domain_impersonates_brand:
         add("domain_brand_impersonation", weights.get('domain_brand_impersonation', 25))
     
@@ -6365,6 +6376,11 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             # 2 legitimacy signals = likely legitimate, moderate reduction
             elif legitimacy_signals >= 2:
                 add("vuln_plugins_no_compromise_mitigated", weights.get('vuln_plugins_moderate_mitigation', -10))
+            # v7.6: 1 legitimacy signal (e.g. VT clean alone) = still meaningful
+            # VT 0/93 by itself confirms no active compromise; Elementor on a
+            # clean site shouldn't score the same as Elementor on an untested one.
+            elif legitimacy_signals >= 1:
+                add("vuln_plugins_no_compromise_mitigated", weights.get('vuln_plugins_weak_mitigation', -7))
 
     # === UNIFIED RULES ENGINE ===
     # All scoring logic beyond base weights (former combos + custom rules)
