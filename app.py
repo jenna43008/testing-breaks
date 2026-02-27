@@ -1428,6 +1428,7 @@ def admin_view():
                                 'phishing_kit_filename_strong', 'phishing_kit_detected', 'exfil_drop_script',
                                 'form_action_kit_strong', 'suspicious_page_title', 'whois_privacy',
                                 'client_side_harvest_combo', 'oauth_phish', 'registrar_high_risk'],
+            "DNS Infrastructure Abuse": ['redirect_arpa_abuse', 'content_arpa_links'],
             "Domain Name Patterns": ['suspicious_prefix', 'suspicious_suffix', 
                                      'tech_support_tld', 'domain_brand_impersonation',
                                      'brand_spoofing_keyword',
@@ -1645,6 +1646,10 @@ def admin_view():
                 "client_side_harvest_combo": "Client-side credential harvesting code (input value reads, keyloggers, sendBeacon, image pixel exfil, cookie theft, FormData send) corroborated by another phishing indicator (weak kit filename, credential form, brand impersonation, suspicious page title, phishing paths, etc.)",
                 "whois_privacy": "WHOIS registrant uses privacy/proxy service — very common, only scored in combos with young domain + phishing infrastructure",
                 "registrar_high_risk": "Registrar known for lax verification and disproportionate abuse volume — weighted by domain age (new domains penalized more)",
+            },
+            "DNS Infrastructure Abuse": {
+                "redirect_arpa_abuse": ".arpa hostname found in HTTP redirect chain — reverse DNS namespace weaponized for phishing delivery (Infoblox Feb 2026); near-zero false positive rate",
+                "content_arpa_links": "Page contains links or scripts pointing to .arpa reverse DNS hostnames — phishing infrastructure indicator; .arpa is reserved for DNS operations, not web hosting",
             },
             "Nameserver Risk": {
                 "ns_dynamic_dns": "Domain delegated to dynamic DNS provider (noip, dyndns, duckdns) — almost exclusively phishing/malware",
