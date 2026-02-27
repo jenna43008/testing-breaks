@@ -1745,6 +1745,7 @@ def admin_view():
             'Fraud / Blacklist': '🚫',
             'Tech Support Scam': '☎️',
             'Hosting Risk': '🖥️',
+            'Infrastructure Risk': '🏗️',
             'HTTP Status Evasion': '🔒',
             'Phishing Infrastructure': '🕸️',
             'Phishing Lures': '🪝',
