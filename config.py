@@ -47,7 +47,7 @@ DEFAULT_CONFIG = {
         "hacklink_detected": 100,           # Hacklink SEO spam injection confirmed
         "hacklink_keywords": 8,            # Hacklink keywords present (below detection threshold) — single keyword match is very low confidence
         "hacklink_wp_compromised": 50,     # WordPress compromise indicators
-        "hacklink_vulnerable_plugins": 15, # Known exploitable WP plugins
+        "hacklink_vulnerable_plugins": 25, # Known exploitable WP plugins
         "vuln_plugins_strong_mitigation": -18,   # Vuln plugins but 3+ legitimacy signals (established, app store, enterprise MX, etc.)
         "vuln_plugins_moderate_mitigation": -10,  # Vuln plugins but 2 legitimacy signals
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
@@ -1144,6 +1144,14 @@ DEFAULT_CONFIG = {
                 "ovh.net",                                              # OVH
                 "emailsrvr.com", "rackspace",                           # Rackspace
                 "secureserver.net",                                     # GoDaddy email
+                "mlsend.com", "mailerlite",                             # MailerLite
+                "mailchimp.com", "mandrillapp.com", "mcsv.net",        # Mailchimp / Mandrill
+                "sendgrid.net",                                         # SendGrid / Twilio
+                "mailgun.org", "mailgun.com",                           # Mailgun
+                "amazonses.com",                                        # Amazon SES
+                "postmarkapp.com",                                      # Postmark
+                "sparkpostmail.com",                                    # SparkPost
+                "brevo.com", "sendinblue.com",                          # Brevo (formerly Sendinblue)
             ],
         },
         "disposable": {
