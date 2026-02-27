@@ -4,54 +4,6 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
-VERSION: 7.5.4 (Feb 2026)
-- BINARY CONTENT GUARD: Sites that serve direct binary responses (PE executables,
-  ELF, ZIP, PDF, images, archives) instead of HTML are now detected and content
-  analysis is skipped entirely.  Previously, binary bytes were parsed as HTML,
-  causing spurious regex matches — e.g. embedded PE import table strings ending
-  in ".exe" near bytes that resemble href="…" produced false MALWARE LINKS
-  detections (onlagelsin.com false positive: site returns raw .exe binary).
-  New helper: _is_binary_content() checks magic bytes + NUL-byte heuristic.
-  New fields: is_binary_content (bool), binary_magic (detected file type).
-  Guards added to: analyze_content(), analyze_ecommerce_indicators(),
-  check_hijacked_domain_indicators(), and main analysis flow.
-
-VERSION: 7.5.2 (Feb 2026)
-- FALSE POSITIVE FIXES: Four scoring corrections based on qa.rowery.aexol.work analysis:
-  (1) LAME DELEGATION SUBDOMAIN FIX: Subdomains inherit NS records from parent zone —
-      querying NS for a subdomain returns 0 records, which is NORMAL behavior (RFC 1034).
-      Previously this scored +20 as "lame delegation".  Now only flags on apex domains.
-      New field: ns_inherited_from_parent (bool).
-  (2) PHISHING PATHS BENIGN AUTH FIX: Standard web app auth paths (/login, /signin,
-      /auth, /dashboard, /admin, /register, /sso, /oauth, /callback, /portal, /account)
-      no longer trigger phishing_paths (+25) when the redirect stays on the same host.
-      Cross-domain redirects to /login still flag correctly.
-      New constant: BENIGN_AUTH_PATHS.
-  (3) TEMP REDIRECT SAME-HOST FIX: 302/307 redirects that stay on the same registrable
-      domain (e.g. root → /login) are standard web app behavior, not URL cloaking.
-      redirect_temp_302_307 now only scores when redirect_cross_domain is also true.
-  (4) WHOIS PRIVACY GDPR FIX: ICANN/GDPR mandatory redaction (Withheld for Privacy,
-      ICANN Redacted, Data Protected) is regulatory compliance, not deliberate evasion.
-      Base weight reduced 10 → 5; further -3 for confirmed regulatory services.
-      EU domain with ICANN redaction: ~2 points instead of 10.
-- NO-A-RECORD RECOVERY: Domains that exist in DNS but have no A record (mail-only,
-  API-only, dev infrastructure) are no longer instant-denied as "domain does not resolve".
-  The analyzer now probes for MX/TXT/NS/CNAME/AAAA records when A record fails.  If any
-  DNS records exist, analysis continues with all DNS-based checks (email auth, WHOIS, NS
-  risk, CT logs, etc.) while skipping IP-dependent checks (PTR, hosting provider, TLS,
-  HTTP content analysis).  True NXDOMAIN (zero DNS records) still triggers instant DENY.
-  Web-presence scoring signals (no_https, no_ptr, missing_trust_signals, opaque_entity)
-  are suppressed for no-A-record domains to prevent false positives.
-  New fields: no_a_record (bool), dns_records_found (str).
-- DEV / STAGING ENVIRONMENT DETECTION: New classifier identifies dev/staging/QA/sandbox
-  domains using structural signals: subdomain labels (qa.*, dev.*, staging.*, test.*, etc.),
-  deep subdomain depth (3+ levels), transactional-only MX (Mailgun, SendGrid, etc.),
-  no A record, and no web presence.  Classification is informational — flagged in issues
-  display and results but does not change scoring.  Helps analysts contextualize domains
-  that are infrastructure rather than production senders.
-  New fields: is_dev_staging (bool), dev_staging_evidence (str), dev_staging_confidence.
-  New function: detect_dev_staging().
-
 VERSION: 7.5.1 (Feb 2026)
 - PARKING PAGE FALSE POSITIVE SUPPRESSION: Parking pages (HugeDomains, Sedo,
   GoDaddy, Afternic, Dan.com, etc.) no longer trigger phishing kit autofail.
@@ -257,8 +209,6 @@ class DomainApprovalResult:
     # === DNS / NETWORK ===
     resolved: bool = False
     ip_address: str = ""
-    no_a_record: bool = False                    # v7.5.2: Domain exists in DNS but has no A record (mail-only, dev infra, etc.)
-    dns_records_found: str = ""                  # v7.5.2: Which record types were found when no A record (e.g. "MX,TXT,NS")
     
     # === REVERSE DNS (PTR) ===
     ptr_record: str = ""
@@ -372,8 +322,6 @@ class DomainApprovalResult:
     # === WEB: CONTENT ===
     content_length: int = -1
     content_hash: str = ""
-    is_binary_content: bool = False                # v7.5.4: Response is binary (exe, zip, pdf…), not HTML
-    binary_magic: str = ""                         # Detected file type (PE, ELF, ZIP, etc.)
     is_minimal_shell: bool = False
     has_js_redirect: bool = False
     has_meta_refresh: bool = False
@@ -486,7 +434,6 @@ class DomainApprovalResult:
     ns_is_free_dns: bool = False                 # NS using free/anonymous authoritative DNS
     ns_free_dns_match: str = ""                  # Which free DNS NS pattern matched
     ns_is_lame_delegation: bool = False          # Zero NS records (broken/abandoned)
-    ns_inherited_from_parent: bool = False        # Subdomain inherits NS from parent zone (not lame)
     ns_is_single_ns: bool = False                # Only 1 NS record (fragile/temporary)
     
     # === HIGH-RISK COMPOSITE INDICATORS ===
@@ -506,6 +453,7 @@ class DomainApprovalResult:
     
     # === VIRUSTOTAL REPUTATION ===
     vt_available: bool = False                   # True if VT API key was configured and query succeeded
+    vt_error: str = ""                           # Error message if VT check failed (auth, timeout, etc.)
     vt_malicious_count: int = 0                  # Vendors flagging domain as malicious
     vt_suspicious_count: int = 0                 # Vendors flagging domain as suspicious
     vt_total_vendors: int = 0                    # Total vendors that analyzed the domain
@@ -602,11 +550,6 @@ class DomainApprovalResult:
     subdomain_divergence_evidence: str = ""      # Evidence of divergence
     subdomain_divergence_confidence: str = ""    # HIGH, MEDIUM, LOW
     
-    # === DEV / STAGING ENVIRONMENT DETECTION (v7.5.2) ===
-    is_dev_staging: bool = False                  # Likely dev/staging/QA/sandbox environment
-    dev_staging_evidence: str = ""                # Semicolon-separated evidence strings
-    dev_staging_confidence: str = ""              # HIGH, MEDIUM, LOW
-    
     # === OAUTH CONSENT PHISHING (v7.3.1) ===
     has_oauth_phish: bool = False                # Page contains OAuth consent phishing patterns
     oauth_phish_evidence: str = ""               # Semicolon-separated evidence strings
@@ -680,16 +623,6 @@ PHISHING_PATHS = [
     # /tunel/ is an attacker typo variant (3 additional hits).
     '/tunnel/', '/tunel/',
 ]
-
-# v7.5.2: BENIGN AUTH PATHS — standard web application authentication endpoints.
-# When the ONLY phishing path matches are these common auth paths AND the redirect
-# stayed on the same host (same registrable domain), suppress the phishing_paths
-# signal.  Cross-domain redirects to /login still flag correctly.
-BENIGN_AUTH_PATHS = {
-    '/login', '/signin', '/auth/', '/dashboard', '/admin',
-    '/register', '/sso', '/oauth', '/callback',
-    '/portal/', '/account',
-}
 
 # ============================================================================
 # PHISHING KIT DETECTION (v7.3)
@@ -1155,122 +1088,6 @@ KNOWN_PARKING_SCRIPT_DOMAINS = {
     "pagead2.googlesyndication.com",
     "www.googleadservices.com",
     "cdn.bodis.com",
-}
-
-# v7.5.3: Known legitimate SaaS / website-builder script domains.
-# These should NOT trigger UNKNOWN_EXTERNAL_SCRIPT on ANY page (not just parking).
-# Webflow, Wix, Squarespace, etc. use hashed filenames and CloudFront CDNs that
-# look identical to SocGholish obfuscation but are completely benign.
-KNOWN_SAFE_SCRIPT_DOMAINS = {
-    # Website builders / CMS platforms
-    "assets.website-files.com",        # Webflow CDN
-    "d3e54v103j8qbb.cloudfront.net",   # Webflow CloudFront distribution
-    "uploads-ssl.webflow.com",         # Webflow uploads
-    "cdn.webflow.com",                 # Webflow
-    "static.wixstatic.com",            # Wix
-    "static.parastorage.com",          # Wix
-    "cdn.shopify.com",                 # Shopify
-    "cdn.squarespace.com",             # Squarespace
-    "static1.squarespace.com",         # Squarespace
-    "images.squarespace-cdn.com",      # Squarespace
-    "cdn.weebly.com",                  # Weebly
-    "f.hubspotusercontent00.net",      # HubSpot CMS
-    "f.hubspotusercontent10.net",      # HubSpot CMS
-    "f.hubspotusercontent20.net",      # HubSpot CMS
-    "f.hubspotusercontent30.net",      # HubSpot CMS
-    "f.hubspotusercontent40.net",      # HubSpot CMS
-    "js.hs-scripts.com",              # HubSpot tracking
-    "js.hs-analytics.net",            # HubSpot analytics
-    "js.hs-banner.com",               # HubSpot banner
-    "js.usemessages.com",             # HubSpot messages
-    "app.hubspot.com",                # HubSpot
-    # Form / widget / chat providers
-    "zfrmz.com",                       # Zoho Forms
-    "js.hsforms.net",                  # HubSpot Forms
-    "share.hsforms.com",               # HubSpot Forms
-    "embed.typeform.com",              # Typeform
-    "js.jotform.com",                  # JotForm
-    "embed.tawk.to",                   # Tawk.to chat
-    "cdn.livechatinc.com",             # LiveChat
-    "widget.intercom.io",              # Intercom
-    "js.driftt.com",                   # Drift chat
-    "cdn.crisp.chat",                  # Crisp chat
-    # Analytics & marketing (beyond Google)
-    "cdn.segment.com",                 # Segment
-    "cdn.amplitude.com",               # Amplitude
-    "cdn.mxpnl.com",                   # Mixpanel
-    "static.hotjar.com",               # Hotjar
-    "script.hotjar.com",               # Hotjar
-    "snap.licdn.com",                  # LinkedIn Insight
-    "connect.facebook.net",            # Facebook/Meta Pixel
-    "platform.twitter.com",            # Twitter/X
-    # Payment / scheduling / business
-    "js.stripe.com",                   # Stripe
-    "js.braintreegateway.com",         # Braintree
-    "cdn.calendly.com",                # Calendly
-    # Common CDNs (not always pre-filtered by hacklink checker)
-    "cdn.jsdelivr.net",                # jsDelivr
-    "unpkg.com",                       # unpkg
-    "cdnjs.cloudflare.com",            # Cloudflare cdnjs
-    "cdn.tailwindcss.com",             # Tailwind CSS
-    "use.fontawesome.com",             # Font Awesome
-    "kit.fontawesome.com",             # Font Awesome
-    "fonts.googleapis.com",            # Google Fonts
-    "ajax.googleapis.com",             # Google AJAX
-    "swiperjs.com",                    # Swiper.js (slider library)
-    "cdn.snipcart.com",                # Snipcart (e-commerce)
-    "cdn.paddle.com",                  # Paddle (payments)
-    "cdn.lottiefiles.com",             # Lottie animations
-    # Cookie / consent management
-    "cdn-cookieyes.com",               # CookieYes (also in parking list)
-    "cdn.cookielaw.org",               # OneTrust
-    "cdn.iubenda.com",                 # Iubenda
-}
-
-# v7.5.3: Known legitimate iframe source domains.
-# Hidden iframes (display:none, width=0) from these domains are form embeds,
-# chat widgets, analytics pixels, or reCAPTCHA — not malicious content loaders.
-KNOWN_SAFE_IFRAME_DOMAINS = {
-    # Form providers
-    "zfrmz.com",                       # Zoho Forms
-    "forms.zohopublic.com",            # Zoho Forms (alternate)
-    "js.hsforms.net",                  # HubSpot Forms
-    "share.hsforms.com",               # HubSpot Forms
-    "forms.hubspot.com",               # HubSpot Forms
-    "form.typeform.com",               # Typeform
-    "www.jotform.com",                 # JotForm
-    "form.jotform.com",                # JotForm
-    "formspree.io",                    # Formspree
-    "tally.so",                        # Tally Forms
-    "airtable.com",                    # Airtable Forms
-    # Chat widgets
-    "embed.tawk.to",                   # Tawk.to
-    "www.livechatinc.com",             # LiveChat
-    "widget.intercom.io",              # Intercom
-    "js.driftt.com",                   # Drift
-    "cdn.crisp.chat",                  # Crisp
-    # Analytics / tracking pixels
-    "td.doubleclick.net",              # Google DoubleClick
-    "bid.g.doubleclick.net",           # Google DoubleClick
-    "www.googletagmanager.com",        # GTM
-    "www.google.com",                  # Google (reCAPTCHA, maps)
-    "recaptcha.net",                   # reCAPTCHA
-    "www.recaptcha.net",               # reCAPTCHA
-    "www.google-analytics.com",        # Google Analytics
-    "connect.facebook.net",            # Facebook Pixel
-    "www.facebook.com",                # Facebook
-    # Payment / scheduling / booking
-    "js.stripe.com",                   # Stripe
-    "calendly.com",                    # Calendly
-    "app.acuityscheduling.com",        # Acuity Scheduling
-    # Media / social embeds
-    "player.vimeo.com",                # Vimeo
-    "fast.wistia.net",                 # Wistia
-    "www.youtube.com",                 # YouTube
-    "platform.twitter.com",            # Twitter
-    # Cookie consent
-    "cdn-cookieyes.com",               # CookieYes
-    "consent.cookiebot.com",           # Cookiebot
 }
 
 # === OAUTH CONSENT PHISHING PATTERNS (v7.3.1) ===
@@ -2442,135 +2259,6 @@ def check_hosting_provider(domain: str, ip: str, ns_records: List[str] = None,
 
 
 # ============================================================================
-# DEV / STAGING ENVIRONMENT DETECTION (v7.5.2)
-# ============================================================================
-
-# Subdomain labels that strongly indicate development/staging/QA environments
-_DEV_STAGING_LABELS = {
-    'qa', 'dev', 'staging', 'stage', 'stg', 'test', 'testing',
-    'uat', 'sandbox', 'beta', 'preprod', 'pre-prod', 'preview',
-    'demo', 'canary', 'nightly', 'ci', 'cd', 'build',
-    'integration', 'acceptance', 'perf', 'load-test',
-}
-
-# Domain segments (hyphenated) that suggest dev infrastructure
-_DEV_SEGMENT_PATTERNS = {
-    '-dev', '-staging', '-stage', '-stg', '-test', '-qa',
-    '-uat', '-sandbox', '-beta', '-preprod', '-preview', '-demo',
-}
-
-# Transactional-only MX providers (not primary business email)
-_TRANSACTIONAL_MX_PROVIDERS = {
-    'mailgun', 'sendgrid', 'postmark', 'onesignal', 'sparkpost',
-    'mandrill', 'ses', 'sendinblue', 'brevo', 'mailjet',
-    'customerio', 'intercom', 'pushwoosh',
-}
-
-
-def detect_dev_staging(
-    domain: str,
-    is_subdomain: bool,
-    parent_domain: str,
-    mx_provider_type: str,
-    mx_primary: str,
-    no_a_record: bool,
-    https_reachable: bool,
-) -> Dict:
-    """Detect whether a domain is likely a dev/staging/QA environment.
-    
-    Uses structural signals (subdomain labels, depth, MX type, TLD) to
-    classify domains that are development infrastructure rather than
-    production senders.
-    
-    Returns dict with: is_dev_staging (bool), evidence (list), confidence (str)
-    """
-    result = {
-        "is_dev_staging": False,
-        "evidence": [],
-        "confidence": "",
-    }
-    
-    domain_lower = domain.lower().rstrip('.')
-    parts = domain_lower.split('.')
-    
-    # === Signal 1: Subdomain label matches dev/staging patterns ===
-    dev_labels_found = []
-    if is_subdomain and parent_domain:
-        # Extract subdomain part(s) — everything before the parent domain
-        parent_lower = parent_domain.lower().rstrip('.')
-        if domain_lower.endswith('.' + parent_lower):
-            sub_part = domain_lower[:-(len(parent_lower) + 1)]
-            sub_labels = sub_part.split('.')
-            for label in sub_labels:
-                if label in _DEV_STAGING_LABELS:
-                    dev_labels_found.append(label)
-                # Also check for dev-prefixed labels like "dev-api", "staging-v2"
-                for seg in _DEV_SEGMENT_PATTERNS:
-                    if label.startswith(seg.lstrip('-') + '-') or label.endswith(seg):
-                        dev_labels_found.append(label)
-                        break
-    
-    if dev_labels_found:
-        result["evidence"].append(f"subdomain_labels: {','.join(set(dev_labels_found))}")
-    
-    # === Signal 2: Domain name segments (non-subdomain patterns) ===
-    base_name = parts[0] if parts else ""
-    for seg in _DEV_SEGMENT_PATTERNS:
-        if seg in base_name:
-            result["evidence"].append(f"domain_segment: '{seg}' in {base_name}")
-            break
-    
-    # === Signal 3: Deep subdomain depth (3+ levels = infrastructure tooling) ===
-    # qa.rowery.aexol.work = 4 parts, 2 subdomain levels deep
-    registrable = get_registrable_domain(domain_lower)
-    if registrable and domain_lower != registrable:
-        sub_part = domain_lower[:-(len(registrable) + 1)]
-        depth = len(sub_part.split('.'))
-        if depth >= 2:
-            result["evidence"].append(f"subdomain_depth: {depth} levels ({sub_part}.{registrable})")
-    
-    # === Signal 4: Transactional-only MX (Mailgun, SendGrid, etc.) ===
-    # Dev environments often use transactional providers for test emails,
-    # not primary business email providers
-    mx_lower = (mx_primary or "").lower()
-    mx_type_lower = (mx_provider_type or "").lower()
-    for txn_provider in _TRANSACTIONAL_MX_PROVIDERS:
-        if txn_provider in mx_lower or txn_provider in mx_type_lower:
-            result["evidence"].append(f"transactional_mx: {txn_provider}")
-            break
-    
-    # === Signal 5: No A record (mail-only / API-only infrastructure) ===
-    if no_a_record:
-        result["evidence"].append("no_a_record: domain has DNS records but no web server")
-    
-    # === Signal 6: No web presence despite having A record ===
-    if not no_a_record and not https_reachable:
-        result["evidence"].append("no_web_presence: has A record but HTTPS unreachable")
-    
-    # === Confidence scoring ===
-    ev_count = len(result["evidence"])
-    has_label = bool(dev_labels_found)
-    
-    if has_label and ev_count >= 3:
-        result["confidence"] = "HIGH"
-        result["is_dev_staging"] = True
-    elif has_label and ev_count >= 2:
-        result["confidence"] = "MEDIUM"
-        result["is_dev_staging"] = True
-    elif has_label:
-        # Single signal: subdomain label alone is enough to flag
-        result["confidence"] = "LOW"
-        result["is_dev_staging"] = True
-    elif ev_count >= 3:
-        # No dev label but multiple structural signals
-        result["confidence"] = "LOW"
-        result["is_dev_staging"] = True
-    # else: not enough evidence
-    
-    return result
-
-
-# ============================================================================
 # NAMESERVER RISK DETECTION
 # ============================================================================
 
@@ -3540,35 +3228,6 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
             asymmetry_score += 2
             score_reasons.append("company reg found")
         
-        # --- SIGNUP LEGITIMACY (v7.5.3: reverse asymmetry) ---
-        # If the signup domain has STRONGER email auth than the variant, it's less
-        # likely to be a spoof.  Spoofers don't invest in DKIM (requires DNS TXT
-        # records proving domain ownership) or full DMARC deployment.
-        # This prevents generic descriptive names (e.g., "lawbridge") from being
-        # flagged when the .com.ng has better email infrastructure than the .com.
-        
-        # DKIM on signup = domain ownership proof (spoofers almost never configure)
-        if signup_email["dkim_exists"]:
-            asymmetry_score -= 2
-            score_reasons.append("signup has DKIM (-2)")
-        
-        # Signup has more email auth than variant = reverse disparity
-        reverse_gap = signup_email["auth_count"] - variant_email["auth_count"]
-        if reverse_gap >= 2:
-            asymmetry_score -= 2
-            score_reasons.append(f"signup stronger email ({signup_email['auth_count']} vs {variant_email['auth_count']}, -2)")
-        elif reverse_gap >= 1:
-            asymmetry_score -= 1
-            score_reasons.append(f"signup email edge +{reverse_gap} (-1)")
-        
-        # Signup has DMARC but variant doesn't = serious infrastructure investment
-        if signup_email["dmarc_exists"] and not variant_email["dmarc_exists"]:
-            asymmetry_score -= 1
-            score_reasons.append("signup DMARC, variant none (-1)")
-        
-        # Floor at 0 — reverse asymmetry can neutralize but not invert
-        asymmetry_score = max(0, asymmetry_score)
-        
         diag = f"{variant_domain}: score={asymmetry_score} [{', '.join(score_reasons)}] words={variant_words} email={variant_email['auth_count']}/4 mx_ext={variant_email['mx_external']}"
         diagnostics.append(diag)
         
@@ -3858,35 +3517,6 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
     return result
 
 
-def _is_binary_content(content: bytes) -> bool:
-    """
-    v7.5.4: Detect binary file content (PE, ELF, ZIP, PDF, images, etc.).
-    Binary data should never be parsed as HTML — it causes spurious pattern
-    matches (e.g. embedded PE strings like "kernel32.exe" near bytes that
-    resemble href="…" produce false malware-link detections).
-    """
-    _BINARY_MAGIC = (
-        b'MZ',          # PE executable (.exe, .dll, .scr)
-        b'\x7fELF',     # ELF (Linux executables)
-        b'PK\x03\x04',  # ZIP / DOCX / XLSX / APK / JAR
-        b'%PDF',         # PDF
-        b'\xca\xfe\xba\xbe',  # Mach-O / Java class
-        b'\x1f\x8b',    # gzip
-        b'Rar!',         # RAR archive
-        b'\x89PNG',      # PNG image
-        b'\xff\xd8\xff', # JPEG image
-        b'GIF8',         # GIF image
-    )
-    head = content[:8]
-    if any(head.startswith(m) for m in _BINARY_MAGIC):
-        return True
-    # Fallback: multiple NUL bytes in first 512 bytes = binary.
-    # HTML/text never contains NUL; binary files almost always do.
-    if content[:512].count(b'\x00') > 5:
-        return True
-    return False
-
-
 def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     result = {
         "minimal_shell": False, "js_redirect": False, "meta_refresh": False,
@@ -3906,10 +3536,6 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     }
     
     if not content:
-        return result
-    
-    # v7.5.4: Skip binary content — see _is_binary_content() docstring
-    if _is_binary_content(content):
         return result
     
     content_lower = content.lower()
@@ -4079,33 +3705,8 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
             pass
     result["malware"] = list(set(result["malware"]))[:5]
     
-    # v7.5.3: Domain-aware hidden iframe detection.
-    # Hidden iframes from known form/widget/analytics providers (Zoho Forms, HubSpot,
-    # reCAPTCHA, etc.) are standard embeds, not malicious content loaders.
-    # Only flag as suspicious when at least one hidden iframe points to an unknown domain.
-    _hidden_iframes = re.findall(
-        rb'<iframe[^>]*(?:display:\s*none|width=["\']?[01])[^>]*>',
-        content_lower)
-    if not _hidden_iframes:
-        # Also catch reverse order: style before display
-        _hidden_iframes = re.findall(
-            rb'<iframe[^>]*(?:display:\s*none|width=["\']?[01])',
-            content_lower)
-    if _hidden_iframes:
-        _has_unknown_iframe = False
-        for _iframe_tag in _hidden_iframes:
-            _src_match = re.search(rb'src=["\'](?:https?://)?([^/"\'\s>]+)', _iframe_tag)
-            if _src_match:
-                _iframe_domain = _src_match.group(1).decode('utf-8', errors='ignore').lower()
-                if _iframe_domain not in KNOWN_SAFE_IFRAME_DOMAINS:
-                    _has_unknown_iframe = True
-                    break
-            else:
-                # No src attribute or can't parse — could be dynamically loaded, treat as suspicious
-                _has_unknown_iframe = True
-                break
-        if _has_unknown_iframe:
-            result["suspicious_iframe"] = True
+    if re.search(rb'<iframe[^>]*(?:display:\s*none|width=["\']?[01])', content_lower):
+        result["suspicious_iframe"] = True
     
     # Parking page detection — use full phrases for long strings, word-boundary
     # regex for short words to avoid false positives (e.g. "parked" inside CSS
@@ -4166,25 +3767,6 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     for p in PHISHING_PATHS:
         if p in path:
             result["phishing_paths"].append(p)
-    
-    # v7.5.2: Suppress benign auth paths when redirect stayed on same host.
-    # /login, /signin, /auth, /dashboard etc. are standard web app endpoints.
-    # Only suppress if ALL matched paths are benign AND final URL is same domain.
-    if result["phishing_paths"]:
-        final_host = urlparse(final_url).netloc.lower()
-        domain_lower = domain.lower().strip('.')
-        # Same-host check: final URL host matches or is subdomain of analyzed domain
-        _same_host = (
-            final_host == domain_lower
-            or final_host == f"www.{domain_lower}"
-            or final_host.endswith(f".{domain_lower}")
-            or domain_lower.endswith(f".{final_host.lstrip('www.')}")
-        )
-        if _same_host:
-            non_benign = [p for p in result["phishing_paths"] if p not in BENIGN_AUTH_PATHS]
-            if not non_benign:
-                # All matched paths are standard auth endpoints on same host
-                result["phishing_paths"] = []
     
     # === PHISHING KIT FILENAME DETECTION (v7.3) ===
     # Check if the URL path ends with a known kit entry-point filename.
@@ -4353,10 +3935,6 @@ def analyze_ecommerce_indicators(content: bytes, domain: str) -> Dict:
     }
     
     if not content:
-        return result
-    
-    # v7.5.4: Skip binary content
-    if _is_binary_content(content):
         return result
     
     content_str = content.decode('utf-8', errors='ignore').lower()
@@ -4577,10 +4155,6 @@ def check_hijacked_domain_indicators(content: bytes, final_url: str, redirect_ch
             break
     
     if not content:
-        return result
-    
-    # v7.5.4: Skip binary content
-    if _is_binary_content(content):
         return result
     
     content_lower = content.lower()
@@ -5146,6 +4720,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             all_issues.append(f"VT THREAT NAMES: {names}")
         if res.vt_malicious_count == 0 and res.vt_suspicious_count == 0 and res.vt_total_vendors >= 50:
             positives.append(f"VT CLEAN → 0/{res.vt_total_vendors} security vendors flag this domain")
+    elif res.vt_error:
+        all_issues.append(f"⚠️ VT CHECK FAILED → {res.vt_error}")
     
     # === HACKLINK / SEO SPAM ===
     if res.hacklink_detected:
@@ -5177,25 +4753,16 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     # === MALICIOUS SCRIPT / HIDDEN INJECTION (HIGH-VALUE SIGNALS) ===
     # v7.5.1: Suppress on parking pages when all external scripts are from known
     # parking providers (CookieYes, HugeDomains, Google analytics).
-    # v7.5.3: Also suppress on ANY page when all external scripts are from known
-    # legitimate SaaS providers (Webflow, Zoho, Wix, etc.) — their hash-based
-    # filenames and CloudFront CDNs trigger UNKNOWN_EXTERNAL_SCRIPT + HIGH_ENTROPY_PATH
-    # but are completely benign website-builder artifacts.
     _suppress_ms_issue = False
-    _ext = [d.strip().lower() for d in
-            (res.content_external_script_domains or "").split(";") if d.strip()]
-    if res.hacklink_malicious_script and _ext:
-        # Check safe SaaS domains first (applies to ALL pages)
-        if not any(d not in KNOWN_SAFE_SCRIPT_DOMAINS for d in _ext):
-            _suppress_ms_issue = True
-        # Then parking-specific domains (only on parking pages)
-        elif res.is_parking_page and not any(d not in KNOWN_PARKING_SCRIPT_DOMAINS for d in _ext):
-            _suppress_ms_issue = True
-    elif res.hacklink_malicious_script and not _ext and res.is_parking_page:
-        # No external scripts tracked — parking page signal-only suppression
-        _ms_sigs = set((res.hacklink_malicious_script_signals or "").split(";"))
-        _suppress_ms_issue = _ms_sigs.issubset(
-            {"UNKNOWN_EXTERNAL_SCRIPT", "HIGH_ENTROPY_PATH", "JQUERY_MASQUERADE", ""})
+    if res.hacklink_malicious_script and res.is_parking_page:
+        _ext = [d.strip().lower() for d in
+                (res.content_external_script_domains or "").split(";") if d.strip()]
+        if _ext:
+            _suppress_ms_issue = not any(d not in KNOWN_PARKING_SCRIPT_DOMAINS for d in _ext)
+        else:
+            _ms_sigs = set((res.hacklink_malicious_script_signals or "").split(";"))
+            _suppress_ms_issue = _ms_sigs.issubset(
+                {"UNKNOWN_EXTERNAL_SCRIPT", "HIGH_ENTROPY_PATH", "JQUERY_MASQUERADE", ""})
     
     if res.hacklink_malicious_script and not _suppress_ms_issue:
         conf = res.hacklink_malicious_script_confidence
@@ -5263,10 +4830,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.is_empty_page:
         all_issues.append("EMPTY PAGE → Reachable domain returns empty/near-empty content; possibly parked, abandoned, or stripped post-compromise")
     
-    # v7.5.4: Binary content detection
-    if res.is_binary_content:
-        all_issues.append(f"BINARY CONTENT ({res.binary_magic}) → Site serves a direct binary download instead of HTML; content analysis skipped to avoid false signals")
-    
     # === CERTIFICATE TRANSPARENCY ===
     if res.ct_log_count == 0:
         all_issues.append("NO CT HISTORY → Zero certificates found in CT logs; domain may never have been used for HTTPS")
@@ -5303,25 +4866,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             )
     elif res.is_subdomain and res.parent_domain:
         positives.append(f"Subdomain of {res.parent_domain} — infrastructure matches parent")
-    
-    # v7.5.2: Dev / Staging environment detection
-    if res.is_dev_staging:
-        evidence_str = res.dev_staging_evidence.replace(";", ", ")
-        if res.dev_staging_confidence == "HIGH":
-            all_issues.append(
-                f"DEV/STAGING ENVIRONMENT (HIGH confidence) → {evidence_str}"
-            )
-        else:
-            all_issues.append(
-                f"DEV/STAGING ENVIRONMENT ({res.dev_staging_confidence}) → {evidence_str}"
-            )
-    
-    # v7.5.2: No A record — domain exists in DNS but has no web server
-    if res.no_a_record:
-        all_issues.append(
-            f"NO A RECORD (mail-only / API-only) → DNS records found: {res.dns_records_found}; "
-            f"no web server to analyze"
-        )
     
     # v7.3.1: OAuth consent phishing
     if res.has_oauth_phish:
@@ -5433,9 +4977,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     if res.ns_is_lame_delegation:
         all_issues.append("LAME DELEGATION (0 NS RECORDS) → Broken or abandoned domain; no functioning DNS")
-    elif res.ns_inherited_from_parent:
-        # Informational only — not scored
-        pass  # Subdomain NS inheritance is normal, no issue to display
     
     if res.ns_is_free_dns:
         all_issues.append(f"FREE DNS PROVIDER ({res.ns_free_dns_match}) → Minimal infrastructure investment; unusual for business senders")
@@ -5454,9 +4995,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append("CROSS-DOMAIN REDIRECT → Suspicious pattern common in phishing")
     
     if res.redirect_uses_temp:
-        if res.redirect_cross_domain:
-            all_issues.append("TEMP REDIRECTS (302/307) CROSS-DOMAIN → Suggests URL cloaking; triggers filters")
-        # Same-host temp redirects are informational only (standard web app behavior)
+        all_issues.append("TEMP REDIRECTS (302/307) → Suggests URL cloaking; triggers filters")
     
     # Check for strong email auth (used to annotate mitigated issues)
     _strong_email = (
@@ -5565,9 +5104,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     if res.mta_sts_exists:
         positives.append("MTA-STS enabled")
-    
-    if res.is_dev_staging and res.dev_staging_confidence == "HIGH":
-        positives.append("Dev/staging environment (HIGH confidence)")
     
     if res.app_store_has_presence:
         is_platform_fp = res.hosting_provider_type == "platform"
@@ -5735,8 +5271,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('PLACEHOLDER CONTENT', weights.get('content_placeholder', 10)),
             ('REGISTRATION OPAQUE', weights.get('registration_opaque', 15)),
             ('DOMAIN RE-REGISTERED', weights.get('domain_reregistered_recent', 10)),
-            ('DEV/STAGING ENVIRONMENT', weights.get('dev_staging_high', -15)),
-            ('NO A RECORD', 0),  # Informational — not a scored signal
         ]
         for prefix, w in _map:
             if prefix in text:
@@ -5870,8 +5404,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('PLACEHOLDER CONTENT', ['content_placeholder']),
         ('REGISTRATION OPAQUE', ['registration_opaque']),
         ('DOMAIN RE-REGISTERED', ['domain_reregistered_recent', 'domain_reregistered']),
-        ('DEV/STAGING ENVIRONMENT', ['dev_staging_high']),
-        ('NO A RECORD', []),  # Informational — not a scored signal
         # Catch-all for domain age (must be LAST — "DOMAIN" matches broadly)
         ('DOMAIN', ['new_domain_with_risk']),
     ]
@@ -6012,22 +5544,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.spf_exists and not res.spf_has_external_includes:
         add("spf_no_external_includes", weights.get('spf_no_external_includes', 3))
     
-    if not res.ptr_exists and not res.no_a_record:
+    if not res.ptr_exists:
         add("no_ptr", weights.get('no_ptr', 4))
-    elif res.ptr_exists and not res.ptr_matches_forward:
+    elif not res.ptr_matches_forward:
         add("ptr_mismatch", weights.get('ptr_mismatch', 5))
     
     if res.bimi_exists:
         add("has_bimi", weights.get('has_bimi', -8))
     if res.mta_sts_exists:
         add("has_mta_sts", weights.get('has_mta_sts', -5))
-    
-    # v7.5.2: Dev / Staging environment — HIGH confidence classification reduces score.
-    # Dev/QA/staging domains are not production senders; the classification itself
-    # is strong context that many risk signals (no DKIM, transactional MX, etc.) are
-    # expected infrastructure patterns rather than attacker indicators.
-    if res.is_dev_staging and res.dev_staging_confidence == "HIGH":
-        add("dev_staging_high", weights.get('dev_staging_high', -15))
     
     # === APP STORE PRESENCE BONUS (Legitimacy Signal) ===
     # Tiered by confidence: high (verified deep links) > medium (page links/API) > low (keyword only)
@@ -6189,10 +5714,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("ecommerce_no_identity", weights.get('ecommerce_no_identity', 15))
     
     # Web/TLS
-    # v7.5.2: Suppress web-presence signals for no-A-record domains.
-    # A mail-only domain with no web server isn't a security risk — it's a different
-    # architecture.  Penalizing no_https on a domain that has no A record is a false positive.
-    if not res.https_valid and not res.no_a_record:
+    if not res.https_valid:
         add("no_https", weights.get('no_https', 25))
     
     # v4.4: TLS failure markers — tracked for summary/rules but scored at 0.
@@ -6213,10 +5735,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.redirect_cross_domain:
         add("redirect_cross_domain", weights.get('redirect_cross_domain', 12))
     if res.redirect_uses_temp:
-        # v7.5.2: Same-host temp redirects (e.g. root → /login on same domain) are
-        # standard web app behavior, not URL cloaking.  Only score when cross-domain.
-        if res.redirect_cross_domain:
-            add("redirect_temp_302_307", weights.get('redirect_temp_302_307', 10))
+        add("redirect_temp_302_307", weights.get('redirect_temp_302_307', 10))
     
     # === STATUS CODE SIGNALS (per research: high-value early indicators) ===
     # 401 = unauthorized on public site - unusual
@@ -6244,14 +5763,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # Don't flag on empty pages — obviously an empty page has no /about etc.
     # Don't flag when TLS failed — can't find /about if the server is unreachable;
     # that's already covered by no_https / tls_connection_failed.
-    # v7.5.2: Don't flag on no-A-record domains — no web server to check trust pages.
-    if res.missing_trust_signals and not res.is_empty_page and not res.tls_connection_failed and not res.tls_handshake_failed and not res.no_a_record:
+    if res.missing_trust_signals and not res.is_empty_page and not res.tls_connection_failed and not res.tls_handshake_failed:
         add("missing_trust_signals", weights.get('missing_trust_signals', 8))
     
     # Opaque entity - access blocked AND no corporate footprint
     # This is a classic B2B fraud / supplier impersonation pattern
-    # v7.5.2: Don't flag on no-A-record domains.
-    if res.is_opaque_entity and not res.is_empty_page and not res.no_a_record:
+    if res.is_opaque_entity and not res.is_empty_page:
         add("opaque_entity", weights.get('opaque_entity', 20))
     
     # Content
@@ -6315,17 +5832,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # === v7.4: WHOIS PRIVACY ===
     # Standalone: very low weight (most legitimate domains use privacy too).
     # Value is as combo fuel with new_domain + credential_form + self-hosted MX.
-    # v7.5.2: GDPR/ICANN mandatory redaction scores even lower — regulatory
-    # requirement, not deliberate evasion.
-    _REGULATORY_PRIVACY_SERVICES = {
-        'ICANN Redacted', 'Data Protected', 'Withheld for Privacy',
-    }
     if res.whois_privacy:
-        _base_weight = weights.get('whois_privacy', 0)
-        # Reduce further for GDPR/ICANN regulatory redaction
-        if res.whois_privacy_service in _REGULATORY_PRIVACY_SERVICES:
-            _base_weight = max(0, _base_weight - 3)
-        add("whois_privacy", _base_weight)
+        add("whois_privacy", weights.get('whois_privacy', 0))
     
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     if res.has_hijack_path_pattern:
@@ -6385,25 +5893,24 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # === MALICIOUS SCRIPT INJECTION (SocGholish/FakeUpdates/obfuscated) ===
     # v7.2: Multi-signal confidence — HIGH gets full weight, MEDIUM gets reduced weight
     # v7.5: Suppress on parking pages when ALL external scripts are from known providers
-    # v7.5.3: Also suppress on ANY page when ALL external scripts are from known
-    # legitimate SaaS providers (Webflow, Zoho, Wix, etc.)
     _suppress_malicious_script = False
-    _ext_domains = [d.strip().lower() for d in
-                    (res.content_external_script_domains or "").split(";") if d.strip()]
-    if res.hacklink_malicious_script and _ext_domains:
-        # Check safe SaaS domains first (applies to ALL pages)
-        if not any(d not in KNOWN_SAFE_SCRIPT_DOMAINS for d in _ext_domains):
-            _suppress_malicious_script = True
-        # Then parking-specific domains (only on parking pages)
-        elif res.is_parking_page and not any(d not in KNOWN_PARKING_SCRIPT_DOMAINS for d in _ext_domains):
-            _suppress_malicious_script = True
-    elif res.hacklink_malicious_script and not _ext_domains and res.is_parking_page:
-        # No external scripts tracked — parking page signal-only suppression
-        _ms_sigs = set((res.hacklink_malicious_script_signals or "").split(";"))
-        _parking_artifact_sigs = {"UNKNOWN_EXTERNAL_SCRIPT", "HIGH_ENTROPY_PATH",
-                                  "JQUERY_MASQUERADE", ""}
-        if _ms_sigs.issubset(_parking_artifact_sigs):
-            _suppress_malicious_script = True
+    if res.hacklink_malicious_script and res.is_parking_page:
+        # Check if all external script domains are known parking providers
+        _ext_domains = [d.strip().lower() for d in
+                        (res.content_external_script_domains or "").split(";") if d.strip()]
+        if _ext_domains:
+            _unknown = [d for d in _ext_domains if d not in KNOWN_PARKING_SCRIPT_DOMAINS]
+            if not _unknown:
+                _suppress_malicious_script = True
+        else:
+            # No external scripts tracked — check the signals themselves
+            # If only UNKNOWN_EXTERNAL_SCRIPT + HIGH_ENTROPY_PATH + JQUERY_MASQUERADE
+            # and parking page is confirmed, suppress (these are CookieYes/HugeDomains artifacts)
+            _ms_sigs = set((res.hacklink_malicious_script_signals or "").split(";"))
+            _parking_artifact_sigs = {"UNKNOWN_EXTERNAL_SCRIPT", "HIGH_ENTROPY_PATH",
+                                      "JQUERY_MASQUERADE", ""}
+            if _ms_sigs.issubset(_parking_artifact_sigs):
+                _suppress_malicious_script = True
     
     if res.hacklink_malicious_script and not _suppress_malicious_script:
         if res.hacklink_malicious_script_confidence == "HIGH":
@@ -6882,32 +6389,14 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.ip_address = socket.gethostbyname(domain)
         res.resolved = True
     except:
-        # v7.5.2: No A record does NOT mean the domain doesn't exist.
-        # Mail-only domains, dev infrastructure, and API-only services may
-        # have MX, TXT, NS, and CNAME records but no web server.
-        # Probe for other DNS record types before giving up.
-        _found_types = []
-        for _rtype in ('MX', 'TXT', 'NS', 'CNAME', 'AAAA'):
-            if dns_query(domain, _rtype):
-                _found_types.append(_rtype)
-        
-        if _found_types:
-            # Domain exists in DNS — just no A record.  Continue analysis
-            # with DNS-only checks (email auth, WHOIS, NS risk, CT, etc.)
-            res.no_a_record = True
-            res.dns_records_found = ",".join(_found_types)
-            # resolved stays False, ip_address stays empty
-        else:
-            # True NXDOMAIN — nothing exists at this domain
-            res.recommendation = "DENY"
-            res.summary = "DENY: Domain does not resolve (NXDOMAIN — no DNS records of any type)"
-            res.risk_level = "ERROR"
-            res.risk_score = 100
-            return asdict(res)
+        res.recommendation = "DENY"
+        res.summary = "DENY: Domain does not resolve"
+        res.risk_level = "ERROR"
+        res.risk_score = 100
+        return asdict(res)
     
-    # PTR (requires IP — skip for no-A-record domains)
-    if res.ip_address:
-        res.ptr_exists, res.ptr_record, res.ptr_matches_forward = get_ptr_record(res.ip_address)
+    # PTR
+    res.ptr_exists, res.ptr_record, res.ptr_matches_forward = get_ptr_record(res.ip_address)
     
     # Domain characteristics
     domain_lower = domain.lower()
@@ -7036,9 +6525,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.domain_blacklist_count = bl_count
     res.domain_blacklist_inconclusive = bl_inconclusive
     
-    ip_bl_hits, ip_bl_count, ip_bl_inconclusive = [], 0, 0
-    if res.ip_address:
-        ip_bl_hits, ip_bl_count, ip_bl_inconclusive = check_ip_blacklists(res.ip_address, config['ip_blacklists'])
+    ip_bl_hits, ip_bl_count, ip_bl_inconclusive = check_ip_blacklists(res.ip_address, config['ip_blacklists'])
     res.ip_blacklists_hit = ";".join(ip_bl_hits)
     res.ip_blacklist_count = ip_bl_count
     res.ip_blacklist_inconclusive = ip_bl_inconclusive
@@ -7061,28 +6548,13 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.is_cdn_hosted, res.cdn_provider = detect_cdn_hosted(res.hosting_asn)
     
     # v7.3.1: Subdomain Delegation Abuse Detection
-    # (Requires IP to compare child vs parent infrastructure)
-    sub_result = {
-        "is_subdomain": False, "parent_domain": "", "parent_ip": "",
-        "parent_asn": "", "parent_asn_org": "", "parent_mx_provider_type": "",
-        "divergent": False, "evidence": [], "confidence": "",
-    }
-    if res.ip_address:
-        sub_result = detect_subdomain_delegation_abuse(
-            submitted_domain=domain,
-            submitted_ip=res.ip_address,
-            submitted_asn=res.hosting_asn,
-            submitted_mx_provider_type=res.mx_provider_type,
-            config=config,
-        )
-    else:
-        # No IP: still determine if subdomain for other checks (NS inheritance, dev detection)
-        _parent = get_registrable_domain(domain)
-        if _parent and _parent != domain.lower().rstrip('.'):
-            sub_part = domain.lower().rstrip('.').replace(_parent, '').rstrip('.')
-            if sub_part != 'www':
-                sub_result["is_subdomain"] = True
-                sub_result["parent_domain"] = _parent
+    sub_result = detect_subdomain_delegation_abuse(
+        submitted_domain=domain,
+        submitted_ip=res.ip_address,
+        submitted_asn=res.hosting_asn,
+        submitted_mx_provider_type=res.mx_provider_type,
+        config=config,
+    )
     res.is_subdomain = sub_result["is_subdomain"]
     res.parent_domain = sub_result["parent_domain"]
     res.parent_ip = sub_result["parent_ip"]
@@ -7108,73 +6580,61 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.ns_is_lame_delegation = ns_risk["is_lame_delegation"]
     res.ns_is_single_ns = ns_risk["is_single_ns"]
     
-    # v7.5.2: Subdomains inherit NS records from their parent zone — querying
-    # NS for a subdomain returns 0 records, which is NORMAL (not lame delegation).
-    # Only flag lame delegation on apex/registrable domains.
-    if res.ns_is_lame_delegation and res.is_subdomain:
-        res.ns_is_lame_delegation = False
-        res.ns_inherited_from_parent = True
-    
     # TLS — v4.4: now captures handshake_failed and connection_failed separately
-    # (Requires a web server to connect to — skip for no-A-record domains)
-    if res.ip_address:
-        tls = check_tls(domain, timeout)
-        res.https_valid = tls["ok"]
-        res.tls_error = tls["error"]
-        res.tls_handshake_failed = tls["handshake_failed"]       # v4.4
-        res.tls_connection_failed = tls["connection_failed"]     # v4.4
-        res.cert_self_signed = tls["self_signed"]
-        res.cert_expired = tls["expired"]
-        res.cert_wrong_host = tls["wrong_host"]
+    tls = check_tls(domain, timeout)
+    res.https_valid = tls["ok"]
+    res.tls_error = tls["error"]
+    res.tls_handshake_failed = tls["handshake_failed"]       # v4.4
+    res.tls_connection_failed = tls["connection_failed"]     # v4.4
+    res.cert_self_signed = tls["self_signed"]
+    res.cert_expired = tls["expired"]
+    res.cert_wrong_host = tls["wrong_host"]
     
     # HTTP check
-    # v7.5.2: Skip HTTP/HTTPS probes for no-A-record domains (no web server to connect to)
-    content = b""
-    if res.ip_address:
-        if REQUESTS_AVAILABLE:
-            try:
-                r = requests.head(f"http://{domain}", timeout=timeout, allow_redirects=False, verify=False)
-                res.http_reachable = r.status_code in [200, 301, 302, 307, 308]
-                res.http_status = r.status_code
-            except:
-                pass
-        
-        # HTTPS with redirects + content
-        https_result = follow_redirects(f"https://{domain}", timeout, fetch_content=True)
-        res.https_reachable = https_result["ok"]
-        res.https_status = https_result["initial_status"]
-        res.redirect_count = https_result["hops"]
-        res.redirect_chain = "→".join(str(s) for s in https_result["chain"])
-        res.redirect_domains = "→".join(https_result["domains"])
-        res.redirect_cross_domain = https_result["cross_domain"]
-        res.redirect_uses_temp = https_result["uses_temp"]
-        res.final_url = https_result["final_url"]
-        res.content_length = https_result["content_length"]
-        
-        all_statuses = https_result["all_statuses"]
-        res.status_codes_seen = ";".join(str(s) for s in sorted(all_statuses) if s > 0)
-        res.has_401 = 401 in all_statuses
-        res.has_403 = 403 in all_statuses
-        res.has_429 = 429 in all_statuses
-        res.has_503 = 503 in all_statuses
-        res.has_5xx = bool(all_statuses & {500, 502, 504})
-        
-        # Access restriction detection - 401/403 on what should be a public site is suspicious
-        if res.has_401 or res.has_403:
-            res.is_access_restricted = True
-            if res.has_401 and res.has_403:
-                res.access_restriction_note = "Both 401 Unauthorized and 403 Forbidden responses"
-            elif res.has_401:
-                res.access_restriction_note = "401 Unauthorized - requires authentication for public site"
-            else:
-                res.access_restriction_note = "403 Forbidden - access blocked"
-        
-        # Content analysis
-        content = https_result["content"]
-        if not content and res.http_reachable:
-            http_result = follow_redirects(f"http://{domain}", timeout, fetch_content=True)
-            content = http_result["content"]
-            res.content_length = http_result["content_length"]
+    if REQUESTS_AVAILABLE:
+        try:
+            r = requests.head(f"http://{domain}", timeout=timeout, allow_redirects=False, verify=False)
+            res.http_reachable = r.status_code in [200, 301, 302, 307, 308]
+            res.http_status = r.status_code
+        except:
+            pass
+    
+    # HTTPS with redirects + content
+    https_result = follow_redirects(f"https://{domain}", timeout, fetch_content=True)
+    res.https_reachable = https_result["ok"]
+    res.https_status = https_result["initial_status"]
+    res.redirect_count = https_result["hops"]
+    res.redirect_chain = "→".join(str(s) for s in https_result["chain"])
+    res.redirect_domains = "→".join(https_result["domains"])
+    res.redirect_cross_domain = https_result["cross_domain"]
+    res.redirect_uses_temp = https_result["uses_temp"]
+    res.final_url = https_result["final_url"]
+    res.content_length = https_result["content_length"]
+    
+    all_statuses = https_result["all_statuses"]
+    res.status_codes_seen = ";".join(str(s) for s in sorted(all_statuses) if s > 0)
+    res.has_401 = 401 in all_statuses
+    res.has_403 = 403 in all_statuses
+    res.has_429 = 429 in all_statuses
+    res.has_503 = 503 in all_statuses
+    res.has_5xx = bool(all_statuses & {500, 502, 504})
+    
+    # Access restriction detection - 401/403 on what should be a public site is suspicious
+    if res.has_401 or res.has_403:
+        res.is_access_restricted = True
+        if res.has_401 and res.has_403:
+            res.access_restriction_note = "Both 401 Unauthorized and 403 Forbidden responses"
+        elif res.has_401:
+            res.access_restriction_note = "401 Unauthorized - requires authentication for public site"
+        else:
+            res.access_restriction_note = "403 Forbidden - access blocked"
+    
+    # Content analysis
+    content = https_result["content"]
+    if not content and res.http_reachable:
+        http_result = follow_redirects(f"http://{domain}", timeout, fetch_content=True)
+        content = http_result["content"]
+        res.content_length = http_result["content_length"]
     
     # === EMPTY PAGE DETECTION ===
     # A reachable domain that returns empty/near-empty content is suspicious
@@ -7187,35 +6647,6 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     
     if content:
         res.content_hash = hashlib.md5(content).hexdigest()[:12]
-        
-        # v7.5.4: Detect binary responses (exe, zip, pdf, images…).
-        # Skip HTML content analysis — binary bytes cause spurious regex matches.
-        if _is_binary_content(content):
-            res.is_binary_content = True
-            _h = content[:4]
-            if _h[:2] == b'MZ':
-                res.binary_magic = "PE executable"
-            elif _h == b'\x7fELF':
-                res.binary_magic = "ELF executable"
-            elif _h == b'PK\x03\x04':
-                res.binary_magic = "ZIP/archive"
-            elif _h == b'%PDF':
-                res.binary_magic = "PDF"
-            elif _h[:3] == b'\xff\xd8\xff':
-                res.binary_magic = "JPEG image"
-            elif _h[:4] == b'\x89PNG':
-                res.binary_magic = "PNG image"
-            elif _h[:4] == b'GIF8':
-                res.binary_magic = "GIF image"
-            elif _h[:2] == b'\x1f\x8b':
-                res.binary_magic = "gzip archive"
-            elif _h[:4] == b'Rar!':
-                res.binary_magic = "RAR archive"
-            else:
-                res.binary_magic = "binary (unknown)"
-    
-    # All HTML content analysis guarded — skip if binary
-    if content and not res.is_binary_content:
         ca = analyze_content(content, res.final_url, domain)
         res.is_minimal_shell = ca["minimal_shell"]
         res.has_js_redirect = ca["js_redirect"]
@@ -7331,8 +6762,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     
     # Corporate trust signal check - only if we got a 401/403 or couldn't reach the site
     # A domain that blocks access AND has no trust pages is highly suspicious
-    # v7.5.2: Skip for no-A-record domains (no web server to probe trust pages)
-    if res.ip_address and (res.is_access_restricted or res.is_minimal_shell or not res.https_reachable):
+    if res.is_access_restricted or res.is_minimal_shell or not res.https_reachable:
         trust_signals = check_corporate_trust_signals(domain, timeout=3.0)
         res.trust_pages_checked = ";".join(trust_signals["pages_checked"])
         res.trust_pages_found = ";".join(trust_signals["pages_found"])
@@ -7343,8 +6773,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.is_opaque_entity = True
     
     # App Store Presence Detection (legitimacy signal)
-    # v7.5.2: Skip for no-A-record domains (needs AASA/assetlinks HTTP endpoints)
-    if APP_STORE_DETECTION_AVAILABLE and res.ip_address:
+    if APP_STORE_DETECTION_AVAILABLE:
         try:
             app_result = check_app_store_presence(domain, content=content, timeout=5.0)
             res.app_store_has_presence = app_result.get("has_any_app_presence", False)
@@ -7402,8 +6831,8 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.vt_malicious_vendors = ";".join(vt_result.get("malicious_vendors", []))
             res.vt_categories = json.dumps(vt_result.get("categories", {}))
             res.vt_last_analysis = vt_result.get("last_analysis_date", "") or ""
-        except Exception:
-            pass  # Non-critical — don't break analysis if VT check fails
+        except Exception as e:
+            res.vt_error = f"{type(e).__name__}: {str(e)[:200]}"
     
     # === HACKLINK / SEO SPAM DETECTION ===
     # Scans page content for Turkish hacklink injection, gambling keywords, 
@@ -7623,23 +7052,6 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     if quishing["profile"]:
         res.quishing_profile = True
         res.quishing_evidence = ";".join(quishing["evidence"])
-    
-    # v7.5.2: Dev / Staging Environment Detection
-    # Classify domains likely used for development, QA, staging, or sandbox purposes.
-    # Informational signal — helps analysts understand context without auto-denying.
-    dev_staging = detect_dev_staging(
-        domain=domain,
-        is_subdomain=res.is_subdomain,
-        parent_domain=res.parent_domain,
-        mx_provider_type=res.mx_provider_type,
-        mx_primary=res.mx_primary,
-        no_a_record=res.no_a_record,
-        https_reachable=res.https_reachable,
-    )
-    if dev_staging["is_dev_staging"]:
-        res.is_dev_staging = True
-        res.dev_staging_evidence = ";".join(dev_staging["evidence"])
-        res.dev_staging_confidence = dev_staging["confidence"]
     
     # Score
     calculate_score(res, config)
