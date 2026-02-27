@@ -107,6 +107,11 @@ KNOWN_SCRIPT_HOSTS = {
     "polyfill.io", "cdn.polyfill.io",
     "d3js.org", "cdn.plot.ly",
     "hm.baidu.com", "s.yimg.com",
+    # Push notification / messaging SDKs
+    "cdn.onesignal.com", "onesignal.com",
+    "js.pusher.com", "js.pusherapp.com",
+    "www.pushwoosh.com",
+    "sdk.pushcrew.com",
 }
 
 
