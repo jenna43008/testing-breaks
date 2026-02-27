@@ -1150,6 +1150,9 @@ KNOWN_LEGITIMATE_SCRIPT_DOMAINS = {
     "cdn.shopify.com",
     "static.parastorage.com",
     "static.wixstatic.com",
+    # Push notification / messaging SDKs
+    "cdn.onesignal.com",
+    "onesignal.com",
 }
 
 # === OAUTH CONSENT PHISHING PATTERNS (v7.3.1) ===
