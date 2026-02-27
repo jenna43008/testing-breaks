@@ -310,6 +310,8 @@ class DomainApprovalResult:
     redirect_domains: str = ""
     redirect_cross_domain: bool = False
     redirect_uses_temp: bool = False
+    redirect_arpa_abuse: bool = False           # .arpa hostname found in redirect chain (reverse DNS abuse)
+    redirect_arpa_domains: str = ""             # Which .arpa domains were found
     final_url: str = ""
     
     # === WEB: STATUS CODES ===
@@ -504,6 +506,8 @@ class DomainApprovalResult:
     content_facade_detail: str = ""                  # Explanation of why facade was flagged
     content_external_script_domains: str = ""        # Non-CDN external script domains (semicolon-sep)
     content_external_link_domains: str = ""          # All external domains linked via <a href> (semicolon-sep, with paths)
+    content_arpa_links: bool = False                 # Page contains links/forms/scripts pointing to .arpa domains
+    content_arpa_domains: str = ""                   # Which .arpa domains found in page content
     contact_reuse_results: str = ""                   # JSON: contact info found on other domains (OSINT cross-reference)
     content_visible_word_count: int = -1             # Number of visible words on page (-1 = not checked)
     registration_opaque: bool = False                # Both RDAP and WHOIS failed — cannot determine domain age/registrar
@@ -4834,6 +4838,14 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.registrar_high_risk:
         all_issues.append(f"HIGH-RISK REGISTRAR ({res.registrar_high_risk_name}) → Registrar known for lax verification; disproportionate abuse volume")
     
+    # v7.6: .arpa reverse DNS namespace abuse
+    if res.redirect_arpa_abuse:
+        _arpa_doms = res.redirect_arpa_domains.replace(";", ", ")
+        all_issues.append(f"⚠️ .ARPA REDIRECT ABUSE ({_arpa_doms}) → Redirect chain passes through reverse DNS namespace; strong phishing indicator (Infoblox Feb 2026)")
+    if res.content_arpa_links:
+        _arpa_doms = res.content_arpa_domains.replace(";", ", ")
+        all_issues.append(f"⚠️ .ARPA CONTENT LINKS ({_arpa_doms}) → Page contains links/scripts pointing to .arpa reverse DNS hostnames; phishing infrastructure indicator")
+    
     # === VIRUSTOTAL REPUTATION ===
     if res.vt_available:
         if res.vt_malicious_count >= 5:
@@ -5459,6 +5471,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('HARVEST COMBO', ['client_side_harvest_combo']),
         ('WHOIS PRIVACY', ['whois_privacy']),
         ('HIGH-RISK REGISTRAR', ['registrar_high_risk']),
+        ('.ARPA REDIRECT ABUSE', ['redirect_arpa_abuse']),
+        ('.ARPA CONTENT LINKS', ['content_arpa_links']),
         ('401 UNAUTHORIZED', ['access_restricted']),
         ('403 FORBIDDEN', ['access_restricted']),
         ('429 RATE LIMITED', ['status_429_throttling']),
@@ -6010,6 +6024,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             add("registrar_high_risk", weights.get('registrar_high_risk_moderate', 4))
         # 1yr+ domains: no penalty (long-standing domains aren't suspicious for registrar choice)
     
+    # v7.6: .arpa reverse DNS namespace abuse (Infoblox research, Feb 2026)
+    # .arpa is reserved for DNS infrastructure (PTR records). Any .arpa hostname
+    # in a redirect chain or page links is near-certain phishing infrastructure.
+    # Zero legitimate false-positive risk — no real website redirects through .arpa.
+    if res.redirect_arpa_abuse:
+        add("redirect_arpa_abuse", weights.get('redirect_arpa_abuse', 30))
+    if res.content_arpa_links:
+        add("content_arpa_links", weights.get('content_arpa_links', 20))
+    
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     if res.has_hijack_path_pattern:
         add("hijack_path_pattern", weights.get('hijack_path_pattern', 12))
@@ -6157,26 +6180,14 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("content_placeholder", weights.get('content_placeholder', 10))
     
     if res.content_is_facade:
-        # v7.6: Reduce facade penalty for established SPAs.
-        # Modern agencies, SaaS products, and tech companies routinely build
-        # sites as JavaScript SPAs (React, Angular, Vue, Next.js).  These have
-        # a title tag and minimal visible HTML — everything renders client-side.
-        # A 13-year-old domain with enterprise MX and DKIM that happens to be
-        # an SPA is not suspicious; it's just a modern web architecture choice.
-        #
-        # Criteria for reduced penalty:
-        #   - Domain age ≥ 1 year (established)
-        #   - Enterprise MX OR DKIM configured (real email infrastructure)
-        #   - VT clean (no security vendor flags)
-        _is_established_spa = (
-            res.domain_age_days >= 365
-            and (res.mx_provider_type == "enterprise" or res.dkim_exists)
-            and res.vt_malicious_count == 0
-        )
-        if _is_established_spa:
-            add("content_facade", weights.get('content_facade_established', 10))
-        else:
-            add("content_facade", weights.get('content_facade', 25))
+        # v7.6: Content facade is now informational only (no standalone score).
+        # A page with a title but virtually no visible body text can be a parked
+        # domain, default registrar page, or a legitimate SPA — too many false
+        # positives to score on its own.  Facade detection still serves as:
+        #   - Combo fuel (amplifies registration_opaque, domain_reregistered)
+        #   - Bonus suppression (blocks enterprise MX credit, app store credit, VT clean credit)
+        #   - Issue display (analysts see it in the report)
+        pass
     
     # === REGISTRATION OPACITY ===
     # Both RDAP and WHOIS failed to return domain creation date.
@@ -6871,6 +6882,15 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.final_url = https_result["final_url"]
     res.content_length = https_result["content_length"]
     
+    # v7.6: Check redirect chain for .arpa abuse (Infoblox: reverse DNS phishing)
+    # .arpa is reserved for DNS infrastructure (PTR records, etc.) and should never
+    # host web content or appear in redirect chains.  Any .arpa hostname in the
+    # chain is near-certain indicator of reverse DNS namespace abuse for phishing.
+    _arpa_in_chain = [d for d in https_result["domains"] if d.endswith('.arpa') or '.arpa.' in d]
+    if _arpa_in_chain:
+        res.redirect_arpa_abuse = True
+        res.redirect_arpa_domains = ";".join(_arpa_in_chain[:5])
+    
     all_statuses = https_result["all_statuses"]
     res.status_codes_seen = ";".join(str(s) for s in sorted(all_statuses) if s > 0)
     res.has_401 = 401 in all_statuses
@@ -7210,9 +7230,20 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             ext_scripts = cc.get("external_script_domains", [])
             if ext_scripts:
                 res.content_external_script_domains = ";".join(ext_scripts[:10])
+                # v7.6: Check scripts for .arpa domains too
+                _arpa_scripts = [d for d in ext_scripts if '.arpa' in d.lower()]
+                if _arpa_scripts:
+                    res.content_arpa_links = True
+                    existing = res.content_arpa_domains.split(";") if res.content_arpa_domains else []
+                    res.content_arpa_domains = ";".join(list(set(existing + _arpa_scripts))[:5])
             ext_links = cc.get("external_link_domains", [])
             if ext_links:
                 res.content_external_link_domains = ";".join(ext_links[:20])
+                # v7.6: Check for .arpa domains in page links (reverse DNS abuse)
+                _arpa_links = [d for d in ext_links if '.arpa' in d.lower()]
+                if _arpa_links:
+                    res.content_arpa_links = True
+                    res.content_arpa_domains = ";".join(_arpa_links[:5])
             res.content_visible_word_count = cc.get("visible_word_count", -1)
         except Exception:
             pass  # Non-critical — don't break analysis if content check fails
