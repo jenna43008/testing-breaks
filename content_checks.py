@@ -73,6 +73,21 @@ IGNORE_EMAIL_DOMAINS = {
     "cloudflare.com", "google.com", "wordpress.com", "gravatar.com",
     "w3.org", "schema.org", "sentry.io", "googleapis.com",
     "gstatic.com", "facebook.com", "twitter.com", "github.com",
+    # Placeholder / example / documentation domains (RFC 2606 + common form placeholders)
+    "example.com", "example.org", "example.net", "test.com",
+    "email.com", "domain.com", "yourdomain.com", "yourcompany.com",
+    "yoursite.com", "youremail.com", "company.com", "website.com",
+    "mysite.com", "mydomain.com", "mail.example.com", "placeholder.com",
+    "sample.com", "address.com", "business.com",
+}
+
+# Common placeholder email local parts — if the local part matches one of these
+# AND the domain is generic, the email is almost certainly a form placeholder
+# like "your@email.com", "name@domain.com", "user@example.com"
+PLACEHOLDER_EMAIL_PATTERNS = {
+    "your", "you", "user", "name", "email", "info", "example",
+    "username", "test", "sample", "placeholder", "me", "address",
+    "john", "jane", "yourname", "youremail", "myemail",
 }
 
 # Known-good CDN/framework script hosts — don't flag these as suspicious external scripts
@@ -367,8 +382,13 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
     for email in emails:
         if "@" not in email:
             continue
-        email_domain = email.split("@")[1].lower()
+        local_part, email_domain = email.split("@", 1)
+        email_domain = email_domain.lower()
+        local_lower = local_part.lower()
         if email_domain in IGNORE_EMAIL_DOMAINS:
+            continue
+        # Skip common form placeholder emails (e.g. your@email.com, name@domain.com)
+        if local_lower in PLACEHOLDER_EMAIL_PATTERNS:
             continue
         if email_domain == domain_lower:
             continue
@@ -382,7 +402,13 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
     for email in emails:
         if "@" not in email:
             continue
+        local_part = email.split("@", 1)[0].lower()
         email_domain = email.split("@")[1].lower()
+        # Skip form placeholders (e.g. your@gmail.com in a placeholder attr)
+        if local_part in PLACEHOLDER_EMAIL_PATTERNS:
+            continue
+        if email_domain in IGNORE_EMAIL_DOMAINS:
+            continue
         if email_domain in PRIVACY_EMAIL_DOMAINS:
             result["page_privacy_emails"].append(email)
         elif email_domain in DISPOSABLE_EMAIL_DOMAINS:
