@@ -5891,11 +5891,21 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.is_parking_page:
         add("parking_page", weights.get('parking_page', 6))
     if res.has_credential_form:
-        add("credential_form", weights.get('credential_form', 20))
+        # v7.6: On e-commerce sites, login/registration forms are standard features
+        # (WooCommerce, Shopify accounts).  Only score when hard phishing evidence
+        # is present — exfil scripts, kit filenames, or phishing paths.
+        _ecom_suppress = res.is_ecommerce_site and not (res.has_exfil_drop_script or res.has_phishing_kit_filename or res.phishing_paths_found)
+        if not _ecom_suppress:
+            add("credential_form", weights.get('credential_form', 20))
     if res.has_sensitive_fields:
         add("sensitive_fields", weights.get('sensitive_fields', 10))
     if res.form_posts_external:
-        add("form_posts_external", weights.get('form_posts_external', 10))
+        # v7.6: On e-commerce sites, checkout forms POST to external payment
+        # processors (Stripe, PayPal, Square, etc.).  This is expected behavior,
+        # not credential exfiltration.  Same hard-evidence gate as credential_form.
+        _ecom_suppress = res.is_ecommerce_site and not (res.has_exfil_drop_script or res.has_phishing_kit_filename or res.phishing_paths_found)
+        if not _ecom_suppress:
+            add("form_posts_external", weights.get('form_posts_external', 10))
     if res.brands_detected:
         add("brand_impersonation", weights.get('brand_impersonation', 22))
     if res.phishing_paths_found:
@@ -6261,12 +6271,20 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             is_established = res.domain_age_days and res.domain_age_days >= 365
             has_app_presence = res.app_store_has_presence
             has_enterprise_mx = res.mx_provider_type == "enterprise"
+            # v7.6: Added VT clean and DMARC reject as legitimacy signals.
+            # VT 0/93 is the strongest possible signal that a domain is NOT
+            # currently compromised.  DMARC p=reject shows real email security
+            # investment (even with SPF ~all, which is common and acceptable).
+            is_vt_clean = res.vt_malicious_count == 0 and res.vt_total_vendors >= 50
+            has_dmarc_enforce = res.dmarc_exists and res.dmarc_policy in ("reject", "quarantine")
             legitimacy_signals = sum([
                 bool(has_strong_email_auth),
                 bool(is_established),
                 bool(has_app_presence),
                 bool(has_enterprise_mx),
                 bool(res.dkim_exists),
+                bool(is_vt_clean),
+                bool(has_dmarc_enforce),
             ])
             # 3+ legitimacy signals = clearly legitimate site with a popular plugin
             if legitimacy_signals >= 3:
