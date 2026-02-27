@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "check_rdap": True,
     "admin_password": "admin123",  # CHANGE THIS!
     "vt_api_key": "3976cc546c3ac01b8f50773c46a5c4a7e508709ae23b62ab4d82436222367d8",   # VirusTotal API key (hardcoded)
-    "config_version": "7.4",              # Used for weight migration between versions
+    "config_version": "7.5",              # Used for weight migration between versions
     
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
@@ -256,7 +256,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_no_dkim_new_30d", "score": 0, "label": "no dkim + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_no_dkim_no_dmarc", "score": 0, "label": "no dkim + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "no_dmarc"], "if_any": [], "if_not": []},
         {"name": "combo_no_dkim_weak_dmarc", "score": 0, "label": "no dkim + dmarc p none", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
-        {"name": "combo_no_dkim_weak_dmarc_spf_soft", "score": 0, "label": "no dkim + dmarc p none + spf softfail all", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none", "spf_softfail_all"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_weak_dmarc_spf_soft", "score": 5, "label": "no dkim + dmarc p none + spf softfail all", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none", "spf_softfail_all"], "if_any": [], "if_not": []},
         {"name": "combo_no_dmarc_new_30d", "score": 0, "label": "no dmarc + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_no_dmarc_new_7d", "score": 0, "label": "no dmarc + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_7d"], "if_any": [], "if_not": []},
         {"name": "combo_no_spf_new_30d", "score": 0, "label": "no spf + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_30d"], "if_any": [], "if_not": []},
@@ -350,7 +350,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_budget_host_cred_form", "score": 15, "label": "hosting budget shared + credential form", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_budget_host_new_30d", "score": 12, "label": "hosting budget shared + domain <30d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_budget_host_new_7d", "score": 18, "label": "hosting budget shared + domain <7d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "domain_lt_7d"], "if_any": [], "if_not": []},
-        {"name": "combo_budget_host_no_dkim", "score": 0, "label": "hosting budget shared + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_budget_host_no_dkim", "score": 5, "label": "hosting budget shared + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_dkim"], "if_any": [], "if_not": []},
         {"name": "combo_budget_host_no_dmarc", "score": 6, "label": "hosting budget shared + no dmarc", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_dmarc"], "if_any": [], "if_not": []},
         {"name": "combo_budget_host_no_spf", "score": 6, "label": "hosting budget shared + no spf", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_spf"], "if_any": [], "if_not": []},
         {"name": "combo_free_host_cred_form", "score": 18, "label": "hosting free + credential form", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_free", "credential_form"], "if_any": [], "if_not": []},
@@ -363,6 +363,14 @@ DEFAULT_CONFIG = {
         {"name": "combo_suspect_host_new_30d", "score": 22, "label": "hosting suspect + domain <30d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_suspect_host_new_7d", "score": 28, "label": "hosting suspect + domain <7d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "domain_lt_7d"], "if_any": [], "if_not": []},
         {"name": "combo_suspect_host_no_https", "score": 18, "label": "hosting suspect + no https", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "no_https"], "if_any": [], "if_not": []},
+
+        # --- Infrastructure Risk (2 rules) ---
+        # Cross-cutting rules: suspicious TLD + budget hosting + weak email auth
+        # These target the "cheap disposable sender" fingerprint: domains that stack
+        # every low-cost/low-effort infra choice simultaneously. Enterprise MX excluded
+        # because Google Workspace / M365 indicates legitimate investment.
+        {"name": "combo_sus_tld_budget_host_no_dkim", "score": 8, "label": "suspicious tld + budget shared host + no dkim", "category": "Infrastructure Risk", "enabled": True, "if_all": ["suspicious_tld", "hosting_budget_shared", "no_dkim"], "if_any": [], "if_not": ["mx_enterprise_bonus"]},
+        {"name": "combo_sus_tld_no_dkim_weak_dmarc", "score": 5, "label": "suspicious tld + no dkim + dmarc p none", "category": "Infrastructure Risk", "enabled": True, "if_all": ["suspicious_tld", "no_dkim", "dmarc_p_none"], "if_any": [], "if_not": ["mx_enterprise_bonus"]},
 
         # --- Nameserver Risk (8 rules) ---
         {"name": "combo_ns_dynamic_new_30d", "score": 20, "label": "dynamic DNS NS + domain <30d", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_dynamic_dns", "domain_lt_30d"], "if_any": [], "if_not": []},
@@ -1274,6 +1282,28 @@ def load_config() -> dict:
                             if saved_val <= old_val:  # User hasn't bumped it above old default
                                 merged['weights'][signal] = new_val
                         merged['config_version'] = '7.4'
+                    
+                    # v7.5 migration: give real scores to email auth + infrastructure combos.
+                    # These were scored 0 (informational only) but domains stacking
+                    # suspicious TLD + budget hosting + full email auth failure were
+                    # slipping through (e.g. brazilliannews.site at 28/50).
+                    # Also adds 2 new "Infrastructure Risk" rules in DEFAULT_CONFIG
+                    # that will merge automatically for new rules.
+                    if saved_version < '7.5':
+                        # Bump existing rule scores if user hasn't customized above 0
+                        v75_rule_bumps = {
+                            # rule_name: (old_score, new_score)
+                            'combo_no_dkim_weak_dmarc_spf_soft': (0, 5),
+                            'combo_budget_host_no_dkim': (0, 5),
+                        }
+                        if 'rules' in loaded:
+                            for user_rule in loaded.get('rules', []):
+                                name = user_rule.get('name', '')
+                                if name in v75_rule_bumps:
+                                    old_score, new_score = v75_rule_bumps[name]
+                                    if user_rule.get('score', 0) <= old_score:
+                                        user_rule['score'] = new_score
+                        merged['config_version'] = '7.5'
                 # Legacy: if old config has combos, ignore them (now in rules)
                 loaded.pop('combos', None)
                 loaded.pop('disabled_combos', None)
