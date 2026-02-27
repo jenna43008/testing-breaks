@@ -3645,11 +3645,13 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
             if brand_str in visible_cleaned:
                 result["brands"].append(brand_display)
     
-    # Step 8: Check short brand keywords with word boundary matching
+    # Step 8: Check short brand keywords with strict boundary matching
+    # Uses (?<![\w-]) and (?![\w-]) instead of bare \b to prevent matching
+    # hyphenated compounds like "sign-ups", "pop-ups" for brand "ups"
     for brand in BRAND_KEYWORDS_SHORT:
         brand_str = brand.decode('utf-8', errors='ignore')
         if brand_str not in final_domain and brand_str not in domain:
-            pattern = r'\b' + re.escape(brand_str) + r'\b'
+            pattern = r'(?<![\w-])' + re.escape(brand_str) + r'(?![\w-])'
             if re.search(pattern, visible_cleaned, re.IGNORECASE):
                 result["brands"].append(brand_str)
     
