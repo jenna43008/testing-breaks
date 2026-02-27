@@ -1044,12 +1044,13 @@ BRAND_SPOOFING_KEYWORDS = [
 # typosquatting, domain name patterns, credential forms, and phishing paths.
 BRAND_KEYWORDS = [
     b'paypal', b'amazon', b'microsoft', b'google', b'facebook',
-    b'instagram', b'netflix', b'bank of america', b'chase', b'wells fargo',
+    b'instagram', b'netflix', b'bank of america', b'wells fargo',
     b'usps', b'fedex', b'dropbox', b'docusign',
 ]
 
 # Short keywords that need word boundary matching (to avoid false positives like "first" matching "irs")
-BRAND_KEYWORDS_SHORT = [b'irs', b'ups', b'dhl']
+# "chase" moved here from BRAND_KEYWORDS — substring match hits "purchase", "purchased", etc.
+BRAND_KEYWORDS_SHORT = [b'irs', b'ups', b'dhl', b'chase']
 
 # === KNOWN PARKING / DOMAIN-SALE PROVIDERS (v7.5) ===
 # When the page is a parking page AND external resources/forms point to these
