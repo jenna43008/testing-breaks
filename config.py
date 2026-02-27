@@ -182,6 +182,8 @@ DEFAULT_CONFIG = {
         "whois_privacy": 5,                    # v7.5.2: Reduced from 10 — combo fuel only, GDPR/ICANN redaction is regulatory not evasion
         "registrar_high_risk": 8,              # v7.6: High-risk registrar on new domain (<90d)
         "registrar_high_risk_moderate": 4,     # v7.6: High-risk registrar on mid-age domain (90d-1yr)
+        "redirect_arpa_abuse": 30,             # v7.6: .arpa hostname in redirect chain (reverse DNS phishing)
+        "content_arpa_links": 20,              # v7.6: Page links/scripts point to .arpa domains
         "client_side_harvest_combo": 25,      # v7.5: Harvest code (input reads, keyloggers, sendBeacon) + corroborating phishing signal
         "form_posts_external": 10,
         "suspicious_iframe": 15,
