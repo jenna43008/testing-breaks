@@ -81,6 +81,12 @@ def parse_domains(text: str) -> list:
             from urllib.parse import urlparse
             d = urlparse(d).netloc or urlparse(d).path
         d = d.strip('/').strip('.')
+        # Strip common mail subdomains — we want to analyze the root domain
+        _MAIL_PREFIXES = ("mail.", "webmail.", "smtp.", "imap.", "pop.", "mx.", "email.")
+        for pfx in _MAIL_PREFIXES:
+            if d.startswith(pfx):
+                d = d[len(pfx):]
+                break
         if d and '.' in d:
             domains.append(d)
     return domains  # Return all entries in input order, including duplicates
