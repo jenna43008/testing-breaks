@@ -1052,6 +1052,13 @@ BRAND_KEYWORDS = [
 # "chase" moved here from BRAND_KEYWORDS — substring match hits "purchase", "purchased", etc.
 BRAND_KEYWORDS_SHORT = [b'irs', b'ups', b'dhl', b'chase']
 
+# === E-COMMERCE SHIPPING BRAND SUPPRESSION (v7.6) ===
+# Shipping carrier brands that appear naturally on e-commerce sites.
+# When is_ecommerce_site is True, these brands are filtered from brands_detected
+# to prevent phishing kit false positives on legitimate online stores.
+# A WooCommerce/Shopify store mentioning "UPS shipping" is not impersonating UPS.
+ECOMMERCE_SHIPPING_BRANDS = {"ups", "dhl", "fedex", "usps"}
+
 # === KNOWN PARKING / DOMAIN-SALE PROVIDERS (v7.5) ===
 # When the page is a parking page AND external resources/forms point to these
 # domains, suppress brand detection, form_posts_external, and malicious script
@@ -1089,6 +1096,60 @@ KNOWN_PARKING_SCRIPT_DOMAINS = {
     "pagead2.googlesyndication.com",
     "www.googleadservices.com",
     "cdn.bodis.com",
+}
+
+# === KNOWN LEGITIMATE EXTERNAL SCRIPT DOMAINS (v7.6) ===
+# Common third-party marketing, analytics, social, and fraud-prevention scripts
+# that trigger UNKNOWN_EXTERNAL_SCRIPT when not in the hacklink scanner's CDN
+# whitelist.  Used to suppress malicious_script MEDIUM-confidence false positives
+# on established domains.  These are widely-used, well-known SaaS services.
+KNOWN_LEGITIMATE_SCRIPT_DOMAINS = {
+    # Social sharing / engagement
+    "static.addtoany.com",
+    "platform.twitter.com",
+    "connect.facebook.net",
+    "cdn.syndication.twimg.com",
+    "platform.linkedin.com",
+    "assets.pinterest.com",
+    # Click fraud prevention
+    "www.clickcease.com",
+    "t.clickcease.com",
+    # Analytics & marketing
+    "cdn.amplitude.com",
+    "cdn.segment.com",
+    "cdn.heapanalytics.com",
+    "cdn.mxpnl.com",
+    "plausible.io",
+    "cdn.usefathom.com",
+    "static.hotjar.com",
+    "script.hotjar.com",
+    "snap.licdn.com",
+    "bat.bing.com",
+    "sc-static.net",
+    "widget.intercom.io",
+    "js.intercomcdn.com",
+    "js.driftt.com",
+    "js.hs-scripts.com",
+    "js.hs-analytics.net",
+    "js.hsforms.net",
+    "www.clarity.ms",
+    "cdn.mouseflow.com",
+    "cdn.optimizely.com",
+    # Chat & support
+    "embed.tawk.to",
+    "cdn.livechatinc.com",
+    "static.zdassets.com",
+    # Video / media email
+    "fast.wistia.com",
+    "play.vidyard.com",
+    "js.hscta.net",
+    # Cookie consent
+    "cdn.cookielaw.org",
+    "cdn-cookieyes.com",
+    # CMS / site builders (not in hacklink CDN whitelist)
+    "cdn.shopify.com",
+    "static.parastorage.com",
+    "static.wixstatic.com",
 }
 
 # === OAUTH CONSENT PHISHING PATTERNS (v7.3.1) ===
@@ -5558,11 +5619,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("null_mx", weights.get('null_mx', 12))
     
     # MX provider type scoring (v4.7)
-    # NOTE: mx_enterprise bonus is SUPPRESSED when content_facade is detected.
-    # A $6/month Google Workspace subscription does not legitimize a domain
-    # that serves no real content — only an external JS shell with a title tag.
+    # NOTE: mx_enterprise bonus is SUPPRESSED when content_facade is detected,
+    # UNLESS the domain is an established SPA (v7.6) — a $6/month Google Workspace
+    # subscription does not legitimize a brand-new shell domain, but a 13-year-old
+    # domain with DKIM and VT clean is genuinely using enterprise email.
     if res.mx_provider_type == "enterprise":
-        if not res.content_is_facade:
+        _is_established_spa = (
+            res.domain_age_days >= 365
+            and (res.mx_provider_type == "enterprise" or res.dkim_exists)
+            and res.vt_malicious_count == 0
+        )
+        if not res.content_is_facade or _is_established_spa:
             add("mx_enterprise", weights.get('mx_enterprise_bonus', -5))
     elif res.mx_provider_type == "disposable":
         add("mx_disposable", weights.get('mx_disposable', 10))
@@ -5929,7 +5996,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # === MALICIOUS SCRIPT INJECTION (SocGholish/FakeUpdates/obfuscated) ===
     # v7.2: Multi-signal confidence — HIGH gets full weight, MEDIUM gets reduced weight
     # v7.5: Suppress on parking pages when ALL external scripts are from known providers
+    # v7.6: Suppress MEDIUM-confidence on established domains when all external scripts
+    #        are from known legitimate services (analytics, social, fraud prevention)
     _suppress_malicious_script = False
+    _downgrade_malicious_script = False  # v7.6: Reduce MEDIUM weight on established domains
     if res.hacklink_malicious_script and res.is_parking_page:
         # Check if all external script domains are known parking providers
         _ext_domains = [d.strip().lower() for d in
@@ -5948,11 +6018,42 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             if _ms_sigs.issubset(_parking_artifact_sigs):
                 _suppress_malicious_script = True
     
+    # v7.6: Established domain + MEDIUM confidence + all scripts from known services
+    # = false positive from legitimate third-party marketing/analytics tools.
+    # Only suppress MEDIUM (not HIGH) — HIGH confidence has stronger signal evidence.
+    # Two levels:
+    #   1. All scripts from known services → full suppression
+    #   2. Established + VT clean → reduced weight (MEDIUM is already uncertain;
+    #      established VT-clean domain is very unlikely to be compromised)
+    if (res.hacklink_malicious_script
+            and not _suppress_malicious_script
+            and res.hacklink_malicious_script_confidence == "MEDIUM"
+            and res.domain_age_days >= 365
+            and res.vt_malicious_count == 0):
+        _ext_domains = [d.strip().lower() for d in
+                        (res.content_external_script_domains or "").split(";") if d.strip()]
+        if _ext_domains:
+            _all_known = KNOWN_LEGITIMATE_SCRIPT_DOMAINS | KNOWN_PARKING_SCRIPT_DOMAINS
+            _unknown = [d for d in _ext_domains if d not in _all_known]
+            if not _unknown:
+                # All scripts from known legitimate services — full suppression
+                _suppress_malicious_script = True
+        # Even if not all scripts are whitelisted, reduce weight for established domains.
+        # MEDIUM confidence on a 1yr+ VT-clean domain is more likely false positive
+        # from legitimate third-party tools than actual compromise.
+        if not _suppress_malicious_script:
+            _downgrade_malicious_script = True
+    
     if res.hacklink_malicious_script and not _suppress_malicious_script:
         if res.hacklink_malicious_script_confidence == "HIGH":
             add("malicious_script", weights.get('malicious_script', 100))
         elif res.hacklink_malicious_script_confidence == "MEDIUM":
-            add("malicious_script", weights.get('malicious_script_medium', 25))
+            if _downgrade_malicious_script:
+                # v7.6: Established VT-clean domain — MEDIUM confidence is likely
+                # from legitimate third-party scripts, not actual compromise
+                add("malicious_script", weights.get('malicious_script_medium_established', 10))
+            else:
+                add("malicious_script", weights.get('malicious_script_medium', 25))
     
     # === HIDDEN CONTENT INJECTION (CSS cloaking: display:none, font-size:0) ===
     # HIGH = hidden content WITH embedded links (near-certain hacklink/SEO spam)
@@ -5984,7 +6085,26 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("content_placeholder", weights.get('content_placeholder', 10))
     
     if res.content_is_facade:
-        add("content_facade", weights.get('content_facade', 25))
+        # v7.6: Reduce facade penalty for established SPAs.
+        # Modern agencies, SaaS products, and tech companies routinely build
+        # sites as JavaScript SPAs (React, Angular, Vue, Next.js).  These have
+        # a title tag and minimal visible HTML — everything renders client-side.
+        # A 13-year-old domain with enterprise MX and DKIM that happens to be
+        # an SPA is not suspicious; it's just a modern web architecture choice.
+        #
+        # Criteria for reduced penalty:
+        #   - Domain age ≥ 1 year (established)
+        #   - Enterprise MX OR DKIM configured (real email infrastructure)
+        #   - VT clean (no security vendor flags)
+        _is_established_spa = (
+            res.domain_age_days >= 365
+            and (res.mx_provider_type == "enterprise" or res.dkim_exists)
+            and res.vt_malicious_count == 0
+        )
+        if _is_established_spa:
+            add("content_facade", weights.get('content_facade_established', 10))
+        else:
+            add("content_facade", weights.get('content_facade', 25))
     
     # === REGISTRATION OPACITY ===
     # Both RDAP and WHOIS failed to return domain creation date.
@@ -6297,6 +6417,30 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 res.phishing_kit_detected = True
                 res.phishing_kit_reason = " + ".join(kit_evidence)
             # else: suppress — only soft/parking-artifact evidence on a parking page
+        # v7.6 defense-in-depth: E-commerce sites (WooCommerce, Shopify, etc.)
+        # naturally have credential forms (login/registration), brand references
+        # (shipping carriers, payment processors), and external form actions
+        # (payment gateways like Stripe, PayPal checkout).  This trifecta is the
+        # normal anatomy of an online store, NOT a phishing kit.
+        #
+        # Only fire the kit composite on e-commerce sites when hard evidence
+        # exists that goes beyond normal store operations:
+        #   - exfil/drop scripts (data harvesting to attacker server)
+        #   - kit filenames (next.php, login.php, etc.)
+        #   - phishing paths (/signin, /verify, /secure, etc.)
+        #   - harvest combo signals (keylogger, credential capture)
+        elif res.is_ecommerce_site and not res.has_exfil_drop_script:
+            _hard_evidence = [e for e in kit_evidence if not (
+                e.startswith("brand:") or
+                e == "credential form" or
+                e == "form posts to external domain" or
+                e == "obfuscated JS"
+            )]
+            if len(_hard_evidence) >= 1:
+                # Hard evidence + ecommerce soft signals = still suspicious
+                res.phishing_kit_detected = True
+                res.phishing_kit_reason = " + ".join(kit_evidence)
+            # else: suppress — only normal ecommerce signals (brand + form + external)
         else:
             res.phishing_kit_detected = True
             res.phishing_kit_reason = " + ".join(kit_evidence)
@@ -6733,6 +6877,10 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                 if _all_parking:
                     res.form_posts_external = False
         
+        # NOTE: E-commerce shipping brand suppression moved to after hacklink scanning
+        # (see "ECOMMERCE SHIPPING BRAND SUPPRESSION" below) so it runs after BOTH
+        # analyze_ecommerce_indicators() and WooCommerce plugin detection have completed.
+        
         # Phishing kit detection (v7.3)
         if ca["kit_filename"]:
             res.has_phishing_kit_filename = True
@@ -6917,6 +7065,30 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                 res.hacklink_suspicious_scripts = ";".join(sus_scripts[:10])
         except Exception:
             pass  # Non-critical — don't break analysis if hacklink check fails
+    
+    # === WOOCOMMERCE PLUGIN → ECOMMERCE UPGRADE (v7.6.1) ===
+    # WooCommerce detected in WordPress plugins is strong evidence of e-commerce
+    # even when content keyword detection fails (e.g., under-construction page,
+    # storefront not fully rendering, or minimal product listings on homepage).
+    if not res.is_ecommerce_site and "woocommerce" in (res.hacklink_vulnerable_plugins or "").lower():
+        res.is_ecommerce_site = True
+    
+    # === E-COMMERCE SHIPPING BRAND SUPPRESSION (v7.6) ===
+    # E-commerce sites (WooCommerce, Shopify, etc.) naturally reference shipping
+    # carriers like UPS, DHL, FedEx in product pages, checkout flows, and FAQs.
+    # Combined with credential forms (login/registration) and external form actions
+    # (payment processors), these trigger the phishing kit composite = false autofail.
+    #
+    # When e-commerce is confirmed, filter shipping carrier brands from brands_detected.
+    # Actual brand impersonation (e.g., a fake UPS tracking site) won't have e-commerce
+    # indicators like cart, product listings, add-to-cart buttons, etc.
+    #
+    # Runs here (after both analyze_ecommerce_indicators and hacklink plugin scanning)
+    # so that WooCommerce plugin detection can upgrade is_ecommerce_site first.
+    if res.is_ecommerce_site and res.brands_detected:
+        _ecom_brands = [b.strip() for b in res.brands_detected.split(";")]
+        _filtered = [b for b in _ecom_brands if b.lower() not in ECOMMERCE_SHIPPING_BRANDS]
+        res.brands_detected = ";".join(_filtered) if _filtered else ""
     
     # === CONTENT IDENTITY VERIFICATION ===
     # Scans page content for identity mismatches, cloned content, cross-domain
