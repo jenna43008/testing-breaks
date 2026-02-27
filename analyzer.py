@@ -5240,6 +5240,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.trust_pages_found and len(res.trust_pages_found.split(';')) >= 2:
         positives.append(f"Corporate pages found ({len(res.trust_pages_found.split(';'))})")
     
+    if res.is_ecommerce_site:
+        positives.append("Confirmed e-commerce site")
+    
     # === BUILD SUMMARY ===
     # Score each issue by its config weight for filtering and sorting.
     # Issues whose corresponding signal has weight=0 (disabled) are excluded.
@@ -5679,6 +5682,14 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             if not res.content_is_facade:
                 add("app_store_low", weights.get('app_store_low', -3))
     
+    # === E-COMMERCE LEGITIMACY BONUS (v7.6) ===
+    # A confirmed e-commerce site (WooCommerce, Shopify, etc.) on an established
+    # domain with clean VirusTotal is strong evidence of a real business.
+    # Scam stores are overwhelmingly new domains (<6mo) with VT flags.
+    # A 19-year-old WooCommerce site with DMARC p=reject is not a scam store.
+    if res.is_ecommerce_site and res.domain_age_days >= 365 and res.vt_malicious_count == 0:
+        add("ecommerce_established", weights.get('ecommerce_established_bonus', -15))
+    
     # Blacklists - HIGH weight, these are real fraud signals
     if res.domain_blacklist_count > 0:
         add("domain_blacklisted", weights.get('domain_blacklisted', 40) * min(res.domain_blacklist_count, 3))
@@ -5814,7 +5825,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_cross_domain_brand_link:
         add("cross_domain_brand_link", weights.get('cross_domain_brand_link', 18))
     if res.is_ecommerce_site and res.missing_business_identity:
-        add("ecommerce_no_identity", weights.get('ecommerce_no_identity', 15))
+        # v7.6: Missing business identity is a scam-store indicator, but its severity
+        # depends on domain context.  A brand-new store with no legal info is high risk.
+        # A 19-year-old domain with DMARC p=reject and VT clean just hasn't filled in
+        # their "About" page yet — annoying but not fraudulent.
+        _is_established_vt_clean = res.domain_age_days >= 365 and res.vt_malicious_count == 0
+        if _is_established_vt_clean:
+            add("ecommerce_no_identity", weights.get('ecommerce_no_identity_established', 5))
+        else:
+            add("ecommerce_no_identity", weights.get('ecommerce_no_identity', 15))
     
     # Web/TLS
     if not res.https_valid:
