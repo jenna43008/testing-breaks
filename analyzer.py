@@ -3880,36 +3880,69 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
                 f"corroborating [{corr_names}]"
             )
     
-    # === OAUTH CONSENT PHISHING DETECTION (v7.3.1) ===
+    # === OAUTH CONSENT PHISHING DETECTION (v7.3.1, tightened v7.5.1) ===
     # Attackers set up pages that redirect to real Microsoft/Google OAuth
     # authorization endpoints with malicious app permissions. The phishing
     # domain itself has NO password fields (bypasses credential form detection).
-    # Look for: OAuth auth endpoints in links/redirects, response_type=code,
-    # redirect_uri pointing back to the domain, excessive scope requests.
+    #
+    # v7.5.1: Bare OAuth params (response_type=code, redirect_uri) are standard
+    # on ANY site with "Sign in with Microsoft/Google" — flagging those alone
+    # causes massive FPs on legitimate enterprise sites (e.g. qualcomm.com).
+    #
+    # Strong evidence (required to flag):
+    #   - Dangerous scope requests: mail.read, files.readwrite, contacts.read, etc.
+    #   - OAuth endpoint using /common/ wildcard tenant (legit apps use tenant ID)
+    # Weak evidence (informational only, not sufficient alone):
+    #   - response_type=code, redirect_uri, client_id — normal OAuth params
+    #   - OAuth endpoint with specific tenant ID — normal enterprise SSO
     oauth_evidence = []
+    oauth_has_strong = False  # Need at least one strong signal to flag
     
     # Check for OAuth authorization endpoints in all href/src links
     all_links = re.findall(rb'(?:href|src|action|url)\s*=\s*["\']([^"\']{10,500})["\']', content, re.IGNORECASE)
     all_links_lower = [l.lower() for l in all_links]
+    has_oauth_endpoint = False
     for link in all_links_lower:
         for endpoint in OAUTH_AUTH_ENDPOINTS:
             if endpoint in link:
-                oauth_evidence.append(f"OAuth endpoint in link: {endpoint.decode()}")
+                has_oauth_endpoint = True
+                # /common/ wildcard tenant = strong signal (phishing targets any org)
+                if b'/common/' in link:
+                    oauth_evidence.append(f"OAuth endpoint with /common/ wildcard tenant: {endpoint.decode()}")
+                    oauth_has_strong = True
+                else:
+                    oauth_evidence.append(f"OAuth endpoint in link: {endpoint.decode()} (tenant-specific — likely legit SSO)")
                 break
     
-    # Check for OAuth parameters in page source (could be in JS, forms, or meta redirects)
+    # Check for dangerous scope requests — the actual consent phishing fingerprint
+    # Legitimate SSO: scope=openid profile email
+    # Consent phishing: scope=mail.read files.readwrite.all contacts.read
+    dangerous_scope = re.search(
+        rb'scope\s*=\s*[^&"\']*(?:mail\.read|mail\.send|files\.read|files\.readwrite|'
+        rb'contacts\.read|calendars\.read|user\.read\.all|directory\.read)',
+        content, re.IGNORECASE
+    )
+    if dangerous_scope:
+        scope_str = dangerous_scope.group(0).decode('utf-8', errors='ignore')[:120]
+        oauth_evidence.append(f"Dangerous scope request: {scope_str}")
+        oauth_has_strong = True
+    
+    # Weak evidence: bare OAuth params (informational context only)
     for pattern in OAUTH_PARAM_PATTERNS:
         match = re.search(pattern, content, re.IGNORECASE)
         if match:
             param_str = match.group(0).decode('utf-8', errors='ignore')[:80]
-            oauth_evidence.append(f"OAuth param: {param_str}")
+            # Skip the scope pattern — handled above with dangerous scope check
+            if not param_str.startswith('scope'):
+                oauth_evidence.append(f"OAuth param: {param_str}")
     
     # Also check for inline JS that builds OAuth URLs
     if re.search(rb'(?:oauth|authorize|consent).*(?:response_type|redirect_uri|client_id)', content, re.IGNORECASE):
-        if not oauth_evidence:  # Only if we haven't already found direct evidence
+        if not oauth_evidence:
             oauth_evidence.append("JS references to OAuth authorization flow")
     
-    if oauth_evidence:
+    # Only flag as phishing if strong evidence exists
+    if oauth_evidence and oauth_has_strong:
         result["oauth_phish"] = True
         result["oauth_evidence"] = oauth_evidence
     
