@@ -950,6 +950,10 @@ def display_results(results: list):
                 last_analysis = domain_data.get('vt_last_analysis', '')
                 if last_analysis:
                     st.caption(f"Last VT analysis: {last_analysis}")
+        elif domain_data.get('vt_error'):
+            with st.expander("🛡️ VirusTotal Reputation — ⚠️ CHECK FAILED", expanded=True):
+                st.error(f"**VT check failed:** {domain_data['vt_error']}")
+                st.caption("VirusTotal scoring is unavailable for this domain. Verify the API key in Settings → Config.")
         
         # === HACKLINK / SEO SPAM DETECTION ===
         has_hacklink = (
