@@ -1495,8 +1495,22 @@ def classify_mx_provider(mx_records: List[Tuple[int, str]], domain: str, config:
             if pattern.lower() in mx_host:
                 return "disposable"
     
-    # Check if self-hosted (MX points to same domain or subdomain)
+    # v7.6: Detect Domain Connect ESP-delegated MX before selfhosted check.
+    # Pattern: _dc-mx.{hex_hash}.{domain} — this is a CNAME that routes to
+    # the ESP's infrastructure (e.g., MailerLite, Mailchimp).  The MX hostname
+    # contains the customer's domain, which would falsely trigger the selfhosted
+    # check below, but it's actually an ESP delegation, not a self-hosted server.
+    # Also detect _domainconnect. prefix used by some providers.
+    _DC_MX_PREFIXES = ("_dc-mx.", "_domainconnect.")
     domain_lower = domain.lower()
+    for mx_host in all_mx_hosts:
+        if any(mx_host.startswith(pfx) for pfx in _DC_MX_PREFIXES):
+            if mx_host.endswith('.' + domain_lower):
+                # Domain Connect CNAME pointing through the customer's domain
+                # to an ESP — classify as standard (legitimate ESP relay)
+                return "standard"
+    
+    # Check if self-hosted (MX points to same domain or subdomain)
     for mx_host in all_mx_hosts:
         if mx_host == domain_lower or mx_host.endswith('.' + domain_lower):
             return "selfhosted"
