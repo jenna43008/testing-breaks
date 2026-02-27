@@ -53,6 +53,7 @@ DEFAULT_CONFIG = {
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
         "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — HIGH confidence (5+ multi-signal score)
         "malicious_script_medium": 35,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — moderate penalty; common on sites with third-party tracking
+        "malicious_script_medium_established": 10,  # v7.6: MEDIUM confidence on established domain (>1yr, VT clean) — likely legitimate third-party scripts
         "hidden_injection": 100,            # CSS-hidden content injection (hacklink fingerprint) — confirmed compromise
         "hidden_injection_css_only": 0,     # CSS hiding patterns (display:none etc.) without confirmed injection — too common on legitimate sites
         "cpanel_detected": 25,              # cPanel hosting (common hacklink target, not malicious alone)
@@ -64,6 +65,7 @@ DEFAULT_CONFIG = {
         "content_privacy_email": 12,           # Privacy email (proton/tutanota) as business contact on page
         "content_placeholder": 20,             # Placeholder content (lorem ipsum, coming soon)
         "content_facade": 35,                  # SPA shell: title present but <30 visible words + external JS
+        "content_facade_established": 10,      # v7.6: Reduced weight for SPAs on established domains (age>1yr + enterprise MX/DKIM + VT clean)
         "registration_opaque": 25,              # Both RDAP+WHOIS failed — cannot determine age/registrar (standalone)
         "registration_opaque_with_risk": 20,   # Registration opaque + content risk signals present (facade/mismatch/broker)
         "domain_reregistered_recent_with_risk": 18,  # Dropped & re-registered ≤90d + content risk
