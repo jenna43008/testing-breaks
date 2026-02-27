@@ -362,6 +362,8 @@ class DomainApprovalResult:
     page_title_match: str = ""                 # Which suspicious pattern matched
     whois_privacy: bool = False                # WHOIS registrant uses privacy/proxy service
     whois_privacy_service: str = ""            # Which privacy service detected
+    registrar_high_risk: bool = False          # Registrar known for lax verification / abuse-friendly
+    registrar_high_risk_name: str = ""         # Which high-risk registrar matched
     
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     has_hijack_path_pattern: bool = False
@@ -1058,6 +1060,13 @@ BRAND_KEYWORDS_SHORT = [b'irs', b'ups', b'dhl', b'chase']
 # to prevent phishing kit false positives on legitimate online stores.
 # A WooCommerce/Shopify store mentioning "UPS shipping" is not impersonating UPS.
 ECOMMERCE_SHIPPING_BRANDS = {"ups", "dhl", "fedex", "usps"}
+
+# === HIGH-RISK REGISTRARS (v7.6) ===
+# Registrar entities disproportionately used for spam/fraud registrations.
+# Matched case-insensitively as substrings against whois_registrar.
+HIGH_RISK_REGISTRARS = [
+    "godaddy online services cayman islands",
+]
 
 # === KNOWN PARKING / DOMAIN-SALE PROVIDERS (v7.5) ===
 # When the page is a parking page AND external resources/forms point to these
@@ -4821,6 +4830,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         # Older domain with privacy is normal — note for context but not an issue
         pass
     
+    # v7.6: High-risk registrar
+    if res.registrar_high_risk:
+        all_issues.append(f"HIGH-RISK REGISTRAR ({res.registrar_high_risk_name}) → Registrar known for lax verification; disproportionate abuse volume")
+    
     # === VIRUSTOTAL REPUTATION ===
     if res.vt_available:
         if res.vt_malicious_count >= 5:
@@ -5445,6 +5458,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('SUSPICIOUS TITLE', ['suspicious_page_title']),
         ('HARVEST COMBO', ['client_side_harvest_combo']),
         ('WHOIS PRIVACY', ['whois_privacy']),
+        ('HIGH-RISK REGISTRAR', ['registrar_high_risk']),
         ('401 UNAUTHORIZED', ['access_restricted']),
         ('403 FORBIDDEN', ['access_restricted']),
         ('429 RATE LIMITED', ['status_429_throttling']),
@@ -5984,6 +5998,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # Value is as combo fuel with new_domain + credential_form + self-hosted MX.
     if res.whois_privacy:
         add("whois_privacy", weights.get('whois_privacy', 0))
+    
+    # v7.6: High-risk registrar penalty
+    # Certain registrar entities are disproportionately used for spam/fraud
+    # registrations due to lax verification.  Penalty scales with domain age:
+    # new domains (<90d) get full weight, established domains (1yr+) get 0.
+    if res.registrar_high_risk:
+        if res.domain_age_days >= 0 and res.domain_age_days < 90:
+            add("registrar_high_risk", weights.get('registrar_high_risk', 8))
+        elif res.domain_age_days >= 0 and res.domain_age_days < 365:
+            add("registrar_high_risk", weights.get('registrar_high_risk_moderate', 4))
+        # 1yr+ domains: no penalty (long-standing domains aren't suspicious for registrar choice)
     
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     if res.has_hijack_path_pattern:
@@ -7245,6 +7270,14 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             # v7.4: WHOIS privacy detection
             res.whois_privacy = we.get("privacy", False)
             res.whois_privacy_service = we.get("privacy_service", "")
+            # v7.6: High-risk registrar detection
+            if res.whois_registrar:
+                _reg_lower = res.whois_registrar.lower()
+                for pattern in HIGH_RISK_REGISTRARS:
+                    if pattern in _reg_lower:
+                        res.registrar_high_risk = True
+                        res.registrar_high_risk_name = res.whois_registrar
+                        break
             # Recently-added lock on established domain = post-compromise lockdown signal
             # Lock present + WHOIS updated ≤90 days + domain >1yr old
             if (we["transfer_locked"] and 
