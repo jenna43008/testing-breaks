@@ -103,6 +103,8 @@ DEFAULT_CONFIG = {
         # === E-COMMERCE / RETAIL SCAM INDICATORS ===
         "retail_scam_tld": 12,             # .shop, .store, .sale, etc.
         "ecommerce_no_identity": 15,       # E-commerce site with no business identity
+        "ecommerce_no_identity_established": 5,  # v7.6: Reduced for established VT-clean domains (not a fly-by-night store)
+        "ecommerce_established_bonus": -15,  # v7.6: Confirmed e-commerce on established domain (>1yr, VT clean)
         "cross_domain_brand_link": 18,     # Links to same-brand different TLD (clone indicator)
         "ecommerce_missing_policies": 8,   # E-commerce without terms/refund policy
         
