@@ -503,6 +503,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_tld_spoof_self_mx", "score": 15, "label": "tld variant spoofing + mx selfhosted", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "mx_selfhosted"], "if_any": [], "if_not": []},
         {"name": "combo_tld_spoof_shell_site", "score": 20, "label": "tld variant spoofing + minimal shell", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "minimal_shell"], "if_any": [], "if_not": []},
         {"name": "combo_viral_loops_uk_variant", "score": 20, "label": "viral loops script + UK TLD variant dark — referral fraud campaign on alternate TLD", "category": "Referral Fraud", "enabled": True, "if_all": ["viral_loops_script", "tld_variant_uk_no_dns"], "if_any": [], "if_not": []},
+        {"name": "combo_empty_page_uk_variant", "score": 28, "label": "empty page + UK TLD variant dark — shell domain with dark .co.uk", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["empty_page", "tld_variant_uk_no_dns"], "if_any": [], "if_not": []},
 
         # --- Tech Support Scam (10 rules) ---
         {"name": "combo_sus_prefix_cred_form", "score": 20, "label": "suspicious prefix + credential form", "category": "Tech Support Scam", "enabled": True, "if_all": ["suspicious_prefix", "credential_form"], "if_any": [], "if_not": []},
