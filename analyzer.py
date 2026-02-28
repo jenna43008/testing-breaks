@@ -5900,7 +5900,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # Scored only when signup domain is < 1yr (established domains get benefit of doubt).
     if res.tld_variant_uk_no_dns and not res.tld_variant_detected:
         if res.domain_age_days >= 0 and res.domain_age_days < 365:
-            add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns', 12))
+            add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns', 28))
     
     # E-commerce / Retail scam indicators
     if res.is_retail_scam_tld:
