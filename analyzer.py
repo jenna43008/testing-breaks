@@ -5858,7 +5858,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         # primary abuse signal.  Full weight still applies to thin/empty sites
         # or those with VT flags.
         _is_vt_clean = res.vt_malicious_count == 0 and res.vt_total_vendors >= 50
-        _has_real_content = res.content_visible_word_count >= 100
+        _has_real_content = res.content_visible_word_count >= 30
         if _is_vt_clean and _has_real_content:
             add("tech_support_tld", weights.get('tech_support_tld_mitigated', 8))
         else:
