@@ -50,7 +50,7 @@ DEFAULT_CONFIG = {
         "hacklink_vulnerable_plugins": 25, # Known exploitable WP plugins
         "vuln_plugins_strong_mitigation": -18,   # Vuln plugins but 3+ legitimacy signals (established, app store, enterprise MX, etc.)
         "vuln_plugins_moderate_mitigation": -10,  # Vuln plugins but 2 legitimacy signals
-        "vuln_plugins_weak_mitigation": -7,       # v7.6: Vuln plugins but 1 legitimacy signal (e.g. VT clean alone)
+        "vuln_plugins_weak_mitigation": -15,      # v7.6: Vuln plugins but 1 legitimacy signal (e.g. VT clean alone)
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
         "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — HIGH confidence (5+ multi-signal score)
         "malicious_script_medium": 35,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — moderate penalty; common on sites with third-party tracking
