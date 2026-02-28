@@ -3902,6 +3902,18 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     # v7.5.1: Same-domain exclusion for js_email_exfil — a site's own contact
     #         email hardcoded in JS (e.g. "contato@example.com.br" on example.com.br)
     #         is a contact form, not credential exfiltration.
+    # v7.6: Hosting platform email whitelist — form handlers on hosting infra
+    #        (e.g. contact@brand-slug.wpcomstaging.com) are not exfil targets.
+    EXFIL_EMAIL_PLATFORM_WHITELIST = {
+        'wpcomstaging.com',       # WordPress.com staging form handler
+        'wordpress.com',          # WordPress.com forms
+        'formspree.io',           # Form endpoint service
+        'getform.io',             # Form endpoint service
+        'formsubmit.co',          # Form endpoint service
+        'usebasin.com',           # Form endpoint service
+        'fabform.io',             # Form endpoint service
+        'web3forms.com',          # Form endpoint service
+    }
     _analyzed_domain_lower = domain.lower().strip('.')
     for pattern_re, signal_name, description in EXFIL_DROP_PATTERNS:
         match = pattern_re.search(content)
@@ -3917,6 +3929,11 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
                     if (email_domain == _analyzed_domain_lower
                             or _analyzed_domain_lower.endswith('.' + email_domain)):
                         continue  # Same-domain contact email — not exfil
+                    # v7.6: Suppress if email is on a known hosting platform form handler
+                    # e.g. contact@brand-slug.wpcomstaging.com is WordPress.com's own infra
+                    if any(email_domain == plat or email_domain.endswith('.' + plat)
+                           for plat in EXFIL_EMAIL_PLATFORM_WHITELIST):
+                        continue  # Hosting platform form handler — not exfil
                 except Exception:
                     pass  # If we can't parse, let it fire as normal
             
