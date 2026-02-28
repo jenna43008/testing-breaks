@@ -419,6 +419,8 @@ class DomainApprovalResult:
     tld_variant_content_words: int = 0            # Word count on variant's page
     tld_variant_signup_content_words: int = 0     # Word count on signup domain's page
     tld_variant_summary: str = ""                 # Human-readable summary of the comparison
+    tld_variant_uk_no_dns: bool = False           # UK business TLD variant (.co.uk) exists in generation but has no DNS
+    tld_variant_uk_no_dns_domain: str = ""        # Which UK variant had no DNS
     
     # === HOSTING PROVIDER DETECTION ===
     hosting_provider: str = ""                  # Detected provider name (e.g., "Hostinger", "GoDaddy")
@@ -3211,6 +3213,8 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
         "variant_content_words": 0,
         "signup_content_words": 0,
         "summary": "",
+        "variant_uk_no_dns": False,          # v7.6: UK business TLD variant generated but has no DNS
+        "variant_uk_no_dns_domain": "",      # Which UK variant had no DNS
     }
     
     # Count words on signup domain's page
@@ -3235,7 +3239,16 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
             socket.gethostbyname(variant_domain)
         except Exception:
             diagnostics.append(f"{variant_domain}: no DNS")
-            continue  # Variant doesn't resolve — skip
+            # v7.6: Track UK business TLD variants that don't resolve.
+            # .co.uk is the primary UK business TLD — if someone registers a
+            # different TLD version and .co.uk has no DNS, it could indicate
+            # the signup domain isn't a legitimate UK business.  Especially
+            # concerning for new domains (<1yr) with thin content.
+            _UK_BUSINESS_TLDS = ('.co.uk', '.org.uk', '.me.uk')
+            if any(variant_domain.endswith(t) for t in _UK_BUSINESS_TLDS):
+                result["variant_uk_no_dns"] = True
+                result["variant_uk_no_dns_domain"] = variant_domain
+            continue  # Variant doesn't resolve — skip asymmetry analysis
         
         # Step 2: Fetch variant's page content
         variant_content = None
@@ -4765,6 +4778,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     # === TLD VARIANT SPOOFING ===
     if res.tld_variant_detected:
         all_issues.append(f"TLD VARIANT SPOOF ({res.tld_variant_domain}) → Established business exists at variant TLD")
+    elif res.tld_variant_uk_no_dns and res.domain_age_days >= 0 and res.domain_age_days < 365:
+        all_issues.append(f"UK VARIANT DARK ({res.tld_variant_uk_no_dns_domain}) → UK business TLD variant has no DNS; new domain operating on alternate TLD")
     # Diagnostic detail (TLD VARIANT CHECK / CHECK ERROR) is stored in res.tld_variant_summary
     # but NOT shown in issues — it was confusing users into thinking spoofing was detected
     
@@ -5441,6 +5456,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('BRAND + SPOOFING KEYWORD', ['brand_spoofing_keyword']),
         ('DOMAIN IMPERSONATES', ['domain_brand_impersonation']),
         ('TLD VARIANT SPOOF', ['tld_variant_spoofing']),
+        ('UK VARIANT DARK', ['tld_variant_uk_no_dns']),
         ('SUSPICIOUS PREFIX', ['suspicious_prefix']),
         ('SUSPICIOUS SUFFIX', ['suspicious_suffix']),
         ('TECH SUPPORT SCAM TLD', ['tech_support_tld']),
@@ -5875,6 +5891,16 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # === TLD VARIANT SPOOFING DETECTION ===
     if res.tld_variant_detected:
         add("tld_variant_spoofing", weights.get('tld_variant_spoofing', 30))
+    
+    # v7.6: UK business TLD variant has no DNS
+    # .co.uk is the primary UK business TLD.  If a signup domain generates a
+    # .co.uk variant and it doesn't resolve, that's concerning for new domains:
+    # legitimate UK businesses use .co.uk; new domains on other TLDs where
+    # the .co.uk is dark suggest impersonation or non-UK origin.
+    # Scored only when signup domain is < 1yr (established domains get benefit of doubt).
+    if res.tld_variant_uk_no_dns and not res.tld_variant_detected:
+        if res.domain_age_days >= 0 and res.domain_age_days < 365:
+            add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns', 12))
     
     # E-commerce / Retail scam indicators
     if res.is_retail_scam_tld:
@@ -7102,6 +7128,8 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.tld_variant_content_words = tld_variant["variant_content_words"]
         res.tld_variant_signup_content_words = tld_variant["signup_content_words"]
         res.tld_variant_summary = tld_variant["summary"]
+        res.tld_variant_uk_no_dns = tld_variant.get("variant_uk_no_dns", False)
+        res.tld_variant_uk_no_dns_domain = tld_variant.get("variant_uk_no_dns_domain", "")
         
         # TLD variant allowlist: suppress for domains explicitly cleared by admin review
         tld_variant_allowlist = [d.lower().strip() for d in config.get('tld_variant_allowlist', [])]
