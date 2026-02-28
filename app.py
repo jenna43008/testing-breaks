@@ -1429,6 +1429,7 @@ def admin_view():
                                 'form_action_kit_strong', 'suspicious_page_title', 'whois_privacy',
                                 'client_side_harvest_combo', 'oauth_phish', 'registrar_high_risk'],
             "DNS Infrastructure Abuse": ['redirect_arpa_abuse', 'content_arpa_links'],
+            "Referral Fraud": ['viral_loops_script'],
             "Domain Name Patterns": ['suspicious_prefix', 'suspicious_suffix', 
                                      'tech_support_tld', 'domain_brand_impersonation',
                                      'brand_spoofing_keyword',
@@ -1651,6 +1652,9 @@ def admin_view():
             "DNS Infrastructure Abuse": {
                 "redirect_arpa_abuse": ".arpa hostname found in HTTP redirect chain — reverse DNS namespace weaponized for phishing delivery (Infoblox Feb 2026); near-zero false positive rate",
                 "content_arpa_links": "Page contains links or scripts pointing to .arpa reverse DNS hostnames — phishing infrastructure indicator; .arpa is reserved for DNS operations, not web hosting",
+            },
+            "Referral Fraud": {
+                "viral_loops_script": "app.viral-loops.com script detected — referral/giveaway widget heavily abused in fake prize campaigns and spam referral schemes",
             },
             "Nameserver Risk": {
                 "ns_dynamic_dns": "Domain delegated to dynamic DNS provider (noip, dyndns, duckdns) — almost exclusively phishing/malware",
