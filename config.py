@@ -94,7 +94,7 @@ DEFAULT_CONFIG = {
         
         # === TLD VARIANT SPOOFING DETECTION ===
         "tld_variant_spoofing": 35,        # Signup domain is TLD variant of established business
-        "tld_variant_uk_no_dns": 12,       # v7.6: UK business TLD variant (.co.uk) has no DNS on new domain
+        "tld_variant_uk_no_dns": 28,       # v7.6: UK business TLD variant (.co.uk) has no DNS on new domain
         
         # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
         "hijack_path_pattern": 25,         # /tunnel/, /bid/, /secure/ paths
