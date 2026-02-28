@@ -1432,7 +1432,7 @@ def admin_view():
             "Domain Name Patterns": ['suspicious_prefix', 'suspicious_suffix', 
                                      'tech_support_tld', 'domain_brand_impersonation',
                                      'brand_spoofing_keyword',
-                                     'tld_variant_spoofing', 'homoglyph_domain'],
+                                     'tld_variant_spoofing', 'tld_variant_uk_no_dns', 'homoglyph_domain'],
             "Hosting Provider": ['hosting_budget_shared', 'hosting_free', 'hosting_suspect',
                                  'cdn_tunnel_suspect'],
             "Nameserver Risk": ['ns_dynamic_dns', 'ns_parking', 'ns_lame_delegation', 'ns_free_dns', 'ns_single_ns'],
@@ -1597,6 +1597,7 @@ def admin_view():
             },
             "TLD Variant": {
                 "tld_variant_spoofing": "Established business exists at a variant TLD — potential impersonation",
+                "tld_variant_uk_no_dns": "UK business TLD variant (.co.uk) generated but has no DNS — new domain operating on alternate TLD while primary UK extension is dark; scored only for domains under 1 year old",
             },
             "Web / TLS": {
                 "no_https": "No valid HTTPS — may indicate abandoned or suspicious domain",
