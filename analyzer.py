@@ -4779,8 +4779,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     # === TLD VARIANT SPOOFING ===
     if res.tld_variant_detected:
         all_issues.append(f"TLD VARIANT SPOOF ({res.tld_variant_domain}) → Established business exists at variant TLD")
-    elif res.tld_variant_uk_no_dns and res.domain_age_days >= 0 and res.domain_age_days < 365:
-        all_issues.append(f"UK VARIANT DARK ({res.tld_variant_uk_no_dns_domain}) → UK business TLD variant has no DNS; new domain operating on alternate TLD")
+    elif res.tld_variant_uk_no_dns:
+        all_issues.append(f"UK VARIANT DARK ({res.tld_variant_uk_no_dns_domain}) → UK business TLD variant has no DNS; domain operating on alternate TLD")
     # Diagnostic detail (TLD VARIANT CHECK / CHECK ERROR) is stored in res.tld_variant_summary
     # but NOT shown in issues — it was confusing users into thinking spoofing was detected
     
@@ -5902,11 +5902,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # .co.uk is the primary UK business TLD.  If a signup domain generates a
     # .co.uk variant and it doesn't resolve, that's concerning for new domains:
     # legitimate UK businesses use .co.uk; new domains on other TLDs where
-    # the .co.uk is dark suggest impersonation or non-UK origin.
-    # Scored only when signup domain is < 1yr (established domains get benefit of doubt).
+    # the .co.uk is dark suggests impersonation or non-UK origin.
     if res.tld_variant_uk_no_dns and not res.tld_variant_detected:
-        if res.domain_age_days >= 0 and res.domain_age_days < 365:
-            add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns', 28))
+        add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns', 28))
     
     # E-commerce / Retail scam indicators
     if res.is_retail_scam_tld:
@@ -6234,10 +6232,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         # A page with a title but virtually no visible body text can be a parked
         # domain, default registrar page, or a legitimate SPA — too many false
         # positives to score on its own.  Facade detection still serves as:
-        #   - Combo fuel (amplifies registration_opaque, domain_reregistered)
+        #   - Combo fuel (amplifies registration_opaque, domain_reregistered, VT flags)
         #   - Bonus suppression (blocks enterprise MX credit, app store credit, VT clean credit)
         #   - Issue display (analysts see it in the report)
-        pass
+        add("content_facade", 0)  # Zero points — signal only, enables combo rules
     
     # === REGISTRATION OPACITY ===
     # Both RDAP and WHOIS failed to return domain creation date.
