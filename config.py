@@ -187,6 +187,7 @@ DEFAULT_CONFIG = {
         "registrar_high_risk_moderate": 4,     # v7.6: High-risk registrar on mid-age domain (90d-1yr)
         "redirect_arpa_abuse": 30,             # v7.6: .arpa hostname in redirect chain (reverse DNS phishing)
         "content_arpa_links": 20,              # v7.6: Page links/scripts point to .arpa domains
+        "viral_loops_script": 25,              # v7.6: app.viral-loops.com referral fraud tool detected
         "client_side_harvest_combo": 25,      # v7.5: Harvest code (input reads, keyloggers, sendBeacon) + corroborating phishing signal
         "form_posts_external": 10,
         "suspicious_iframe": 15,
@@ -501,6 +502,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_tld_spoof_parked", "score": 18, "label": "tld variant spoofing + parking page", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "parking_page"], "if_any": [], "if_not": []},
         {"name": "combo_tld_spoof_self_mx", "score": 15, "label": "tld variant spoofing + mx selfhosted", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "mx_selfhosted"], "if_any": [], "if_not": []},
         {"name": "combo_tld_spoof_shell_site", "score": 20, "label": "tld variant spoofing + minimal shell", "category": "TLD Variant Spoofing", "enabled": True, "if_all": ["tld_variant_spoofing", "minimal_shell"], "if_any": [], "if_not": []},
+        {"name": "combo_viral_loops_uk_variant", "score": 20, "label": "viral loops script + UK TLD variant dark — referral fraud campaign on alternate TLD", "category": "Referral Fraud", "enabled": True, "if_all": ["viral_loops_script", "tld_variant_uk_no_dns"], "if_any": [], "if_not": []},
 
         # --- Tech Support Scam (10 rules) ---
         {"name": "combo_sus_prefix_cred_form", "score": 20, "label": "suspicious prefix + credential form", "category": "Tech Support Scam", "enabled": True, "if_all": ["suspicious_prefix", "credential_form"], "if_any": [], "if_not": []},
