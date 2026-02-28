@@ -525,6 +525,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_facade_missing_trust", "score": 8, "label": "content facade + no corporate footprint", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "missing_trust_signals"], "if_any": [], "if_not": []},
         {"name": "combo_facade_opaque_reg", "score": 10, "label": "content facade + registration opaque", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "registration_opaque"], "if_any": [], "if_not": []},
         {"name": "combo_facade_reregistered", "score": 10, "label": "content facade + domain re-registered", "category": "Content Identity", "enabled": True, "if_all": ["content_facade"], "if_any": ["domain_reregistered_recent", "domain_reregistered"], "if_not": []},
+        {"name": "combo_facade_vt_malicious", "score": 20, "label": "content facade + VT malicious — VT-flagged empty shell", "category": "Content Identity", "enabled": True, "if_all": ["content_facade"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
 
         # --- VirusTotal Combos (8 rules) ---
         {"name": "vt_malicious_brand", "score": 30, "label": "VT malicious + brand impersonation", "category": "VirusTotal", "enabled": True, "if_all": ["domain_brand_impersonation"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
