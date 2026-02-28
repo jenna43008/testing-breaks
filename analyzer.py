@@ -345,6 +345,7 @@ class DomainApprovalResult:
     phishing_kit_filename: str = ""            # Which filename matched (e.g., "gate.php")
     phishing_kit_filename_strong: bool = False # True if strong-signal filename
     has_exfil_drop_script: bool = False        # Telegram/Discord/exfil patterns in source
+    exfil_is_strong: bool = False              # v7.6: At least one STRONG exfil signal (not just js_email_exfil)
     exfil_drop_signals: str = ""               # Semicolon-separated signal names that fired
     exfil_drop_details: str = ""               # Human-readable descriptions
     phishing_kit_detected: bool = False        # Composite: multiple kit signals confirm a kit
@@ -698,6 +699,13 @@ EXFIL_DROP_PATTERNS = [
     (_re.compile(rb'''\.open\s*\(\s*["']POST["']\s*,\s*["'](https?://[^"']+)["']''', _re.IGNORECASE),
      'js_xhr_external_post', 'XMLHttpRequest POST to external domain'),
 ]
+
+# v7.6: Exfil signal confidence tiers.
+# STRONG signals (Telegram tokens, Discord webhooks, base64 payloads, fetch/XHR POST)
+# are near-certain exfiltration — 1 signal alone can trigger the kit composite.
+# WEAK signals (hardcoded email in JS) are ambiguous — could be a contact form.
+# Weak signals need corroboration (2+ kit evidence signals) to confirm a kit.
+WEAK_EXFIL_SIGNALS = {'js_email_exfil'}
 
 # Client-side credential harvesting patterns (v7.5).
 # These are NEVER scored alone — too common on legitimate sites.
@@ -6563,12 +6571,20 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_harvest_combo:
         kit_evidence.append(f"harvest combo: {res.harvest_signals}")
     
-    if len(kit_evidence) >= 2 or res.has_exfil_drop_script:
+    # v7.6: Tiered exfil confidence for kit composite.
+    # Strong exfil (Telegram/Discord/base64/fetch POST) alone triggers the kit.
+    # Weak exfil (js_email_exfil — often a contact form) needs 3+ evidence items
+    # instead of the normal 2+, because "hardcoded email + credential form" is an
+    # extremely common pattern on legitimate WordPress/contact-form sites.
+    _has_only_weak_exfil = res.has_exfil_drop_script and not res.exfil_is_strong
+    _min_evidence = 3 if _has_only_weak_exfil else 2
+    
+    if len(kit_evidence) >= _min_evidence or res.exfil_is_strong:
         # v7.5 defense-in-depth: On parking pages, brand + form_external are
         # artifacts of the domain purchase flow (suppressed upstream in v7.5).
         # As a safety net, if the only evidence is parking-attributable signals
         # and no exfil/kit-filename/credential-form is present, do NOT fire.
-        if res.is_parking_page and not res.has_exfil_drop_script:
+        if res.is_parking_page and not res.exfil_is_strong:
             _hard_evidence = [e for e in kit_evidence if not (
                 e.startswith("brand:") or
                 e == "form posts to external domain" or
@@ -6590,7 +6606,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         #   - kit filenames (next.php, login.php, etc.)
         #   - phishing paths (/signin, /verify, /secure, etc.)
         #   - harvest combo signals (keylogger, credential capture)
-        elif res.is_ecommerce_site and not res.has_exfil_drop_script:
+        elif res.is_ecommerce_site and not res.exfil_is_strong:
             _hard_evidence = [e for e in kit_evidence if not (
                 e.startswith("brand:") or
                 e == "credential form" or
@@ -7060,6 +7076,10 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.has_exfil_drop_script = True
             res.exfil_drop_signals = ";".join(ca["exfil_signals"])
             res.exfil_drop_details = ";".join(ca["exfil_details"])
+            # v7.6: Determine if any signal is strong (not just js_email_exfil)
+            res.exfil_is_strong = any(
+                sig not in WEAK_EXFIL_SIGNALS for sig in ca["exfil_signals"]
+            )
         
         # Client-side harvest detection (v7.5)
         if ca["harvest_signals"]:
