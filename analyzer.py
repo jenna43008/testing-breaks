@@ -3525,7 +3525,20 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
                 "ssl_error": "", "connection_error": "", "timeout_error": "", "error": ""}
     
     session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"})
+    # v7.6: Realistic browser headers to avoid false 403s from bot detection.
+    # Many WAFs (Cloudflare, SiteGround, Google Cloud CDN) check User-Agent
+    # version, Accept headers, and sec-ch-ua to distinguish real browsers
+    # from automated scanners.  Missing headers = instant 403.
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "sec-ch-ua": '"Chromium";v="133", "Not(A:Brand";v="99", "Google Chrome";v="133"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "Upgrade-Insecure-Requests": "1",
+    })
     
     result = {
         "ok": False, "initial_status": 0, "hops": 0,
@@ -4379,7 +4392,9 @@ def check_corporate_trust_signals(domain: str, timeout: float = 3.0) -> Dict:
     try:
         session = requests.Session()
         session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
         })
         
         for page in TRUST_PAGES[:8]:  # Check up to 8 pages to limit requests
