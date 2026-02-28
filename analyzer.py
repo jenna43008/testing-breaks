@@ -507,6 +507,7 @@ class DomainApprovalResult:
     content_is_facade: bool = False                  # SPA shell: title present but <30 visible words + external JS
     content_facade_detail: str = ""                  # Explanation of why facade was flagged
     content_external_script_domains: str = ""        # Non-CDN external script domains (semicolon-sep)
+    content_has_viral_loops: bool = False             # app.viral-loops.com script detected (referral fraud tool)
     content_external_link_domains: str = ""          # All external domains linked via <a href> (semicolon-sep, with paths)
     content_arpa_links: bool = False                 # Page contains links/forms/scripts pointing to .arpa domains
     content_arpa_domains: str = ""                   # Which .arpa domains found in page content
@@ -4861,6 +4862,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         _arpa_doms = res.content_arpa_domains.replace(";", ", ")
         all_issues.append(f"⚠️ .ARPA CONTENT LINKS ({_arpa_doms}) → Page contains links/scripts pointing to .arpa reverse DNS hostnames; phishing infrastructure indicator")
     
+    # v7.6: Viral Loops referral fraud tool
+    if res.content_has_viral_loops:
+        all_issues.append("VIRAL LOOPS SCRIPT (app.viral-loops.com) → Referral/giveaway widget commonly abused in fake prize campaigns and spam referral schemes")
+    
     # === VIRUSTOTAL REPUTATION ===
     if res.vt_available:
         if res.vt_malicious_count >= 5:
@@ -5489,6 +5494,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('HIGH-RISK REGISTRAR', ['registrar_high_risk']),
         ('.ARPA REDIRECT ABUSE', ['redirect_arpa_abuse']),
         ('.ARPA CONTENT LINKS', ['content_arpa_links']),
+        ('VIRAL LOOPS SCRIPT', ['viral_loops_script']),
         ('401 UNAUTHORIZED', ['access_restricted']),
         ('403 FORBIDDEN', ['access_restricted']),
         ('429 RATE LIMITED', ['status_429_throttling']),
@@ -6069,6 +6075,13 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("redirect_arpa_abuse", weights.get('redirect_arpa_abuse', 30))
     if res.content_arpa_links:
         add("content_arpa_links", weights.get('content_arpa_links', 20))
+    
+    # v7.6: Viral Loops referral fraud tool
+    # app.viral-loops.com is a referral/giveaway widget heavily abused in
+    # fake prize campaigns and spam referral schemes.  Its presence on a
+    # domain under review is a strong indicator of promotional fraud.
+    if res.content_has_viral_loops:
+        add("viral_loops_script", weights.get('viral_loops_script', 25))
     
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     if res.has_hijack_path_pattern:
@@ -7274,6 +7287,9 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             ext_scripts = cc.get("external_script_domains", [])
             if ext_scripts:
                 res.content_external_script_domains = ";".join(ext_scripts[:10])
+                # v7.6: Detect viral-loops.com (referral fraud / fake giveaway tool)
+                if any('viral-loops.com' in d.lower() for d in ext_scripts):
+                    res.content_has_viral_loops = True
                 # v7.6: Check scripts for .arpa domains too
                 _arpa_scripts = [d for d in ext_scripts if '.arpa' in d.lower()]
                 if _arpa_scripts:
