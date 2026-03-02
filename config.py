@@ -162,7 +162,7 @@ DEFAULT_CONFIG = {
         
         # === SUSPICIOUS BEHAVIOR (Higher weights - actual red flags) ===
         "status_401_unauthorized": 25,    # 401 on public site - unusual
-        "status_403_cloaking": 25,
+        "status_403_cloaking": 0,         # v7.6: Informational only — too many FPs from WAF/bot protection (Cloudflare, AWS WAF, etc.)
         "status_429_throttling": 15,
         "status_503_disposable": 25,
         "status_5xx_errors": 10,
@@ -260,7 +260,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_brand_keyword_shell_site", "score": 18, "label": "brand spoofing keyword + minimal shell", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "minimal_shell"], "if_any": [], "if_not": []},
         {"name": "combo_budget_host_brand_imp", "score": 18, "label": "hosting budget shared + brand impersonation", "category": "Brand Impersonation", "enabled": True, "if_all": ["hosting_budget_shared", "brand_impersonation"], "if_any": [], "if_not": []},
         {"name": "combo_free_host_brand_imp", "score": 22, "label": "hosting free + brand impersonation", "category": "Brand Impersonation", "enabled": True, "if_all": ["hosting_free", "brand_impersonation"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_brand_imp", "score": 25, "label": "status 403 cloaking + brand impersonation", "category": "Brand Impersonation", "enabled": True, "if_all": ["status_403_cloaking", "brand_impersonation"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_brand_imp", "score": 25, "label": "status 403 cloaking + brand impersonation", "category": "Brand Impersonation", "enabled": False, "if_all": ["status_403_cloaking", "brand_impersonation"], "if_any": [], "if_not": []},
         {"name": "combo_suspect_host_brand_imp", "score": 28, "label": "hosting suspect + brand impersonation", "category": "Brand Impersonation", "enabled": True, "if_all": ["hosting_suspect", "brand_impersonation"], "if_any": [], "if_not": []},
 
         # --- Email Auth Weakness (14 rules) ---
@@ -315,7 +315,7 @@ DEFAULT_CONFIG = {
 
         # --- HTTP Status Evasion (43 rules) ---
         {"name": "combo_http_401_cred_form", "score": 18, "label": "status 401 unauthorized + credential form", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "credential_form"], "if_any": [], "if_not": []},
-        {"name": "combo_http_401_http_403", "score": 18, "label": "status 401 unauthorized + status 403 cloaking", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "status_403_cloaking"], "if_any": [], "if_not": []},
+        {"name": "combo_http_401_http_403", "score": 18, "label": "status 401 unauthorized + status 403 cloaking", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_401_unauthorized", "status_403_cloaking"], "if_any": [], "if_not": []},
         {"name": "combo_http_401_http_503", "score": 15, "label": "status 401 unauthorized + status 503 disposable", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "status_503_disposable"], "if_any": [], "if_not": []},
         {"name": "combo_http_401_new_30d", "score": 12, "label": "status 401 unauthorized + domain <30d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_http_401_new_7d", "score": 18, "label": "status 401 unauthorized + domain <7d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "domain_lt_7d"], "if_any": [], "if_not": []},
@@ -323,22 +323,22 @@ DEFAULT_CONFIG = {
         {"name": "combo_http_401_redir_chain", "score": 15, "label": "status 401 unauthorized + redirect chain 2plus", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "redirect_chain_2plus"], "if_any": [], "if_not": []},
         {"name": "combo_http_401_shell_site", "score": 15, "label": "status 401 unauthorized + minimal shell", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "minimal_shell"], "if_any": [], "if_not": []},
         {"name": "combo_http_401_temp_redir", "score": 12, "label": "status 401 unauthorized + redirect temp 302 307", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_401_unauthorized", "redirect_temp_302_307"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_cred_form", "score": 20, "label": "status 403 cloaking + credential form", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "credential_form"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_cross_redir", "score": 20, "label": "status 403 cloaking + redirect cross domain", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "redirect_cross_domain"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_doc_lure", "score": 20, "label": "status 403 cloaking + doc sharing lure", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "doc_sharing_lure"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_hijack_path", "score": 22, "label": "status 403 cloaking + hijack path pattern", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "hijack_path_pattern"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_http_429", "score": 15, "label": "status 403 cloaking + status 429 throttling", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "status_429_throttling"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_http_503", "score": 18, "label": "status 403 cloaking + status 503 disposable", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "status_503_disposable"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_js_redir", "score": 20, "label": "status 403 cloaking + js redirect", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "js_redirect"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_new_30d", "score": 15, "label": "status 403 cloaking + domain <30d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "domain_lt_30d"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_new_7d", "score": 25, "label": "status 403 cloaking + domain <7d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "domain_lt_7d"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_no_https", "score": 18, "label": "status 403 cloaking + no https", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "no_https"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_phish_infra", "score": 28, "label": "status 403 cloaking + phishing infra redirect", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "phishing_infra_redirect"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_phish_js", "score": 22, "label": "status 403 cloaking + phishing js behavior", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "phishing_js_behavior"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_phish_paths", "score": 22, "label": "status 403 cloaking + phishing paths", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "phishing_paths"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_redir_chain", "score": 22, "label": "status 403 cloaking + redirect chain 2plus", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "redirect_chain_2plus"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_shell_site", "score": 22, "label": "status 403 cloaking + minimal shell", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "minimal_shell"], "if_any": [], "if_not": []},
-        {"name": "combo_http_403_temp_redir", "score": 22, "label": "status 403 cloaking + redirect temp 302 307", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_403_cloaking", "redirect_temp_302_307"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_cred_form", "score": 20, "label": "status 403 cloaking + credential form", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "credential_form"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_cross_redir", "score": 20, "label": "status 403 cloaking + redirect cross domain", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "redirect_cross_domain"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_doc_lure", "score": 20, "label": "status 403 cloaking + doc sharing lure", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "doc_sharing_lure"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_hijack_path", "score": 22, "label": "status 403 cloaking + hijack path pattern", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "hijack_path_pattern"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_http_429", "score": 15, "label": "status 403 cloaking + status 429 throttling", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "status_429_throttling"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_http_503", "score": 18, "label": "status 403 cloaking + status 503 disposable", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "status_503_disposable"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_js_redir", "score": 20, "label": "status 403 cloaking + js redirect", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "js_redirect"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_new_30d", "score": 15, "label": "status 403 cloaking + domain <30d", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_new_7d", "score": 25, "label": "status 403 cloaking + domain <7d", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_no_https", "score": 18, "label": "status 403 cloaking + no https", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "no_https"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_phish_infra", "score": 28, "label": "status 403 cloaking + phishing infra redirect", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "phishing_infra_redirect"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_phish_js", "score": 22, "label": "status 403 cloaking + phishing js behavior", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "phishing_js_behavior"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_phish_paths", "score": 22, "label": "status 403 cloaking + phishing paths", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "phishing_paths"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_redir_chain", "score": 22, "label": "status 403 cloaking + redirect chain 2plus", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "redirect_chain_2plus"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_shell_site", "score": 22, "label": "status 403 cloaking + minimal shell", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "minimal_shell"], "if_any": [], "if_not": []},
+        {"name": "combo_http_403_temp_redir", "score": 22, "label": "status 403 cloaking + redirect temp 302 307", "category": "HTTP Status Evasion", "enabled": False, "if_all": ["status_403_cloaking", "redirect_temp_302_307"], "if_any": [], "if_not": []},
         {"name": "combo_http_429_cred_form", "score": 15, "label": "status 429 throttling + credential form", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_429_throttling", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_http_429_http_503", "score": 12, "label": "status 429 throttling + status 503 disposable", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_429_throttling", "status_503_disposable"], "if_any": [], "if_not": []},
         {"name": "combo_http_429_new_30d", "score": 10, "label": "status 429 throttling + domain <30d", "category": "HTTP Status Evasion", "enabled": True, "if_all": ["status_429_throttling", "domain_lt_30d"], "if_any": [], "if_not": []},
@@ -544,7 +544,7 @@ DEFAULT_CONFIG = {
         {"name": "hacklink_vt_malicious", "score": 30, "label": "hacklink + VT malicious — confirmed compromise", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_detected"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
         {"name": "hacklink_no_auth", "score": 18, "label": "hacklink + no email auth — domain may be abandoned", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_detected", "no_dmarc", "no_spf"], "if_any": [], "if_not": []},
         {"name": "hacklink_vulnerable_wp_new", "score": 22, "label": "vulnerable WP plugins + domain <90d", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_vulnerable_plugins", "domain_lt_90d"], "if_any": [], "if_not": []},
-        {"name": "hacklink_spam_links_cloaking", "score": 20, "label": "spam links + 403 cloaking", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_spam_links", "status_403_cloaking"], "if_any": [], "if_not": []},
+        {"name": "hacklink_spam_links_cloaking", "score": 20, "label": "spam links + 403 cloaking", "category": "Hacklink / SEO Spam", "enabled": False, "if_all": ["hacklink_spam_links", "status_403_cloaking"], "if_any": [], "if_not": []},
 
         # --- Malicious Script / Hidden Injection (6 rules) ---
         {"name": "malicious_script_new_domain", "score": 30, "label": "malicious script + domain <30d — active drive-by", "category": "Malicious Script", "enabled": True, "if_all": ["malicious_script", "domain_lt_30d"], "if_any": [], "if_not": []},
