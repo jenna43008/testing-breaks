@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "check_rdap": True,
     "admin_password": "admin123",  # CHANGE THIS!
     "vt_api_key": "3b4caf4818ac9630c9fae5226522348ec9d7723c34b4f5a973dd3afdd31f287f",   # VirusTotal API key (hardcoded)
-    "config_version": "7.5",              # Used for weight migration between versions
+    "config_version": "7.6.1",              # Used for weight migration between versions
     
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
@@ -95,6 +95,7 @@ DEFAULT_CONFIG = {
         # === TLD VARIANT SPOOFING DETECTION ===
         "tld_variant_spoofing": 35,        # Signup domain is TLD variant of established business
         "tld_variant_uk_no_dns": 28,       # v7.6: UK business TLD variant (.co.uk) has no DNS on new domain
+        "tld_variant_uk_no_dns_established": 5,  # v7.6.1: Established (1yr+) VT-clean domain — dark .co.uk expected for non-UK businesses
         
         # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
         "hijack_path_pattern": 25,         # /tunnel/, /bid/, /secure/ paths
@@ -268,7 +269,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_no_dkim_new_30d", "score": 0, "label": "no dkim + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_no_dkim_no_dmarc", "score": 0, "label": "no dkim + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "no_dmarc"], "if_any": [], "if_not": []},
         {"name": "combo_no_dkim_weak_dmarc", "score": 0, "label": "no dkim + dmarc p none", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
-        {"name": "combo_no_dkim_weak_dmarc_spf_soft", "score": 5, "label": "no dkim + dmarc p none + spf softfail all", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none", "spf_softfail_all"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_weak_dmarc_spf_soft", "score": 5, "label": "no dkim + dmarc p none + spf softfail all", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none", "spf_softfail_all"], "if_any": [], "if_not": ["domain_gt_1yr"]},
         {"name": "combo_no_dmarc_new_30d", "score": 0, "label": "no dmarc + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_no_dmarc_new_7d", "score": 0, "label": "no dmarc + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_7d"], "if_any": [], "if_not": []},
         {"name": "combo_no_spf_new_30d", "score": 0, "label": "no spf + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_30d"], "if_any": [], "if_not": []},
@@ -362,7 +363,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_budget_host_cred_form", "score": 15, "label": "hosting budget shared + credential form", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_budget_host_new_30d", "score": 12, "label": "hosting budget shared + domain <30d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_budget_host_new_7d", "score": 18, "label": "hosting budget shared + domain <7d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "domain_lt_7d"], "if_any": [], "if_not": []},
-        {"name": "combo_budget_host_no_dkim", "score": 5, "label": "hosting budget shared + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_budget_host_no_dkim", "score": 5, "label": "hosting budget shared + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_dkim"], "if_any": [], "if_not": ["domain_gt_1yr"]},
         {"name": "combo_budget_host_no_dmarc", "score": 6, "label": "hosting budget shared + no dmarc", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_dmarc"], "if_any": [], "if_not": []},
         {"name": "combo_budget_host_no_spf", "score": 6, "label": "hosting budget shared + no spf", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_spf"], "if_any": [], "if_not": []},
         {"name": "combo_free_host_cred_form", "score": 18, "label": "hosting free + credential form", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_free", "credential_form"], "if_any": [], "if_not": []},
@@ -480,7 +481,7 @@ DEFAULT_CONFIG = {
         # --- URL Cloaking (3 rules) ---
         {"name": "combo_iframe_temp_redir", "score": 15, "label": "hidden iframe + temp redirect — URL cloaking", "category": "URL Cloaking", "enabled": True, "if_all": ["suspicious_iframe", "redirect_temp_302_307"], "if_any": [], "if_not": []},
         {"name": "combo_iframe_cross_redir", "score": 12, "label": "hidden iframe + cross-domain redirect", "category": "URL Cloaking", "enabled": True, "if_all": ["suspicious_iframe", "redirect_cross_domain"], "if_any": [], "if_not": []},
-        {"name": "combo_iframe_js_redir", "score": 12, "label": "hidden iframe + JS redirect — phishing kit loader", "category": "URL Cloaking", "enabled": True, "if_all": ["suspicious_iframe", "js_redirect"], "if_any": [], "if_not": []},
+        {"name": "combo_iframe_js_redir", "score": 12, "label": "hidden iframe + JS redirect — suspicious loader pattern", "category": "URL Cloaking", "enabled": True, "if_all": ["suspicious_iframe", "js_redirect"], "if_any": [], "if_not": ["domain_gt_1yr"]},
 
         # --- Phishing Templates (4 rules) ---
         {"name": "brand_keyword_phish", "score": 10, "label": "Brand + spoofing keyword domain without established legitimacy signals", "category": "Phishing Templates", "enabled": True, "if_all": ["brand_spoofing_keyword", "domain_brand_impersonation"], "if_any": [], "if_not": ["domain_gt_1yr", "app_store_high", "mx_enterprise"]},
@@ -520,7 +521,7 @@ DEFAULT_CONFIG = {
         # --- Content Facade Combos ---
         # SPA shell (content_facade) combined with weak email auth = classic scam domain setup.
         # These combo scores STACK on top of the individual signal scores.
-        {"name": "combo_facade_no_dkim", "score": 10, "label": "content facade + no DKIM", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_facade_no_dkim", "score": 10, "label": "content facade + no DKIM", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "no_dkim"], "if_any": [], "if_not": ["domain_gt_1yr"]},
         {"name": "combo_facade_external_js", "score": 5, "label": "content facade + external JS loader", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "external_js"], "if_any": [], "if_not": []},
         {"name": "combo_facade_missing_trust", "score": 8, "label": "content facade + no corporate footprint", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "missing_trust_signals"], "if_any": [], "if_not": []},
         {"name": "combo_facade_opaque_reg", "score": 10, "label": "content facade + registration opaque", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "registration_opaque"], "if_any": [], "if_not": []},
@@ -1327,6 +1328,31 @@ def load_config() -> dict:
                                     if user_rule.get('score', 0) <= old_score:
                                         user_rule['score'] = new_score
                         merged['config_version'] = '7.5'
+                    
+                    # v7.6.1 migration: suppress SPA/established-domain false positives.
+                    # Four combo rules now have if_not: ["domain_gt_1yr"] exclusions to
+                    # prevent low-confidence signals from stacking on mature domains.
+                    # Also renames combo_iframe_js_redir label (was "phishing kit loader").
+                    if saved_version < '7.6.1':
+                        v761_rule_updates = {
+                            # rule_name: {field: new_value}
+                            'combo_no_dkim_weak_dmarc_spf_soft': {'if_not': ['domain_gt_1yr']},
+                            'combo_budget_host_no_dkim': {'if_not': ['domain_gt_1yr']},
+                            'combo_iframe_js_redir': {'if_not': ['domain_gt_1yr'], 'label': 'hidden iframe + JS redirect — suspicious loader pattern'},
+                            'combo_facade_no_dkim': {'if_not': ['domain_gt_1yr']},
+                        }
+                        if 'rules' in loaded:
+                            for user_rule in loaded.get('rules', []):
+                                name = user_rule.get('name', '')
+                                if name in v761_rule_updates:
+                                    updates = v761_rule_updates[name]
+                                    for field, value in updates.items():
+                                        # Only update if user hasn't customized
+                                        if field == 'if_not' and not user_rule.get('if_not'):
+                                            user_rule['if_not'] = value
+                                        elif field == 'label':
+                                            user_rule['label'] = value
+                        merged['config_version'] = '7.6.1'
                 # Legacy: if old config has combos, ignore them (now in rules)
                 loaded.pop('combos', None)
                 loaded.pop('disabled_combos', None)
