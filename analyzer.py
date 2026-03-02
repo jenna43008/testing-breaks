@@ -4,6 +4,30 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 7.6.1 (Mar 2026)
+- SPA FALSE POSITIVE REDUCTION: Five scoring adjustments targeting the pattern
+  where legitimate JS-rendered apps (SPAs) on established domains accumulate
+  deny-level scores from stacking low-confidence signals:
+  1. TLD VARIANT UK: Established (1yr+) VT-clean domains now score 5 instead of
+     28 for dark .co.uk variant — non-UK businesses (Egyptian, Indian, US) don't
+     register .co.uk, so dark variant is expected, not suspicious.
+  2. EMAIL AUTH COMBO CAP: combo_no_dkim_weak_dmarc_spf_soft and
+     combo_budget_host_no_dkim now suppressed on established domains — default
+     Hostinger/budget-host email config on 1yr+ domains is a deliverability
+     choice, not fraud signal. Prevents triple-counting same underlying issue.
+  3. IFRAME+JS REDIRECT: combo_iframe_js_redir suppressed on established VT-clean
+     domains and renamed from "phishing kit loader" to neutral label — iframes on
+     content sites are often video embeds, donation widgets, audio players.
+  4. FACADE+NO_DKIM: combo_facade_no_dkim suppressed on established domains —
+     SPA architecture + default email config shouldn't stack.
+  5. VT CLEAN FOR ESTABLISHED SPAs: VT 0/93 bonus now credited on content facades
+     when domain is 1yr+ — VT scanning a mature SPA as clean IS meaningful.
+- Root cause: quranst.com (Quran education site, Egyptian business, 1yr+ domain,
+  VT 0/93, active social media) scored 100/DENY from stacking: UK variant dark
+  (+28), contact-form-7 (+15/-10), hidden iframe (+15), iframe+JS redirect combo
+  (+12), budget host (+10), facade+no_dkim combo (+10), email auth combos (+10),
+  JS redirect (+3). All signals had benign explanations.
+
 VERSION: 7.5.1 (Feb 2026)
 - PARKING PAGE FALSE POSITIVE SUPPRESSION: Parking pages (HugeDomains, Sedo,
   GoDaddy, Afternic, Dan.com, etc.) no longer trigger phishing kit autofail.
@@ -133,7 +157,7 @@ VERSION: 4.4 (Feb 2026)
   - 403 still detected, logged, and displayed for manual review
 """
 
-ANALYZER_VERSION = "7.6"
+ANALYZER_VERSION = "7.6.1"
 
 import re
 import json
@@ -5948,8 +5972,19 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # .co.uk variant and it doesn't resolve, that's concerning for new domains:
     # legitimate UK businesses use .co.uk; new domains on other TLDs where
     # the .co.uk is dark suggests impersonation or non-UK origin.
+    # v7.6.1: Reduced for established VT-clean domains.  Non-UK businesses
+    # (Egyptian, Indian, US, etc.) legitimately operate without .co.uk.  A 1yr+
+    # domain with VT 0/93 is clearly the real brand, not an impersonator.
     if res.tld_variant_uk_no_dns and not res.tld_variant_detected:
-        add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns', 28))
+        _is_established_vt_clean = (
+            res.domain_age_days >= 365
+            and res.vt_malicious_count == 0
+            and res.vt_total_vendors >= 50
+        )
+        if _is_established_vt_clean:
+            add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns_established', 5))
+        else:
+            add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns', 28))
     
     # E-commerce / Retail scam indicators
     if res.is_retail_scam_tld:
@@ -6160,8 +6195,13 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             add("vt_negative_community", weights.get('vt_negative_community', 10))
         
         if mal == 0 and sus == 0 and res.vt_total_vendors >= 50:
-            # Don't credit VT clean scan of a content facade (SPA shell with no real content)
-            if not res.content_is_facade:
+            # Don't credit VT clean scan of a content facade (SPA shell with no
+            # real content) — UNLESS the domain is established (1yr+).  A mature
+            # SPA that VT scans 0/93 is genuinely clean; the facade is architectural,
+            # not evasive.  New/young facades still don't get the credit because VT
+            # may not have had time to detect dynamically-loaded malicious content.
+            _established_spa = res.content_is_facade and res.domain_age_days >= 365
+            if not res.content_is_facade or _established_spa:
                 add("vt_clean", weights.get('vt_clean', -5))
     
     # === HACKLINK / SEO SPAM SCORING ===
