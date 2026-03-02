@@ -126,9 +126,14 @@ VERSION: 4.4 (Feb 2026)
 - Added business identity verification for e-commerce sites
 - Added non-hyphen prefix detection (app, my, login, etc.)
 - Added access restriction detection (401/403)
+- v7.6: Demoted 403 to informational-only (not scored) — too many FPs from WAF/bot protection
+  - Zeroed status_403_cloaking weight, disabled all 19 combo rules
+  - access_restricted scoring now requires 401 (not 403-only)
+  - opaque_entity no longer cascades from 403-only
+  - 403 still detected, logged, and displayed for manual review
 """
 
-ANALYZER_VERSION = "7.5"
+ANALYZER_VERSION = "7.6"
 
 import re
 import json
@@ -5238,7 +5243,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append("401 UNAUTHORIZED → Public domain requires authentication - unusual")
     
     if res.has_403:
-        all_issues.append("403 FORBIDDEN → May be blocking scanners (cloaking)")
+        all_issues.append("403 FORBIDDEN → Bot received 403 (likely WAF/bot protection — not scored)")
     
     if res.has_429:
         all_issues.append("429 RATE LIMITED → Throttling automated checks")
@@ -5456,7 +5461,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('PTR MISMATCH', weights.get('ptr_mismatch', 5)),
             ('BLACKLIST CHECK INCONCLUSIVE', weights.get('blacklist_inconclusive', 5)),
             ('401 UNAUTHORIZED', weights.get('status_401_unauthorized', 5)),
-            ('403 FORBIDDEN', weights.get('status_403_cloaking', 5)),
+            ('403 FORBIDDEN', weights.get('status_403_cloaking', 0)),
             ('429 RATE LIMITED', weights.get('status_429_throttling', 5)),
             ('503 UNAVAILABLE', weights.get('status_503_disposable', 5)),
             ('NO PTR', weights.get('no_ptr', 3)),
@@ -5991,9 +5996,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_401:
         add("status_401_unauthorized", weights.get('status_401_unauthorized', 12))
     
-    # 403 = cloaking/scanner blocking - VERY strong signal
+    # 403 = logged for visibility, NOT scored (weight=0 in config)
+    # Too many false positives from WAF/bot protection (Cloudflare, AWS WAF, Akamai, etc.)
     if res.has_403:
-        add("status_403_cloaking", weights.get('status_403_cloaking', 15))
+        add("status_403_cloaking", weights.get('status_403_cloaking', 0))
     
     # 429 = throttling scanners - medium signal
     if res.has_429:
@@ -6004,8 +6010,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("status_503_disposable", weights.get('status_503_disposable', 8))
     
     # === ACCESS RESTRICTION / CORPORATE TRUST SIGNALS ===
-    # Access restricted (401 or 403) on what should be a public domain
-    if res.is_access_restricted:
+    # Access restricted on what should be a public domain
+    # Only score when 401 is present — 403 alone is too often WAF/bot protection
+    if res.is_access_restricted and res.has_401:
         add("access_restricted", weights.get('access_restricted', 10))
     
     # Missing trust signals (no about/contact pages)
@@ -7008,7 +7015,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         elif res.has_401:
             res.access_restriction_note = "401 Unauthorized - requires authentication for public site"
         else:
-            res.access_restriction_note = "403 Forbidden - access blocked"
+            res.access_restriction_note = "403 Forbidden — likely WAF/bot protection (informational only)"
     
     # Content analysis
     content = https_result["content"]
@@ -7158,7 +7165,9 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.missing_trust_signals = trust_signals["missing_trust_signals"]
         
         # If access is restricted AND no trust signals found, mark as opaque entity
-        if res.is_access_restricted and res.missing_trust_signals:
+        # But NOT for 403-only — WAF/bot protection blocks trust page checks too,
+        # creating a false cascade. Only flag opaque when 401 is involved.
+        if res.is_access_restricted and res.missing_trust_signals and res.has_401:
             res.is_opaque_entity = True
     
     # App Store Presence Detection (legitimacy signal)
