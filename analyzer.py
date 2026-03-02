@@ -4,6 +4,23 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 7.7.0 (Mar 2026)
+- ROOT DOMAIN FALLBACK: When submitted domain (e.g., stage-app.shiftposts.com)
+  does not resolve, automatically extracts and analyzes the registrable root
+  domain (shiftposts.com) instead. All infrastructure checks (SPF, DMARC, MX,
+  WHOIS, TLS, content, hosting, blacklists, etc.) run against the root domain.
+  Prevents staging/dev subdomains from auto-failing with DENY score 100.
+- SUBMITTED DOMAIN VT CHECK: When root fallback is active, the submitted
+  subdomain is also checked on VirusTotal separately. VT result is always
+  reported in the summary for analyst visibility. Only contributes to the
+  score if VT flags the submitted domain as malicious (40 pts default).
+  This catches cases where a subdomain is specifically weaponized while the
+  root domain remains clean.
+- New fields: submitted_domain, analysis_domain, used_root_fallback,
+  submitted_domain_resolves, submitted_domain_vt_malicious,
+  submitted_domain_vt_suspicious, submitted_domain_vt_detail
+- New scoring signal: submitted_subdomain_vt_malicious (default 40 pts)
+
 VERSION: 7.6.1 (Mar 2026)
 - SPA FALSE POSITIVE REDUCTION: Five scoring adjustments targeting the pattern
   where legitimate JS-rendered apps (SPAs) on established domains accumulate
@@ -234,6 +251,15 @@ class DomainApprovalResult:
     # === METADATA ===
     scan_timestamp: str = ""
     risk_level: str = ""
+    
+    # === SUBMITTED vs ANALYSIS DOMAIN (v7.7) ===
+    submitted_domain: str = ""                   # Original domain as entered by user
+    analysis_domain: str = ""                    # Domain actually used for analysis (root if subdomain didn't resolve)
+    used_root_fallback: bool = False             # True if submitted subdomain didn't resolve and root was used
+    submitted_domain_resolves: bool = False      # Whether the submitted subdomain has an A record
+    submitted_domain_vt_malicious: bool = False  # VT flagged the submitted subdomain as malicious
+    submitted_domain_vt_suspicious: bool = False # VT flagged the submitted subdomain as suspicious
+    submitted_domain_vt_detail: str = ""         # Summary VT info for the submitted subdomain
     
     # === DNS / NETWORK ===
     resolved: bool = False
@@ -4952,6 +4978,12 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     elif res.vt_error:
         all_issues.append(f"⚠️ VT CHECK FAILED → {res.vt_error}")
     
+    # v7.7: Submitted subdomain VT result (when root fallback active)
+    if res.submitted_domain_vt_malicious:
+        all_issues.append(f"🛡️ SUBMITTED SUBDOMAIN VT MALICIOUS ({res.submitted_domain}) → {res.submitted_domain_vt_detail}")
+    elif res.submitted_domain_vt_suspicious:
+        all_issues.append(f"⚠️ SUBMITTED SUBDOMAIN VT SUSPICIOUS ({res.submitted_domain}) → {res.submitted_domain_vt_detail}")
+    
     # === HACKLINK / SEO SPAM ===
     if res.hacklink_detected:
         kw = res.hacklink_keywords.replace(";", ", ")[:80] if res.hacklink_keywords else "various"
@@ -5414,6 +5446,8 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('YOUNG DOMAIN + RISK', weights.get('young_domain_with_risk_7d', 25)),
             ('REDIRECTS TO PHISHING', weights.get('phishing_infra_redirect', 25)),
             ('VT FLAGGED', weights.get('vt_malicious_medium', 40)),
+            ('SUBMITTED SUBDOMAIN VT MALICIOUS', weights.get('submitted_subdomain_vt_malicious', 40)),
+            ('SUBMITTED SUBDOMAIN VT SUSPICIOUS', 0),  # Informational — not scored
             ('BLOCKED ASN', weights.get('blocked_asn_org_score', 20)),
             ('OPAQUE ENTITY', weights.get('opaque_entity', 20)),
             ('TLD VARIANT SPOOF', weights.get('tld_variant_spoofing', 30)),
@@ -5585,6 +5619,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('BLACKLIST CHECK INCONCLUSIVE', ['blacklist_inconclusive']),
         ('VT MALICIOUS', ['vt_malicious', 'vt_malicious_medium']),
         ('VT SUSPICIOUS', ['vt_suspicious']),
+        ('SUBMITTED SUBDOMAIN VT MALICIOUS', ['submitted_subdomain_vt_malicious']),
         ('NO SPF', ['no_spf']),
         ('NO DKIM', ['no_dkim']),
         ('NO MX', ['no_mx']),
@@ -5695,6 +5730,13 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         parts.append(f"⛔ DENY (Score: {res.risk_score})")
     else:
         parts.append(f"✅ APPROVE (Score: {res.risk_score})")
+    
+    # v7.7: Root domain fallback notice
+    if res.used_root_fallback:
+        fb_note = f"📌 ANALYZED ROOT: {res.analysis_domain} (submitted: {res.submitted_domain} does not resolve)"
+        if res.submitted_domain_vt_detail:
+            fb_note += f" — Submitted domain {res.submitted_domain_vt_detail}"
+        parts.append(fb_note)
     
     # === PATTERN MATCH INDICATORS ===
     # These help specialists instantly recognize known attack patterns.
@@ -6203,6 +6245,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             _established_spa = res.content_is_facade and res.domain_age_days >= 365
             if not res.content_is_facade or _established_spa:
                 add("vt_clean", weights.get('vt_clean', -5))
+    
+    # === v7.7: SUBMITTED SUBDOMAIN VT SCORING ===
+    # When root fallback is active, the submitted subdomain was checked separately on VT.
+    # Only scored if VT flagged it as malicious — otherwise informational only in summary.
+    if res.submitted_domain_vt_malicious:
+        add("submitted_subdomain_vt_malicious", weights.get('submitted_subdomain_vt_malicious', 40))
     
     # === HACKLINK / SEO SPAM SCORING ===
     if res.hacklink_detected:
@@ -6802,16 +6850,49 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     
     res = DomainApprovalResult(domain=domain)
     res.scan_timestamp = datetime.now(timezone.utc).isoformat()
+    res.submitted_domain = domain  # Always record what was submitted
     
-    # DNS Resolution
+    # === v7.7: ROOT DOMAIN FALLBACK ===
+    # Extract the registrable root domain (e.g., stage-app.shiftposts.com → shiftposts.com)
+    root_domain = get_registrable_domain(domain)
+    is_subdomain_input = (root_domain != domain.lower().rstrip('.'))
+    
+    # DNS Resolution — try submitted domain first, fall back to root
+    submitted_resolves = False
+    root_resolves = False
     try:
         res.ip_address = socket.gethostbyname(domain)
         res.resolved = True
-    except:
+        submitted_resolves = True
+        res.submitted_domain_resolves = True
+        res.analysis_domain = domain
+    except Exception:
+        pass
+    
+    if not submitted_resolves and is_subdomain_input:
+        # Submitted subdomain doesn't resolve — try root domain
+        try:
+            res.ip_address = socket.gethostbyname(root_domain)
+            res.resolved = True
+            root_resolves = True
+            res.used_root_fallback = True
+            res.analysis_domain = root_domain
+            # Update res.domain to reflect the domain actually analyzed
+            res.domain = root_domain
+            # Switch the working domain to root for all downstream checks
+            domain = root_domain
+        except Exception:
+            pass
+    
+    if not res.resolved:
         res.recommendation = "DENY"
-        res.summary = "DENY: Domain does not resolve"
+        if is_subdomain_input:
+            res.summary = f"DENY: Neither submitted domain ({res.submitted_domain}) nor root domain ({root_domain}) resolves"
+        else:
+            res.summary = "DENY: Domain does not resolve"
         res.risk_level = "ERROR"
         res.risk_score = 100
+        res.analysis_domain = res.submitted_domain
         return asdict(res)
     
     # PTR
@@ -7255,10 +7336,12 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     
     # === VIRUSTOTAL REPUTATION CHECK ===
     # Uses the VT API to check domain reputation across 70+ security vendors
+    # v7.7: When root fallback is active, check BOTH root (scored) and submitted (summary-only unless malicious)
     vt_api_key = src.get('vt_api_key', '') or os.environ.get('VT_API_KEY', '')
     if VT_CHECKER_AVAILABLE and vt_api_key:
         try:
             vt = VirusTotalChecker(api_key=vt_api_key)
+            # Primary VT check: the analysis domain (root or submitted, whichever resolved)
             vt_result = vt.check_domain(domain)
             res.vt_available = vt_result.get("vt_available", False)
             res.vt_malicious_count = vt_result.get("malicious_count", 0)
@@ -7273,6 +7356,29 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.vt_last_analysis = vt_result.get("last_analysis_date", "") or ""
         except Exception as e:
             res.vt_error = f"{type(e).__name__}: {str(e)[:200]}"
+        
+        # v7.7: If root fallback is active, also check the submitted subdomain on VT
+        # Reported in summary; only contributes to score if VT flags it as malicious
+        if res.used_root_fallback and res.submitted_domain != domain:
+            try:
+                vt_sub_result = vt.check_domain(res.submitted_domain)
+                sub_mal = vt_sub_result.get("malicious_count", 0)
+                sub_sus = vt_sub_result.get("suspicious_count", 0)
+                sub_total = vt_sub_result.get("total_vendors", 0)
+                sub_threats = vt_sub_result.get("threat_names", [])
+                if sub_mal > 0:
+                    res.submitted_domain_vt_malicious = True
+                    res.submitted_domain_vt_detail = (
+                        f"VT {sub_mal}/{sub_total} malicious"
+                        + (f" — threats: {';'.join(sub_threats[:5])}" if sub_threats else "")
+                    )
+                elif sub_sus > 0:
+                    res.submitted_domain_vt_suspicious = True
+                    res.submitted_domain_vt_detail = f"VT {sub_sus}/{sub_total} suspicious"
+                else:
+                    res.submitted_domain_vt_detail = f"VT 0/{sub_total} (clean)"
+            except Exception:
+                res.submitted_domain_vt_detail = "VT check failed for submitted subdomain"
     
     # === HACKLINK / SEO SPAM DETECTION ===
     # Scans page content for Turkish hacklink injection, gambling keywords, 
