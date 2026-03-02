@@ -1614,7 +1614,7 @@ def admin_view():
             },
             "HTTP Status Codes": {
                 "status_401_unauthorized": "Returns 401 — public domain requires authentication",
-                "status_403_cloaking": "Returns 403 — may be blocking scanners (cloaking)",
+                "status_403_cloaking": "Returns 403 — likely WAF/bot protection (logged, not scored)",
                 "status_429_throttling": "Returns 429 — throttling automated checks",
                 "status_503_disposable": "Returns 503 — disposable/intermittent infrastructure",
             },
