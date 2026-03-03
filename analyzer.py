@@ -255,6 +255,7 @@ except ImportError:
     WHOIS_AVAILABLE = False
 
 from config import DEFAULT_CONFIG, get_weight
+from icann_rdap_fallback import icann_rdap_fallback
 
 try:
     from app_store_detection import check_app_store_presence
@@ -7915,7 +7916,20 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         if res.domain_age_days >= 0:
             res.domain_age_source = "whois"
     
-    # Both RDAP and WHOIS failed — cannot determine domain age/registrar
+    # ICANN RDAP proxy fallback if both RDAP and WHOIS failed
+    # Covers ccTLDs (.ng, .ke, .gh, .tz, .za, etc.) missing from IANA bootstrap
+    _icann_result = None
+    if check_rdap and res.domain_age_days < 0 and not res.domain_age_source:
+        try:
+            _icann_result = icann_rdap_fallback(domain)
+            if _icann_result["creation_days_ago"] >= 0:
+                res.rdap_created = _icann_result["creation_date"]
+                res.domain_age_days = _icann_result["creation_days_ago"]
+                res.domain_age_source = "icann_rdap_proxy"
+        except Exception:
+            pass  # Never let fallback crash analysis
+
+    # All three lookups failed — cannot determine domain age/registrar
     # Legitimate domains almost always have accessible registration data.
     if check_rdap and res.domain_age_days < 0 and not res.domain_age_source:
         res.registration_opaque = True
@@ -7932,6 +7946,18 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             # v7.4: WHOIS privacy detection
             res.whois_privacy = we.get("privacy", False)
             res.whois_privacy_service = we.get("privacy_service", "")
+            # ICANN RDAP proxy fallback for registrar/updated date
+            # when python-whois missed them (common on ccTLDs)
+            if not res.whois_registrar or res.whois_recently_updated_days == -1:
+                try:
+                    _icann_enrich = _icann_result or icann_rdap_fallback(domain)
+                    if _icann_enrich["registrar"] and not res.whois_registrar:
+                        res.whois_registrar = _icann_enrich["registrar"]
+                    if _icann_enrich["updated_days_ago"] >= 0 and we["updated_days_ago"] == -1:
+                        res.whois_updated = _icann_enrich["updated_date"]
+                        res.whois_recently_updated_days = _icann_enrich["updated_days_ago"]
+                except Exception:
+                    pass
             # v7.6: High-risk registrar detection
             if res.whois_registrar:
                 _reg_lower = res.whois_registrar.lower()
