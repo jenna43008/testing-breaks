@@ -1188,7 +1188,22 @@ def display_results(results: list):
                     for script in script_list:
                         st.text(f"  • {script}")
         
-        # === CONTACT CROSS-REFERENCE (OSINT) ===
+        # === DOMAIN CATEGORY RISK (v7.7) ===
+        if domain_data.get('domain_category'):
+            _cat = domain_data['domain_category_label']
+            _tier = domain_data.get('domain_category_risk_tier', '')
+            _reason = domain_data.get('domain_category_risk_reason', '')
+            _conf = domain_data.get('domain_category_confidence', 0)
+            _sigs = domain_data.get('domain_category_signals', '')
+            _color = {'HIGH': 'red', 'ELEVATED': 'orange', 'MODERATE': 'blue'}.get(_tier, 'gray')
+            with st.expander(f"Category Risk: {_cat} ({_tier})", expanded=True):
+                st.markdown(f":{_color}[**{_tier}**] — **{_cat}**")
+                st.caption(_reason)
+                st.text(f"  Confidence: {_conf}/18")
+                if _sigs:
+                    st.text(f"  Signals: {_sigs}")
+        
+                # === CONTACT CROSS-REFERENCE (OSINT) ===
         contact_reuse_json = domain_data.get('contact_reuse_results', '')
         if contact_reuse_json:
             try:
