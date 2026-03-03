@@ -58,6 +58,14 @@ VERSION: 7.7.0 (Mar 2026)
   (VT 0/94, HTTPS, app store) scored 57/DENY partly because SiteGround
   hosting activated the age amplifier on a clean young domain.
 
+VERSION: 7.7.1 (Mar 2026)
+- VT EXTERNAL DOMAIN CHECK: Checks external scripts and links found on the
+  analysed page against VirusTotal. A clean-looking domain can reference
+  malicious external resources (e.g. recaptcha.net injected vs legitimate
+  www.recaptcha.net). Filters CDN whitelist and known SaaS domains, checks
+  up to 5 remaining externals. New weights: vt_external_malicious_high(30),
+  vt_external_malicious_medium(22), vt_external_malicious_low(15).
+
 VERSION: 7.6.1 (Mar 2026)
 - SPA FALSE POSITIVE REDUCTION: Five scoring adjustments targeting the pattern
   where legitimate JS-rendered apps (SPAs) on established domains accumulate
@@ -605,6 +613,11 @@ class DomainApprovalResult:
     content_external_script_domains: str = ""        # Non-CDN external script domains (semicolon-sep)
     content_has_viral_loops: bool = False             # app.viral-loops.com script detected (referral fraud tool)
     content_external_link_domains: str = ""          # All external domains linked via <a href> (semicolon-sep, with paths)
+    # === VT EXTERNAL DOMAIN CHECK (v7.7.1) ===
+    vt_external_malicious_domains: str = ""          # Semicolon-sep malicious external domains found on page
+    vt_external_malicious_count: int = 0             # Count of malicious external domains
+    vt_external_malicious_details: str = ""          # JSON: {domain: {malicious: N, total: N, threats: [...]}}
+    vt_external_checked_count: int = 0               # How many external domains were VT-checked
     content_arpa_links: bool = False                 # Page contains links/forms/scripts pointing to .arpa domains
     content_arpa_domains: str = ""                   # Which .arpa domains found in page content
     contact_reuse_results: str = ""                   # JSON: contact info found on other domains (OSINT cross-reference)
@@ -5032,6 +5045,29 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     elif res.submitted_domain_vt_suspicious:
         all_issues.append(f"⚠️ SUBMITTED SUBDOMAIN VT SUSPICIOUS ({res.submitted_domain}) → {res.submitted_domain_vt_detail}")
     
+    # v7.7.1: External domains on page flagged malicious by VT
+    if res.vt_external_malicious_count > 0:
+        try:
+            _ext_details = json.loads(res.vt_external_malicious_details)
+            _ext_parts = []
+            for _ed, _info in _ext_details.items():
+                _threats = ", ".join(_info.get("threats", [])[:3])
+                _part = f"{_ed} ({_info['malicious']}/{_info['total']}"
+                if _threats:
+                    _part += f" threats: {_threats}"
+                _ext_parts.append(_part + ")")
+            _cw = "domain" if res.vt_external_malicious_count == 1 else "domains"
+            all_issues.append(
+                f"MALICIOUS EXTERNAL RESOURCES ({res.vt_external_malicious_count} {_cw}) "
+                + "Page references VT-flagged domains: "
+                + "; ".join(_ext_parts))
+        except Exception:
+            all_issues.append(
+                f"MALICIOUS EXTERNAL RESOURCES ({res.vt_external_malicious_count}) "
+                + "Page references VT-flagged domains: "
+                + res.vt_external_malicious_domains)
+    
+
     # === HACKLINK / SEO SPAM ===
     if res.hacklink_detected:
         kw = res.hacklink_keywords.replace(";", ", ")[:80] if res.hacklink_keywords else "various"
@@ -5801,6 +5837,12 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             f"CATEGORY RISK ({res.domain_category_risk_tier}{_tier_icon}): "
             f"{res.domain_category_label}")
     
+    # v7.7.1: VT-flagged external domains — pinned
+    if res.vt_external_malicious_count > 0:
+        parts.append(
+            f"VT EXTERNAL MALICIOUS ({res.vt_external_malicious_count}): "
+            f"{res.vt_external_malicious_domains}")
+    
     # Top issues only (limit to 3 most important by weight)
     if scored_issues:
         top_issues = [text for _, text in scored_issues[:3]]
@@ -6325,6 +6367,19 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # Only scored if VT flagged it as malicious — otherwise informational only in summary.
     if res.submitted_domain_vt_malicious:
         add("submitted_subdomain_vt_malicious", weights.get('submitted_subdomain_vt_malicious', 40))
+    
+    # === VT EXTERNAL MALICIOUS DOMAIN SCORING (v7.7.1) ===
+    # Penalise domains whose pages reference external resources flagged malicious by VT.
+    # A compromised or malicious page may load scripts/links from VT-flagged domains
+    # even when the host domain itself appears clean (e.g. recaptcha.net on a clean site).
+    if res.vt_external_malicious_count > 0:
+        _ext_mal_n = res.vt_external_malicious_count
+        if _ext_mal_n >= 3:
+            add("vt_external_malicious_high", weights.get("vt_external_malicious_high", 30))
+        elif _ext_mal_n >= 2:
+            add("vt_external_malicious_medium", weights.get("vt_external_malicious_medium", 22))
+        else:
+            add("vt_external_malicious_low", weights.get("vt_external_malicious_low", 15))
     
     # === HACKLINK / SEO SPAM SCORING ===
     if res.hacklink_detected:
@@ -7601,6 +7656,91 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         except Exception:
             pass  # Non-critical — don't break analysis if content check fails
     
+    # === VT EXTERNAL DOMAIN CHECK (v7.7.1) ===
+    # Check external links/scripts found on the page against VirusTotal.
+    # A clean domain can host malicious external resources (e.g. recaptcha.net
+    # injected into a compromised page vs legitimate www.recaptcha.net).
+    if VT_CHECKER_AVAILABLE and vt_api_key and (res.content_external_script_domains or res.content_external_link_domains):
+        try:
+            from urllib.parse import urlparse as _vt_urlparse
+            try:
+                from hacklink_keyword_scanner import CDN_WHITELIST as _CDN_WL
+            except ImportError:
+                _CDN_WL = set()
+
+            # Merge external scripts + links, extract bare domains
+            _ext_raw = set()
+            for _d in (res.content_external_script_domains or "").split(";"):
+                _d = _d.strip()
+                if _d:
+                    _ext_raw.add(_d.lower())
+            for _d in (res.content_external_link_domains or "").split(";"):
+                _d = _d.strip()
+                if _d:
+                    try:
+                        if "://" not in _d:
+                            _d = "http://" + _d
+                        _ext_raw.add(_vt_urlparse(_d).netloc.lower())
+                    except Exception:
+                        _ext_raw.add(_d.split("/")[0].lower())
+
+            # Filter: remove same-domain, CDN whitelist, known SaaS scripts
+            _analysis_domain = domain.lower()
+            _root_parts = _analysis_domain.rsplit(".", 2)
+            _root_domain = ".".join(_root_parts[-2:]) if len(_root_parts) >= 2 else _analysis_domain
+
+            _ext_candidates = []
+            for _ed in sorted(_ext_raw):
+                if not _ed or len(_ed) < 4:
+                    continue
+                if _ed == _analysis_domain or _ed.endswith("." + _analysis_domain):
+                    continue
+                if _ed == _root_domain or _ed.endswith("." + _root_domain):
+                    continue
+                _skip = False
+                for _wl_set in (_CDN_WL, KNOWN_LEGITIMATE_SCRIPT_DOMAINS):
+                    if _ed in _wl_set:
+                        _skip = True
+                        break
+                    for _wl in _wl_set:
+                        if _ed.endswith("." + _wl) or _wl.endswith("." + _ed):
+                            _skip = True
+                            break
+                    if _skip:
+                        break
+                if not _skip:
+                    _ext_candidates.append(_ed)
+
+            # Limit to 5 checks to preserve VT API quota
+            _ext_to_check = _ext_candidates[:5]
+
+            if _ext_to_check:
+                _vt_ext = VirusTotalChecker(api_key=vt_api_key)
+                _vt_ext_malicious = {}
+                for _check_domain in _ext_to_check:
+                    try:
+                        _vt_r = _vt_ext.check_domain(_check_domain)
+                        _mal_ct = _vt_r.get("malicious_count", 0)
+                        if _mal_ct > 0:
+                            _vt_ext_malicious[_check_domain] = {
+                                "malicious": _mal_ct,
+                                "suspicious": _vt_r.get("suspicious_count", 0),
+                                "total": _vt_r.get("total_vendors", 0),
+                                "threats": _vt_r.get("threat_names", [])[:5],
+                                "vendors": _vt_r.get("malicious_vendors", [])[:5],
+                            }
+                    except Exception:
+                        pass
+
+                res.vt_external_checked_count = len(_ext_to_check)
+                if _vt_ext_malicious:
+                    res.vt_external_malicious_count = len(_vt_ext_malicious)
+                    res.vt_external_malicious_domains = ";".join(_vt_ext_malicious.keys())
+                    res.vt_external_malicious_details = json.dumps(_vt_ext_malicious)
+        except Exception:
+            pass  # Non-critical
+
+
     # === DOMAIN CATEGORY RISK PROFILING (v7.7) ===
     if DOMAIN_CATEGORY_AVAILABLE:
         try:
