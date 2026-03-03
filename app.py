@@ -319,6 +319,12 @@ def display_results(results: list):
             if row.get('cdn_tunnel_suspect'):
                 cdn = _safe_str(row.get('cdn_provider'))
                 parts.append(f"☁️ CDN tunnel ({cdn})")
+            # v7.7: Domain category risk
+            if row.get('domain_category'):
+                _ct = _safe_str(row.get('domain_category_risk_tier'))
+                _cl = _safe_str(row.get('domain_category_label'))
+                _ce = {'HIGH': '🔴', 'ELEVATED': '🟠', 'MODERATE': '🟡'}.get(_ct, '')
+                parts.append(f'{_ce} {_cl}')
             # Spam links
             spam_ct = row.get('hacklink_spam_link_count', 0)
             if pd.isna(spam_ct) if isinstance(spam_ct, float) else spam_ct is None:
@@ -400,6 +406,8 @@ def display_results(results: list):
             "has_oauth_phish": st.column_config.CheckboxColumn("🔑 OAuth", width="small"),
             "is_homoglyph_domain": st.column_config.CheckboxColumn("🔤 Homoglyph", width="small"),
             "quishing_profile": st.column_config.CheckboxColumn("📱 Quish", width="small"),
+            "domain_category": st.column_config.TextColumn("Category", width="medium"),
+            "domain_category_risk_tier": st.column_config.TextColumn("Cat. Risk", width="small"),
             "cdn_tunnel_suspect": st.column_config.CheckboxColumn("☁️ CDN Tunnel", width="small"),
             "asn_display": st.column_config.TextColumn("ASN", width="medium"),
             "rules_triggered": st.column_config.TextColumn("Rules Fired", width="medium"),
@@ -417,6 +425,7 @@ def display_results(results: list):
                         'domain_transfer_lock_recent', 'mx_provider_mismatch',
                         'subdomain_infra_divergent', 'ct_reactivated',
                         'has_oauth_phish', 'is_homoglyph_domain',
+                        'domain_category', 'domain_category_risk_tier',
                         'quishing_profile', 'cdn_tunnel_suspect',
                         'asn_display', 'rules_triggered',
                         'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
@@ -457,6 +466,7 @@ def display_results(results: list):
                            'subdomain_infra_divergent', 'subdomain_divergence_confidence',
                            'ct_reactivated', 'ct_gap_months',
                            'has_oauth_phish', 'is_homoglyph_domain', 'homoglyph_target',
+                           'domain_category', 'domain_category_risk_tier',
                            'quishing_profile', 'cdn_tunnel_suspect', 'cdn_provider',
                            'summary']
             summary_cols = [c for c in summary_cols if c in df.columns]
