@@ -5915,6 +5915,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # UNLESS the domain is an established SPA (v7.6) — a $6/month Google Workspace
     # subscription does not legitimize a brand-new shell domain, but a 13-year-old
     # domain with DKIM and VT clean is genuinely using enterprise email.
+    # v7.7.1: HALVED when email auth is weak (no DKIM + missing/weak DMARC).
+    # Enterprise MX without proper auth config = paying for Workspace but not
+    # using it properly.  Still some legitimacy signal, just less convincing.
     if res.mx_provider_type == "enterprise":
         _is_established_spa = (
             res.domain_age_days >= 365
@@ -5922,7 +5925,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             and res.vt_malicious_count == 0
         )
         if not res.content_is_facade or _is_established_spa:
-            add("mx_enterprise", weights.get('mx_enterprise_bonus', -5))
+            _full_bonus = weights.get('mx_enterprise_bonus', -5)
+            _weak_auth = (
+                not res.dkim_exists
+                and (not res.dmarc_exists or res.dmarc_policy == "none")
+            )
+            if _weak_auth:
+                add("mx_enterprise", _full_bonus // 2)  # Halved — enterprise MX without auth
+            else:
+                add("mx_enterprise", _full_bonus)
     elif res.mx_provider_type == "disposable":
         add("mx_disposable", weights.get('mx_disposable', 10))
     elif res.mx_provider_type == "selfhosted":
