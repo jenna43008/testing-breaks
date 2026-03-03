@@ -5200,13 +5200,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     elif res.is_cdn_hosted:
         positives.append(f"CDN-hosted ({res.cdn_provider}) — origin hidden but no abuse indicators")
     
-    # === DOMAIN CATEGORY RISK (v7.7) ===
-    if res.domain_category:
-        _tier_icon = {"HIGH": "!!!", "ELEVATED": "!!", "MODERATE": "!"}.get(
-            res.domain_category_risk_tier, "")
-        all_issues.append(
-            f"CATEGORY RISK ({res.domain_category_risk_tier}{_tier_icon}): "
-            f"{res.domain_category_label} — {res.domain_category_risk_reason}")
+    # === DOMAIN CATEGORY RISK (v7.7) — moved to pinned summary ===
 
     # === CONTACT CROSS-REFERENCE (OSINT) ===
     if res.contact_reuse_results:
@@ -5798,6 +5792,14 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     # These help specialists instantly recognize known attack patterns.
     if res.pattern_match:
         parts.append("PATTERN: " + res.pattern_match)
+    
+    # v7.7: Domain category risk — pinned so it never gets truncated
+    if res.domain_category:
+        _tier_icon = {"HIGH": "!!!", "ELEVATED": "!!", "MODERATE": "!"}.get(
+            res.domain_category_risk_tier, "")
+        parts.append(
+            f"CATEGORY RISK ({res.domain_category_risk_tier}{_tier_icon}): "
+            f"{res.domain_category_label}")
     
     # Top issues only (limit to 3 most important by weight)
     if scored_issues:
