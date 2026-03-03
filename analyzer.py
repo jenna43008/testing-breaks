@@ -16,10 +16,25 @@ VERSION: 7.7.0 (Mar 2026)
   score if VT flags the submitted domain as malicious (40 pts default).
   This catches cases where a subdomain is specifically weaponized while the
   root domain remains clean.
+- VULNERABLE PLUGINS SCORING FIX: Replaced score-then-claw-back pattern
+  (flat 25 pts + complex mitigation of -7 to -18) with upfront context split:
+  25 pts when active compromise evidence exists (hacklink keywords, hidden
+  injection, WP compromise, spam links, malicious script), 8 pts when plugins
+  are present but no exploitation evidence. Eliminates the confusing multi-signal
+  mitigation block. Root cause: jukebooks.gr (WooCommerce + Elementor, VT 0/94,
+  enterprise MX, DKIM, e-commerce confirmed) was scoring 47/APPROVE from stacking
+  theoretical plugin risk with opaque registration amplification.
+- OPAQUE REGISTRATION FACADE OVERRIDE: Registration opaque no longer amplifies
+  from 8 to 20 pts when the only content risk signal is a facade (SPA shell)
+  AND the domain has VT clean + strong legitimacy signals (enterprise MX, DKIM,
+  or confirmed e-commerce). Addresses ccTLD registries (.gr, .jp, .kr) where
+  WHOIS is not publicly accessible — opaque registration is a registry limitation,
+  not a risk signal, when combined with strong infrastructure indicators.
 - New fields: submitted_domain, analysis_domain, used_root_fallback,
   submitted_domain_resolves, submitted_domain_vt_malicious,
   submitted_domain_vt_suspicious, submitted_domain_vt_detail
 - New scoring signal: submitted_subdomain_vt_malicious (default 40 pts)
+- New weight: hacklink_vulnerable_plugins_no_compromise (default 8 pts)
 
 VERSION: 7.6.1 (Mar 2026)
 - SPA FALSE POSITIVE REDUCTION: Five scoring adjustments targeting the pattern
@@ -5661,7 +5676,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('HOMOGLYPH DOMAIN', ['homoglyph_domain']),
         ('QUISHING PROFILE', ['quishing_profile']),
         ('CDN TUNNEL ABUSE', ['cdn_tunnel_suspect']),
-        ('VULNERABLE WP PLUGINS', ['hacklink_vulnerable_plugins', 'vuln_plugins_no_compromise_mitigated']),
+        ('VULNERABLE WP PLUGINS', ['hacklink_vulnerable_plugins']),
         ('HIDDEN CONTENT INJECTION', ['hidden_injection']),
         ('HACKLINK', ['hacklink_keywords']),
         ('COMPROMISED WP', ['hacklink_wp_compromised']),
@@ -6266,7 +6281,16 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("hacklink_wp_compromised", weights.get('hacklink_wp_compromised', 45))
     
     if res.hacklink_vulnerable_plugins:
-        add("hacklink_vulnerable_plugins", weights.get('hacklink_vulnerable_plugins', 25))
+        # v7.7: Score by context — popular plugins on uncompromised sites are
+        # theoretical risk only, not evidence of active exploitation.
+        _has_vuln_compromise = any(s in signals for s in [
+            "hacklink_keywords", "hidden_injection", "hacklink_wp_compromised",
+            "hacklink_spam_links", "malicious_script",
+        ])
+        if _has_vuln_compromise:
+            add("hacklink_vulnerable_plugins", weights.get('hacklink_vulnerable_plugins', 25))
+        else:
+            add("hacklink_vulnerable_plugins", weights.get('hacklink_vulnerable_plugins_no_compromise', 8))
     
     if res.hacklink_spam_link_count >= 5:
         add("hacklink_spam_links", weights.get('hacklink_spam_links', 35))
@@ -6377,13 +6401,33 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # Legitimate domains almost always have accessible registration data.
     # Scored conditionally: standalone is mild, but combined with content
     # risk signals (facade, mismatch, broker) it becomes much more significant.
+    # v7.7: Exception for VT-clean e-commerce/SPA sites where facade is just
+    # SPA architecture (JS-rendered content) and opaque WHOIS is a ccTLD
+    # registry limitation (e.g. .gr, .jp, .kr), not a risk signal.
     if res.registration_opaque:
         _content_risk_present = (
             res.content_is_facade or res.content_title_body_mismatch or
             res.content_cross_domain_emails or res.content_is_broker_page or
             res.content_is_placeholder
         )
-        if _content_risk_present:
+        # v7.7: VT-clean + strong infra signals = facade is architectural, not evasive.
+        # Don't amplify opaque registration when the only "content risk" is an SPA shell
+        # on a domain with enterprise MX, DKIM, or confirmed e-commerce.
+        _facade_only_risk = (
+            _content_risk_present
+            and res.content_is_facade
+            and not res.content_title_body_mismatch
+            and not res.content_cross_domain_emails
+            and not res.content_is_broker_page
+            and not res.content_is_placeholder
+        )
+        _has_legitimacy_override = (
+            _facade_only_risk
+            and res.vt_malicious_count == 0
+            and res.vt_total_vendors >= 50
+            and (res.mx_provider_type == "enterprise" or res.dkim_exists or res.is_ecommerce_site)
+        )
+        if _content_risk_present and not _has_legitimacy_override:
             add("registration_opaque", weights.get('registration_opaque_with_risk', 20))
         else:
             add("registration_opaque", weights.get('registration_opaque', 8))
@@ -6513,46 +6557,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             add("minimal_shell_email_auth_mitigated", weights.get('minimal_shell_email_auth_mitigated', -8))
 
     # === VULNERABLE PLUGINS WITHOUT COMPROMISE EVIDENCE ===
-    # Contact Form 7, Elementor, etc. are on millions of legitimate WordPress sites.
-    # Having them installed is theoretical risk, not evidence of actual compromise.
-    # When there's NO evidence of exploitation AND the domain has strong legitimacy
-    # signals, reduce the weight significantly — it's just a popular plugin, not a hack.
-    if "hacklink_vulnerable_plugins" in signals:
-        has_compromise_evidence = any(s in signals for s in [
-            "hacklink_keywords", "hidden_injection", "hacklink_wp_compromised",
-            "hacklink_spam_links", "malicious_script",
-        ])
-        if not has_compromise_evidence:
-            # Domain has strong positive signals — theoretical vuln only
-            is_established = res.domain_age_days and res.domain_age_days >= 365
-            has_app_presence = res.app_store_has_presence
-            has_enterprise_mx = res.mx_provider_type == "enterprise"
-            # v7.6: Added VT clean and DMARC reject as legitimacy signals.
-            # VT 0/93 is the strongest possible signal that a domain is NOT
-            # currently compromised.  DMARC p=reject shows real email security
-            # investment (even with SPF ~all, which is common and acceptable).
-            is_vt_clean = res.vt_malicious_count == 0 and res.vt_total_vendors >= 50
-            has_dmarc_enforce = res.dmarc_exists and res.dmarc_policy in ("reject", "quarantine")
-            legitimacy_signals = sum([
-                bool(has_strong_email_auth),
-                bool(is_established),
-                bool(has_app_presence),
-                bool(has_enterprise_mx),
-                bool(res.dkim_exists),
-                bool(is_vt_clean),
-                bool(has_dmarc_enforce),
-            ])
-            # 3+ legitimacy signals = clearly legitimate site with a popular plugin
-            if legitimacy_signals >= 3:
-                add("vuln_plugins_no_compromise_mitigated", weights.get('vuln_plugins_strong_mitigation', -18))
-            # 2 legitimacy signals = likely legitimate, moderate reduction
-            elif legitimacy_signals >= 2:
-                add("vuln_plugins_no_compromise_mitigated", weights.get('vuln_plugins_moderate_mitigation', -10))
-            # v7.6: 1 legitimacy signal (e.g. VT clean alone) = still meaningful
-            # VT 0/93 by itself confirms no active compromise; Elementor on a
-            # clean site shouldn't score the same as Elementor on an untested one.
-            elif legitimacy_signals >= 1:
-                add("vuln_plugins_no_compromise_mitigated", weights.get('vuln_plugins_weak_mitigation', -7))
+    # v7.7: Scoring now split upfront at the add() call: 25 pts with compromise
+    # evidence, 8 pts without. No downstream mitigation block needed.
 
     # === UNIFIED RULES ENGINE ===
     # All scoring logic beyond base weights (former combos + custom rules)
