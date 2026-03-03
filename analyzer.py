@@ -35,6 +35,13 @@ VERSION: 7.7.0 (Mar 2026)
   submitted_domain_vt_suspicious, submitted_domain_vt_detail
 - New scoring signal: submitted_subdomain_vt_malicious (default 40 pts)
 - New weight: hacklink_vulnerable_plugins_no_compromise (default 8 pts)
+- UK VARIANT DARK OPAQUE OVERRIDE: tld_variant_uk_no_dns no longer scores
+  full 28 pts when domain age is unknown (opaque WHOIS) AND the domain has
+  VT clean (0/94+) plus 2+ legitimacy signals (DKIM, HTTPS, app store, PTR
+  match, enterprise MX). Reduces to 5 pts. Root cause: hearmenders.com
+  (VT 0/94, DKIM, HTTPS, app store, PTR match) scored 73/DENY because
+  opaque WHOIS failed the domain_age >= 365 check, triggering full UK
+  variant penalty. Non-UK .com domains have no reason to own a .co.uk.
 
 VERSION: 7.6.1 (Mar 2026)
 - SPA FALSE POSITIVE REDUCTION: Five scoring adjustments targeting the pattern
@@ -6038,7 +6045,24 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             and res.vt_malicious_count == 0
             and res.vt_total_vendors >= 50
         )
-        if _is_established_vt_clean:
+        # v7.7: Also reduce when domain age is unknown (opaque WHOIS) but
+        # strong legitimacy signals prove the domain is real.  Opaque WHOIS
+        # is a registry limitation (.gr, .jp, some .com registrars), not a
+        # risk signal, when VT 0/94 + DKIM + HTTPS confirm legitimacy.
+        # A non-UK .com business has no reason to own a .co.uk variant.
+        _is_opaque_but_legitimate = (
+            res.domain_age_days < 0  # Age unknown (opaque)
+            and res.vt_malicious_count == 0
+            and res.vt_total_vendors >= 50
+            and sum([
+                bool(res.dkim_exists),
+                bool(res.https_valid),
+                bool(res.app_store_has_presence),
+                bool(res.ptr_matches_forward),
+                bool(res.mx_provider_type == "enterprise"),
+            ]) >= 2
+        )
+        if _is_established_vt_clean or _is_opaque_but_legitimate:
             add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns_established', 5))
         else:
             add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns', 28))
