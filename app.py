@@ -325,6 +325,11 @@ def display_results(results: list):
                 _cl = _safe_str(row.get('domain_category_label'))
                 _ce = {'HIGH': '🔴', 'ELEVATED': '🟠', 'MODERATE': '🟡'}.get(_ct, '')
                 parts.append(f'{_ce} {_cl}')
+            # v7.7.1: VT-flagged external domains on page
+            _ext_mal = row.get('vt_external_malicious_count', 0)
+            if pd.notna(_ext_mal) and int(_ext_mal) > 0:
+                _ext_doms = _safe_str(row.get('vt_external_malicious_domains'))
+                parts.append(f'🛡️ {int(_ext_mal)} malicious ext ({_ext_doms})')
             # Spam links
             spam_ct = row.get('hacklink_spam_link_count', 0)
             if pd.isna(spam_ct) if isinstance(spam_ct, float) else spam_ct is None:
@@ -408,6 +413,8 @@ def display_results(results: list):
             "quishing_profile": st.column_config.CheckboxColumn("📱 Quish", width="small"),
             "domain_category": st.column_config.TextColumn("Category", width="medium"),
             "domain_category_risk_tier": st.column_config.TextColumn("Cat. Risk", width="small"),
+            "vt_external_malicious_count": st.column_config.NumberColumn("VT Ext Mal", width="small"),
+            "vt_external_malicious_domains": st.column_config.TextColumn("VT Ext Domains", width="medium"),
             "cdn_tunnel_suspect": st.column_config.CheckboxColumn("☁️ CDN Tunnel", width="small"),
             "asn_display": st.column_config.TextColumn("ASN", width="medium"),
             "rules_triggered": st.column_config.TextColumn("Rules Fired", width="medium"),
@@ -426,6 +433,7 @@ def display_results(results: list):
                         'subdomain_infra_divergent', 'ct_reactivated',
                         'has_oauth_phish', 'is_homoglyph_domain',
                         'domain_category', 'domain_category_risk_tier',
+                        'vt_external_malicious_count', 'vt_external_malicious_domains',
                         'quishing_profile', 'cdn_tunnel_suspect',
                         'asn_display', 'rules_triggered',
                         'spf_exists', 'dkim_exists', 'dmarc_exists', 'domain_age_days']
@@ -467,6 +475,7 @@ def display_results(results: list):
                            'ct_reactivated', 'ct_gap_months',
                            'has_oauth_phish', 'is_homoglyph_domain', 'homoglyph_target',
                            'domain_category', 'domain_category_risk_tier',
+                           'vt_external_malicious_count', 'vt_external_malicious_domains',
                            'quishing_profile', 'cdn_tunnel_suspect', 'cdn_provider',
                            'summary']
             summary_cols = [c for c in summary_cols if c in df.columns]
@@ -1214,6 +1223,27 @@ def display_results(results: list):
                     st.text(f"  Signals: {_sigs}")
         
                 # === CONTACT CROSS-REFERENCE (OSINT) ===
+        # v7.7.1: VT-flagged external domains on page
+        _ext_mal_ct = domain_data.get('vt_external_malicious_count', 0)
+        if _ext_mal_ct and int(_ext_mal_ct) > 0:
+            with st.expander(f"VT External Malicious ({int(_ext_mal_ct)} domains)", expanded=True):
+                st.error(f"**{int(_ext_mal_ct)} external domain(s)** referenced on this page are flagged malicious by VirusTotal")
+                _ext_detail_str = domain_data.get('vt_external_malicious_details', '')
+                if _ext_detail_str:
+                    try:
+                        _ext_info = json.loads(_ext_detail_str)
+                        for _ed, _ei in _ext_info.items():
+                            _threats = ", ".join(_ei.get("threats", [])[:5])
+                            _vendors = ", ".join(_ei.get("vendors", [])[:5])
+                            st.markdown(f"**{_ed}** — {_ei['malicious']}/{_ei['total']} vendors")
+                            if _threats:
+                                st.caption(f"Threats: {_threats}")
+                            if _vendors:
+                                st.caption(f"Vendors: {_vendors}")
+                    except Exception:
+                        st.text(domain_data.get('vt_external_malicious_domains', ''))
+                st.caption(f"Checked {domain_data.get('vt_external_checked_count', 0)} non-CDN external domains against VT")
+        
         contact_reuse_json = domain_data.get('contact_reuse_results', '')
         if contact_reuse_json:
             try:
