@@ -7684,6 +7684,29 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                     except Exception:
                         _ext_raw.add(_d.split("/")[0].lower())
 
+            # v7.7.1: Extract URLs embedded INSIDE <script> tag bodies
+            # This catches domains like recaptcha.net referenced in JS code
+            # (fetch/XMLHttpRequest/Image.src/window.location targets)
+            if content:
+                try:
+                    import re as _re_ext
+                    _html_str = content.decode("utf-8", errors="ignore") if isinstance(content, bytes) else content
+                    # Extract inline script bodies
+                    _script_bodies = _re_ext.findall(
+                        r'<script[^>]*>(.+?)</script>', _html_str,
+                        _re_ext.DOTALL | _re_ext.IGNORECASE)
+                    for _sb in _script_bodies:
+                        # Find all http(s) URLs in script body
+                        _js_urls = _re_ext.findall(
+                            r'https?://([a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?)+)',
+                            _sb)
+                        for _js_host in _js_urls:
+                            _js_host = _js_host.lower().rstrip(".")
+                            if _js_host and len(_js_host) >= 4:
+                                _ext_raw.add(_js_host)
+                except Exception:
+                    pass
+
             # Filter: remove same-domain, CDN whitelist, known SaaS scripts
             _analysis_domain = domain.lower()
             _root_parts = _analysis_domain.rsplit(".", 2)
