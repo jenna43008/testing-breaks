@@ -23,7 +23,7 @@ DEFAULT_CONFIG = {
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
         "domain_blacklisted": 45,
-        "ip_blacklisted": 40,
+        "ip_blacklisted": 45,
         "blacklist_inconclusive": 15,  # v6.2: DNSBL check timed out — "unknown" ≠ "clean"
         "typosquat_detected": 15,
         "brand_impersonation": 0,
