@@ -577,7 +577,7 @@ DEFAULT_CONFIG = {
 
         # --- Transfer Lock Recently Added + Old Domain / VT Combos (4 rules) ---
         {"name": "transfer_lock_old_domain", "score": 35, "label": "transfer lock recently added + domain >1yr — post-compromise lockdown on established domain", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "domain_gt_1yr"], "if_any": [], "if_not": ["mx_enterprise", "vt_clean", "app_store_high", "app_store_medium"]},
-        {"name": "transfer_lock_whois_updated", "score": 0, "label": "transfer lock recently added + WHOIS recently updated — active post-compromise response", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "whois_recently_updated"], "if_any": [], "if_not": []},
+        {"name": "transfer_lock_whois_updated", "score": 15, "label": "transfer lock recently added + WHOIS recently updated — active post-compromise response", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "whois_recently_updated"], "if_any": [], "if_not": []},
         {"name": "transfer_lock_vt_malicious", "score": 25, "label": "transfer lock recently added + VT malicious — locked down after threat intel flagged", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low"], "if_not": []},
         {"name": "transfer_lock_hacklink", "score": 20, "label": "transfer lock recently added + hacklink — locked down after SEO injection found", "category": "Domain Takeover", "enabled": True, "if_all": ["transfer_lock_recent", "hacklink_detected"], "if_any": [], "if_not": []},
 
