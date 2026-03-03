@@ -191,12 +191,12 @@ DEFAULT_CONFIG = {
         "viral_loops_script": 25,              # v7.6: app.viral-loops.com referral fraud tool detected
         "client_side_harvest_combo": 25,      # v7.5: Harvest code (input reads, keyloggers, sendBeacon) + corroborating phishing signal
         "form_posts_external": 10,
-        "suspicious_iframe": 15,
+        "suspicious_iframe": 5,
         "parking_page": 20,
         
         # === CORPORATE TRUST SIGNALS (Missing signals indicate opaque entity) ===
         "missing_trust_signals": 20,       # No about/contact/privacy pages
-        "opaque_entity": 20,              # Access blocked + no trust signals = high risk
+        "opaque_entity": 15,              # Access blocked + no trust signals = high risk
         
         # === BONUSES (Reduce score) ===
         "has_bimi": -15,
