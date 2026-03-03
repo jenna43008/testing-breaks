@@ -237,6 +237,10 @@ DEFAULT_CONFIG = {
         "vt_external_malicious_high": 30,   # 3+ external domains on page flagged malicious by VT
         "vt_external_malicious_medium": 22, # 2 external domains flagged malicious
         "vt_external_malicious_low": 15,    # 1 external domain flagged malicious
+        
+        # === SUSPICIOUS CONTACT EMAIL (v7.7.1) ===
+        "contact_email_spam_infra": 25,     # Email on page from spam infrastructure domain (mailtrap, mailinator, etc.)
+        "contact_email_template": 15,       # Template placeholder email on page (info@company.com, info@example.com)
     },
     
     # ==========================================================================
