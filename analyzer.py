@@ -599,6 +599,8 @@ class DomainApprovalResult:
     content_title_body_detail: str = ""             # Human-readable mismatch explanation
     content_cross_domain_emails: str = ""           # Semicolon-sep emails from different domain found on page
     content_cross_domain_email_domains: str = ""    # Which foreign domains those emails belong to
+    content_suspicious_contact_email: str = ""       # Emails matching spam-infra or template patterns (semicolon-sep)
+    content_suspicious_contact_type: str = ""        # Type: spam_infra, template_placeholder, or both
     content_page_privacy_emails: str = ""           # Privacy provider emails found on page (proton, tutanota)
     content_page_freemail_contacts: str = ""        # Freemail used as business contact on page
     content_is_broker_page: bool = False             # Domain broker / parking / for-sale page detected
@@ -5139,6 +5141,13 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.content_cross_domain_emails:
         domains = res.content_cross_domain_email_domains.replace(";", ", ")
         all_issues.append(f"CROSS-DOMAIN EMAILS ON PAGE → Page contains emails from: {domains}")
+    if res.content_suspicious_contact_email:
+        _sus_emails = res.content_suspicious_contact_email.replace(";", ", ")
+        _sus_type = res.content_suspicious_contact_type
+        if "spam_infra" in _sus_type:
+            all_issues.append(f"SPAM INFRASTRUCTURE CONTACT EMAIL ON PAGE ({_sus_emails})")
+        if "template_placeholder" in _sus_type:
+            all_issues.append(f"TEMPLATE PLACEHOLDER EMAIL ON PAGE ({_sus_emails})")
     if res.content_is_broker_page:
         all_issues.append(f"BROKER/PARKING PAGE → Domain broker or for-sale page detected: {res.content_broker_indicators[:100]}")
     if res.content_page_privacy_emails:
@@ -6491,6 +6500,14 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.content_cross_domain_emails:
         add("content_cross_domain_email", weights.get('content_cross_domain_email', 35))
     
+    # v7.7.1: Suspicious contact emails (spam infra or template placeholders)
+    if res.content_suspicious_contact_email:
+        _sus_type = res.content_suspicious_contact_type
+        if "spam_infra" in _sus_type:
+            add("contact_email_spam_infra", weights.get('contact_email_spam_infra', 25))
+        if "template_placeholder" in _sus_type:
+            add("contact_email_template", weights.get('contact_email_template', 15))
+    
     if res.content_is_broker_page:
         add("content_broker_page", weights.get('content_broker_page', 20))
     
@@ -7617,6 +7634,45 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             free_emails = cc.get("page_freemail_contacts", [])
             if free_emails:
                 res.content_page_freemail_contacts = ";".join(free_emails[:10])
+            
+            # v7.7.1: Detect suspicious contact emails on page
+            # Spam-infra domains (mailtrap, mailinator, etc.) and template placeholders
+            _page_all_emails = cc.get("page_emails", []) or []
+            _all_check = list(set(_page_all_emails + (xd_emails or [])))
+            if _all_check:
+                import re as _re_em
+                _SPAM_INFRA = _re_em.compile(
+                    r'(?:mailtrap|spamtrap|honeypot|mailninja|trapmail|'
+                    r'ninjamail|fakeinbox|tempmail|throwaway|disposable|'
+                    r'guerrillamail|mailinator|yopmail|sharklasers|'
+                    r'guerrilla|trashmail|tempinbox)',
+                    _re_em.IGNORECASE)
+                _TEMPLATE_EMAILS = {
+                    "info@company.com", "info@example.com", "info@yourcompany.com",
+                    "info@yourdomain.com", "info@domain.com", "info@website.com",
+                    "email@example.com", "email@domain.com", "email@company.com",
+                    "your@email.com", "contact@company.com", "contact@example.com",
+                    "contact@yourcompany.com", "contact@yourdomain.com",
+                    "admin@example.com", "support@example.com",
+                    "name@example.com", "user@example.com",
+                    "test@test.com", "test@example.com",
+                    "hello@company.com", "hello@example.com",
+                }
+                _sus_found = []
+                _sus_types = set()
+                for _em in _all_check:
+                    _eml = _em.lower().strip()
+                    if _eml in _TEMPLATE_EMAILS:
+                        _sus_found.append(_eml)
+                        _sus_types.add("template_placeholder")
+                    elif "@" in _eml:
+                        _ed = _eml.split("@", 1)[1]
+                        if _SPAM_INFRA.search(_ed):
+                            _sus_found.append(_eml)
+                            _sus_types.add("spam_infra")
+                if _sus_found:
+                    res.content_suspicious_contact_email = ";".join(_sus_found[:10])
+                    res.content_suspicious_contact_type = ";".join(sorted(_sus_types))
             res.content_is_broker_page = cc.get("is_broker_page", False)
             broker_ind = cc.get("broker_indicators", [])
             if broker_ind:
