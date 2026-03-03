@@ -41,6 +41,12 @@ VERSION: 7.7.0 (Mar 2026)
   of domain age. Root cause: hearmenders.com (73/DENY) and itemmastercs2.com
   (57/DENY) both had domain_age under 365d, triggering full UK variant
   penalty despite VT 0/94 and strong legitimacy signals.
+- BUDGET HOST AGE AMPLIFIER FIX: Removed hosting_budget_shared from the
+  _CONTENT_RISK_SIGNALS set that activates age-based scoring. Budget hosting
+  (SiteGround, Namecheap, etc.) scores its own 8 pts but no longer triggers
+  the young-domain amplifier (+10 to +25 pts). Root cause: itemmastercs2.com
+  (VT 0/94, HTTPS, app store) scored 57/DENY partly because SiteGround
+  hosting activated the age amplifier on a clean young domain.
 
 VERSION: 7.6.1 (Mar 2026)
 - SPA FALSE POSITIVE REDUCTION: Five scoring adjustments targeting the pattern
@@ -5938,7 +5944,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             "hacklink_spam_links", "hacklink_vulnerable_plugins", "malicious_script",
             "js_redirect", "minimal_shell", "empty_page", "suspicious_tld",
             "hosting_suspect", "hosting_free", "typosquat_detected",
-            "disposable_email", "free_email_domain", "hosting_budget_shared",
+            "disposable_email", "free_email_domain",
             "redirect_cross_domain", "cross_domain_brand_link",
             "tld_variant_spoof", "domain_brand_impersonation",
             "opaque_entity", "sensitive_fields", "phishing_js", "doc_lure",
