@@ -227,6 +227,11 @@ DEFAULT_CONFIG = {
         "mx_disposable": 20,          # Disposable/cheap MX (Titan, ImprovMX, Hostinger email, etc.)
         "mx_selfhosted": 20,           # Self-hosted MX on same domain/IP - no provider oversight
         "mx_enterprise_bonus": -10,    # Enterprise MX (Google Workspace, M365, Proofpoint) = legitimacy signal
+        
+        # === DOMAIN CATEGORY RISK (v7.7) ===
+        "category_risk_high": 15,       # Gambling, crypto, sweepstakes, MLM, adult, pharma
+        "category_risk_elevated": 12,   # Romance serial fiction, dating
+        "category_risk_moderate": 5,    # VPN/utility apps
     },
     
     # ==========================================================================
