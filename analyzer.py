@@ -41,6 +41,16 @@ VERSION: 7.7.0 (Mar 2026)
   of domain age. Root cause: hearmenders.com (73/DENY) and itemmastercs2.com
   (57/DENY) both had domain_age under 365d, triggering full UK variant
   penalty despite VT 0/94 and strong legitimacy signals.
+- BUDGET HOST AGE AMPLIFIER FIX: Removed hosting_budget_shared from
+  _CONTENT_RISK_SIGNALS. Budget hosting scores 8 pts but no longer
+  triggers the young-domain amplifier (+10-25 pts).
+- DOMAIN CATEGORY RISK PROFILING: New module (domain_category.py)
+  classifies domains into business categories (romance serial fiction,
+  gambling, crypto, dating, sweepstakes, MLM, adult, pharma, VPN/utility).
+  Each category has a notification-abuse risk tier with configurable
+  scoring. Legitimacy attenuation suppresses for established operators.
+  New weights: category_risk_high(15), category_risk_elevated(12),
+  category_risk_moderate(5).
 - BUDGET HOST AGE AMPLIFIER FIX: Removed hosting_budget_shared from the
   _CONTENT_RISK_SIGNALS set that activates age-based scoring. Budget hosting
   (SiteGround, Namecheap, etc.) scores its own 8 pts but no longer triggers
@@ -258,9 +268,12 @@ except Exception:
 
 try:
     from content_checks import check_content_identity
+    from domain_category import classify_domain
+    DOMAIN_CATEGORY_AVAILABLE = True
     CONTENT_CHECKS_AVAILABLE = True
 except Exception:
     CONTENT_CHECKS_AVAILABLE = False
+    DOMAIN_CATEGORY_AVAILABLE = False
 
 
 # ============================================================================
@@ -595,6 +608,14 @@ class DomainApprovalResult:
     content_arpa_links: bool = False                 # Page contains links/forms/scripts pointing to .arpa domains
     content_arpa_domains: str = ""                   # Which .arpa domains found in page content
     contact_reuse_results: str = ""                   # JSON: contact info found on other domains (OSINT cross-reference)
+    
+    # === DOMAIN CATEGORY RISK PROFILING (v7.7) ===
+    domain_category: str = ""                         # Category key (e.g. "romance_serial_fiction")
+    domain_category_label: str = ""                   # Human-readable label
+    domain_category_confidence: int = 0               # Classification confidence (0-18)
+    domain_category_risk_tier: str = ""               # HIGH, ELEVATED, MODERATE, LOW
+    domain_category_risk_reason: str = ""             # Why this category is risky for notifications
+    domain_category_signals: str = ""                 # Semicolon-separated classification signals
     content_visible_word_count: int = -1             # Number of visible words on page (-1 = not checked)
     registration_opaque: bool = False                # Both RDAP and WHOIS failed — cannot determine domain age/registrar
     domain_reregistered: bool = False                # RDAP shows a reregistration event (domain was dropped + re-bought)
@@ -5179,6 +5200,14 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     elif res.is_cdn_hosted:
         positives.append(f"CDN-hosted ({res.cdn_provider}) — origin hidden but no abuse indicators")
     
+    # === DOMAIN CATEGORY RISK (v7.7) ===
+    if res.domain_category:
+        _tier_icon = {"HIGH": "!!!", "ELEVATED": "!!", "MODERATE": "!"}.get(
+            res.domain_category_risk_tier, "")
+        all_issues.append(
+            f"CATEGORY RISK ({res.domain_category_risk_tier}{_tier_icon}): "
+            f"{res.domain_category_label} — {res.domain_category_risk_reason}")
+
     # === CONTACT CROSS-REFERENCE (OSINT) ===
     if res.contact_reuse_results:
         try:
@@ -6588,7 +6617,30 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # v7.7: Scoring now split upfront at the add() call: 25 pts with compromise
     # evidence, 8 pts without. No downstream mitigation block needed.
 
-    # === UNIFIED RULES ENGINE ===
+    # === DOMAIN CATEGORY RISK SCORING (v7.7) ===
+    if res.domain_category:
+        _cat_tier = res.domain_category_risk_tier
+        _cat_base = {
+            "HIGH": weights.get('category_risk_high', 15),
+            "ELEVATED": weights.get('category_risk_elevated', 12),
+            "MODERATE": weights.get('category_risk_moderate', 5),
+        }.get(_cat_tier, 0)
+        
+        if _cat_base > 0:
+            _cat_legit = sum([
+                bool(res.mx_provider_type == "enterprise"),
+                bool(res.dkim_exists),
+                bool(res.domain_age_days >= 365),
+                bool(res.vt_malicious_count == 0 and res.vt_total_vendors >= 50),
+            ])
+            if _cat_legit >= 3:
+                add("domain_category_risk", 0)
+            elif _cat_legit >= 2:
+                add("domain_category_risk", max(1, _cat_base // 2))
+            else:
+                add("domain_category_risk", _cat_base)
+    
+        # === UNIFIED RULES ENGINE ===
     # All scoring logic beyond base weights (former combos + custom rules)
     # Rules support if/then/else logic:
     #   if_all:  ALL listed signals must be present (AND)
@@ -7547,7 +7599,38 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         except Exception:
             pass  # Non-critical — don't break analysis if content check fails
     
-    # === CONTACT CROSS-REFERENCE (OSINT) ===
+    # === DOMAIN CATEGORY RISK PROFILING (v7.7) ===
+    if DOMAIN_CATEGORY_AVAILABLE:
+        try:
+            _cat_page_text = ""
+            if content:
+                try:
+                    _cat_raw = content.decode("utf-8", errors="ignore") if isinstance(content, bytes) else content
+                    import re as _re2
+                    _cat_stripped = _re2.sub(r"<script[^>]*>.*?</script>", "", _cat_raw, flags=_re2.DOTALL|_re2.IGNORECASE)
+                    _cat_stripped = _re2.sub(r"<style[^>]*>.*?</style>", "", _cat_stripped, flags=_re2.DOTALL|_re2.IGNORECASE)
+                    _cat_stripped = _re2.sub(r"<[^>]+>", " ", _cat_stripped)
+                    _cat_page_text = " ".join(_cat_stripped.split())[:3000]
+                except Exception:
+                    pass
+            
+            _cat_result = classify_domain(
+                domain=domain,
+                page_title=res.page_title or "",
+                page_content_text=_cat_page_text,
+                app_store_packages=res.app_store_android_packages or "",
+            )
+            if _cat_result["category"] != "unclassified":
+                res.domain_category = _cat_result["category"]
+                res.domain_category_label = _cat_result["category_label"]
+                res.domain_category_confidence = _cat_result["confidence"]
+                res.domain_category_risk_tier = _cat_result["risk_tier"]
+                res.domain_category_risk_reason = _cat_result["risk_reason"]
+                res.domain_category_signals = ";".join(_cat_result["matched_signals"])
+        except Exception:
+            pass  # Non-critical
+    
+        # === CONTACT CROSS-REFERENCE (OSINT) ===
     # Search web for emails/phones found on the page appearing on other domains.
     # Informational only — helps analysts spot coordinated campaigns.
     try:
