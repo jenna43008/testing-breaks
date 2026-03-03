@@ -23,7 +23,7 @@ DEFAULT_CONFIG = {
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
         "domain_blacklisted": 45,
-        "ip_blacklisted": 45,
+        "ip_blacklisted": 40,
         "blacklist_inconclusive": 15,  # v6.2: DNSBL check timed out — "unknown" ≠ "clean"
         "typosquat_detected": 15,
         "brand_impersonation": 0,
@@ -232,6 +232,11 @@ DEFAULT_CONFIG = {
         "category_risk_high": 15,       # Gambling, crypto, sweepstakes, MLM, adult, pharma
         "category_risk_elevated": 12,   # Romance serial fiction, dating
         "category_risk_moderate": 5,    # VPN/utility apps
+        
+        # === VT EXTERNAL MALICIOUS DOMAINS (v7.7.1) ===
+        "vt_external_malicious_high": 30,   # 3+ external domains on page flagged malicious by VT
+        "vt_external_malicious_medium": 22, # 2 external domains flagged malicious
+        "vt_external_malicious_low": 15,    # 1 external domain flagged malicious
     },
     
     # ==========================================================================
