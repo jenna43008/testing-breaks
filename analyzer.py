@@ -6625,9 +6625,21 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             "subdomain_delegation_high", "subdomain_delegation_medium",
             "ct_reactivated",
             "oauth_phish", "homoglyph_domain", "cdn_tunnel_suspect", "quishing_profile",
-            "content_title_mismatch", "content_cross_domain_email", "content_broker_page", "content_facade", "registration_opaque",
+            "content_title_mismatch", "content_cross_domain_email", "content_broker_page", "registration_opaque",
             "domain_reregistered_recent", "domain_reregistered",
         }
+        # v7.7.1: content_facade only escalates transfer lock on young/suspicious
+        # domains.  Established VT-clean SPAs (React/Angular/Next.js) legitimately
+        # present as "1 visible word, content loaded via JS" — that architectural
+        # pattern should not be treated as post-compromise evidence on a domain
+        # that's been around for years with a clean reputation.
+        _established_vt_clean = (
+            res.domain_age_days >= 365
+            and res.vt_malicious_count == 0
+            and res.vt_total_vendors >= 50
+        )
+        if not _established_vt_clean:
+            _TRANSFER_RISK_SIGNALS.add("content_facade")
         if (res.domain_transfer_lock_recent or res.whois_recently_updated):
             has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
             if has_transfer_risk:
