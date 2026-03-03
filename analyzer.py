@@ -5546,6 +5546,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('BLOCKED ASN', weights.get('blocked_asn_org_score', 20)),
             ('OPAQUE ENTITY', weights.get('opaque_entity', 20)),
             ('TLD VARIANT SPOOF', weights.get('tld_variant_spoofing', 30)),
+            ('UK VARIANT DARK', weights.get('tld_variant_uk_no_dns', 28)),
             ('EMPTY PAGE', weights.get('empty_page', 20)),
             ('ZERO EMAIL AUTH', 20),
             ('HACKLINK KEYWORDS', weights.get('hacklink_keywords', 15)),
@@ -6589,10 +6590,14 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # (HugeDomains, Sedo, Afternic) routinely add transfer locks to protect
     # domains listed for sale.  A recent lock on a parked domain is expected
     # marketplace behavior, not a post-compromise lockdown signal.
+    # v7.7.1: Both transfer_lock_recent and whois_recently_updated are added
+    # independently so combo rules requiring both can fire.  Previous elif
+    # prevented whois_recently_updated from entering the signals set when
+    # transfer_lock_recent was True, silently breaking combo detection.
     if not res.is_parking_page:
         if res.domain_transfer_lock_recent:
             add("transfer_lock_recent", 0)
-        elif res.whois_recently_updated:
+        if res.whois_recently_updated:
             add("whois_recently_updated", 0)
         
         # Only score transfer lock / WHOIS update when content risk is present
@@ -6617,7 +6622,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             if has_transfer_risk:
                 if res.domain_transfer_lock_recent:
                     add("transfer_lock_with_risk", weights.get('transfer_lock_recent', 15))
-                else:
+                if res.whois_recently_updated:
                     add("whois_updated_with_risk", weights.get('whois_recently_updated', 10))
     
     # === MX HIJACK FINGERPRINT (v7.3.1) ===
