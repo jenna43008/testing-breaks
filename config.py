@@ -37,9 +37,9 @@ DEFAULT_CONFIG = {
         # === VIRUSTOTAL REPUTATION ===
         "vt_malicious_high": 100,           # 5+ vendors flag as malicious — should deny alone
         "vt_malicious_medium": 100,         # 3-4 vendors flag as malicious
-        "vt_malicious_low": 22,            # 1-2 vendors flag as malicious
-        "vt_suspicious": 15,               # 3+ vendors flag as suspicious
-        "vt_suspicious_low": 5,            # 1-2 vendors flag as suspicious
+        "vt_malicious_low": 25,            # 1-2 vendors flag as malicious
+        "vt_suspicious": 20,               # 3+ vendors flag as suspicious
+        "vt_suspicious_low": 15,            # 1-2 vendors flag as suspicious
         "vt_negative_community": 25,       # Negative community reputation
         "vt_clean": 0,                    # Clean bill from 50+ vendors (bonus)
         
