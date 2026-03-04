@@ -6337,7 +6337,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         _hcp_signals.append("empty_page")
     if res.tld_variant_uk_no_dns:
         _hcp_signals.append("uk_variant_dark")
-    if not res.has_dkim and res.dmarc_policy == "none" and "softfail" in (res.spf_record or "").lower():
+    if not res.dkim_exists and res.dmarc_policy == "none" and res.spf_mechanism == "~all":
         _hcp_signals.append("weak_email_auth")
     if res.hacklink_hidden_injection:
         _hcp_signals.append("hidden_injection")
