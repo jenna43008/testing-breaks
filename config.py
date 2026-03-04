@@ -69,7 +69,7 @@ DEFAULT_CONFIG = {
         "content_placeholder": 20,             # Placeholder content (lorem ipsum, coming soon)
         "content_facade": 35,                  # SPA shell: title present but <30 visible words + external JS
         "content_facade_established": 10,      # v7.6: Reduced weight for SPAs on established domains (age>1yr + enterprise MX/DKIM + VT clean)
-        "registration_opaque": 35,              # Both RDAP+WHOIS failed — cannot determine age/registrar (standalone)
+        "registration_opaque": 25,              # Both RDAP+WHOIS failed — cannot determine age/registrar (standalone)
         "registration_opaque_with_risk": 20,   # Registration opaque + content risk signals present (facade/mismatch/broker)
         "domain_reregistered_recent_with_risk": 18,  # Dropped & re-registered ≤90d + content risk
         "domain_reregistered_recent": 6,             # Dropped & re-registered ≤90d, no content risk
@@ -78,7 +78,7 @@ DEFAULT_CONFIG = {
         # === TRANSFER LOCK / DOMAIN TAKEOVER ===
         "transfer_lock_recent": 35,        # Transfer lock recently added (post-compromise lockdown signal)
         "transfer_lock_recent_base": 15,   # Base score for recent lock on established (1yr+) domains
-        "whois_recently_updated": 25,      # WHOIS updated in last 30 days
+        "whois_recently_updated": 10,      # WHOIS updated in last 30 days
         
         # === EMPTY PAGE ===
         "empty_page": 20,                  # Reachable domain with empty/near-empty content
@@ -186,7 +186,7 @@ DEFAULT_CONFIG = {
         "exfil_drop_script": 30,              # Telegram/Discord/base64 exfil in page source
         "form_action_kit_strong": 25,         # v7.4: <form action="gate.php"> — near-certain kit
         "suspicious_page_title": 5,           # v7.4: "Verify Your Identity" etc — combo fuel
-        "whois_privacy": 25,                    # v7.5.2: Reduced from 10 — combo fuel only, GDPR/ICANN redaction is regulatory not evasion
+        "whois_privacy": 5,                    # v7.5.2: Reduced from 10 — combo fuel only, GDPR/ICANN redaction is regulatory not evasion
         "registrar_high_risk": 8,              # v7.6: High-risk registrar on new domain (<90d)
         "registrar_high_risk_moderate": 4,     # v7.6: High-risk registrar on mid-age domain (90d-1yr)
         "redirect_arpa_abuse": 30,             # v7.6: .arpa hostname in redirect chain (reverse DNS phishing)
@@ -1171,7 +1171,7 @@ DEFAULT_CONFIG = {
             "patterns": [
                 "google.com", "googlemail.com", "gmail-smtp",           # Google Workspace
                 "outlook.com", "microsoft.com", "protection.outlook",   # Microsoft 365
-                "pphosted.com", "proofpoint.com",                       # Proofpoint
+                "pphosted.com", "ppe-hosted.com", "proofpoint.com",     # Proofpoint
                 "mimecast.com",                                         # Mimecast
                 "barracuda",                                            # Barracuda
                 "messagelabs.com", "symantec",                          # Broadcom/Symantec
