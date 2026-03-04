@@ -6670,6 +6670,14 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         )
         if not _established_vt_clean:
             _TRANSFER_RISK_SIGNALS.add("content_facade")
+        # v7.8: HIGH-tier category risk (pharma, gambling, crypto, etc.) makes a
+        # recent WHOIS update meaningful — ownership changes on high-risk-category
+        # domains warrant scrutiny even when infrastructure looks clean.
+        # Injected as a synthetic signal because category_risk scoring runs later;
+        # the signal set doesn't have domain_category_risk yet at this point.
+        if res.domain_category_risk_tier == "HIGH":
+            signals.add("_category_risk_high")
+            _TRANSFER_RISK_SIGNALS.add("_category_risk_high")
         if (res.domain_transfer_lock_recent or res.whois_recently_updated):
             has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
             if has_transfer_risk:
@@ -6753,7 +6761,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.domain_category:
         _cat_tier = res.domain_category_risk_tier
         _cat_base = {
-            "HIGH": weights.get('category_risk_high', 15),
+            "HIGH": weights.get('category_risk_high', 30),
             "ELEVATED": weights.get('category_risk_elevated', 12),
             "MODERATE": weights.get('category_risk_moderate', 5),
         }.get(_cat_tier, 0)
@@ -6765,12 +6773,25 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 bool(res.domain_age_days >= 365),
                 bool(res.vt_malicious_count == 0 and res.vt_total_vendors >= 50),
             ])
-            if _cat_legit >= 3:
-                add("domain_category_risk", 0)
-            elif _cat_legit >= 2:
-                add("domain_category_risk", max(1, _cat_base // 2))
+            # HIGH tier = compliance/reputation risk regardless of infrastructure
+            # legitimacy.  A well-configured pharma sender is still pharma.
+            # Legitimacy signals reduce the score but never below half the base.
+            if _cat_tier == "HIGH":
+                _cat_floor = max(1, _cat_base // 2)
+                if _cat_legit >= 3:
+                    add("domain_category_risk", _cat_floor)
+                elif _cat_legit >= 2:
+                    add("domain_category_risk", max(_cat_floor, _cat_base * 2 // 3))
+                else:
+                    add("domain_category_risk", _cat_base)
+            # ELEVATED/MODERATE = softer risk where legitimacy genuinely reduces concern
             else:
-                add("domain_category_risk", _cat_base)
+                if _cat_legit >= 3:
+                    add("domain_category_risk", 0)
+                elif _cat_legit >= 2:
+                    add("domain_category_risk", max(1, _cat_base // 2))
+                else:
+                    add("domain_category_risk", _cat_base)
     
         # === UNIFIED RULES ENGINE ===
     # All scoring logic beyond base weights (former combos + custom rules)
