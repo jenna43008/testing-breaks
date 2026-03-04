@@ -24,6 +24,20 @@ calculate_score() as a signal that can amplify other risk indicators.
 v7.7.0 -- Initial implementation.
           Targets romance serial fiction cluster first
           (swoon-stories.app, lovelit.app, novelle-stories.app ...)
+v7.8   -- FIX: Short keyword false positives.
+          1) Substring matching (domain_flat) now requires keywords ≥5
+             chars.  Short keywords (keto, bet, diet, cam, eth, date, ...)
+             only match as exact domain words (split on hyphens/dots).
+             Prevents "keto" matching "ticketoo", "bet" matching
+             "alphabet", "diet" matching "audited", etc.
+          2) Prefix-style regex patterns: removed short keywords that
+             are common English word prefixes (bet→better, cam→camera,
+             win→window, free→freedom, date→update, diet→dietrich,
+             defi→definite).  Longer variants or exact word matching
+             cover the intended detection.
+          3) Suffix-style regex patterns: removed ≤4 char keywords
+             that match as natural word endings (bet in alphabet,
+             date in mandate).
 """
 
 import re
@@ -53,11 +67,11 @@ CATEGORIES = {
             "romancely", "lovestory", "readlove",
         ],
         "domain_patterns": [
-            r"(?:love|romance|passion|desire|swoon|amora|noir)\w*(?:lit|read|novel|book|story|stories)",
+            r"\b(?:love|romance|passion|desire|swoon|amora|noir)\w*(?:lit|read|novel|book|story|stories)",
             r"\w+[-.]stories\.",
             r"\w+[-.]novels?\.",
             r"\w+[-.]reads?\.",
-            r"(?:read|book|lit|novel)\w+\.app$",
+            r"\b(?:read|book|novel)\w+\.app$",
         ],
         "tld_boost": [".app", ".io", ".club"],
         "content_keywords": [
@@ -81,8 +95,10 @@ CATEGORIES = {
             "sportsbet", "wager", "bookie", "odds", "punt",
         ],
         "domain_patterns": [
-            r"(?:bet|casino|poker|slots?|gambl)\w*\.",
-            r"\w+(?:bet|bets|casino|poker|slots)\.",
+            r"\b(?:casino|poker|slots?|gambl|betting|wager)[-\w]*\.",
+            r"\w+(?:casino|poker|slots|betting|gamble)\.",
+            r"\bbet\d",                                          # bet365, bet9ja, bet777
+            r"(?:sports|live|lucky|super|mega|power|royal|golden)\w*bet\.",  # sportsbet, livebet
         ],
         "tld_boost": [".bet", ".casino", ".games", ".win"],
         "content_keywords": [
@@ -104,8 +120,8 @@ CATEGORIES = {
             "stake", "staking", "wallet", "mining",
         ],
         "domain_patterns": [
-            r"(?:crypto|bitcoin|defi|nft|forex|trade)\w*\.",
-            r"\w+(?:swap|exchange|token|coin|trade)\.",
+            r"\b(?:crypto|bitcoin|forex|trading)[-\w]*\.",
+            r"\w+(?:exchange|token|trade|swap)\.",
         ],
         "tld_boost": [".finance", ".exchange", ".trading", ".crypto"],
         "content_keywords": [
@@ -126,8 +142,8 @@ CATEGORIES = {
             "lovematch", "meetme", "chatmate", "soulmate",
         ],
         "domain_patterns": [
-            r"(?:date|dating|match|flirt|singles|hookup|cupid)\w*\.",
-            r"\w+(?:date|dating|match|meet)\.",
+            r"\b(?:dating|flirt|singles|hookup|cupid)[-\w]*\.",
+            r"\w+(?:dating|match)\.",
         ],
         "tld_boost": [".dating", ".singles", ".love"],
         "content_keywords": [
@@ -148,7 +164,7 @@ CATEGORIES = {
             "freegift", "winprize",
         ],
         "domain_patterns": [
-            r"(?:win|free|prize|reward|sweep|gift)\w*\.",
+            r"\b(?:prize|reward|sweep|giveaway)[-\w]*\.",
             r"\w+(?:rewards?|prize|giveaway|sweeps)\.",
         ],
         "tld_boost": [".win", ".gift", ".promo"],
@@ -170,8 +186,8 @@ CATEGORIES = {
             "financialfreedom", "residual",
         ],
         "domain_patterns": [
-            r"(?:earn|make|get)(?:money|cash|rich|paid)\w*\.",
-            r"(?:passive|residual)(?:income|cash|earn)\w*\.",
+            r"\b(?:earn|make|get)(?:money|cash|rich|paid)[-\w]*\.",
+            r"\b(?:passive|residual)(?:income|cash|earn)[-\w]*\.",
         ],
         "tld_boost": [".money", ".cash", ".finance"],
         "content_keywords": [
@@ -192,7 +208,7 @@ CATEGORIES = {
             "escort", "erotic", "sexy",
         ],
         "domain_patterns": [
-            r"(?:xxx|porn|adult|nsfw|cam|erotic|sexy)\w*\.",
+            r"\b(?:xxx|porn|adult|nsfw|webcam|erotic|sexy)[-\w]*\.",
         ],
         "tld_boost": [".xxx", ".adult", ".sex", ".porn"],
         "content_keywords": [
@@ -211,7 +227,7 @@ CATEGORIES = {
             "nootropic", "detox",
         ],
         "domain_patterns": [
-            r"(?:pharma|pills?|supplement|diet|keto|cbd|viagra)\w*\.",
+            r"\b(?:pharma|pills?|supplement|keto|cbd|viagra)[-\w]*\.",
         ],
         "tld_boost": [".health", ".pharmacy"],
         "content_keywords": [
@@ -230,7 +246,7 @@ CATEGORIES = {
             "securevpn", "fastvpn",
         ],
         "domain_patterns": [
-            r"(?:vpn|proxy|cleaner|booster|antivirus)\w*\.",
+            r"\b(?:vpn|proxy|cleaner|booster|antivirus)[-\w]*\.",
             r"\w+(?:vpn|proxy|cleaner|booster)\.",
         ],
         "tld_boost": [".app", ".tech"],
@@ -334,12 +350,20 @@ def classify_domain(
         sigs = []
 
         # --- Domain keyword matching (max 3 x 2pts = 6) ---
+        # Two matching modes:
+        #   1. Exact word match (domain_words) — always safe, any length
+        #   2. Substring match (domain_flat) — catches compounds like
+        #      "sportsbetking" but ONLY for keywords ≥5 chars.  Short
+        #      keywords produce false positives inside unrelated words:
+        #        "keto" in "ticketoo"  |  "bet" in "alphabet"
+        #        "diet" in "audited"   |  "cam" in "camera"
+        _SUBSTR_MIN_LEN = 5
         kw_hits = 0
         for kw in cat_def.get("domain_keywords", []):
             if kw in domain_words:
                 kw_hits += 1
                 sigs.append("domain_word:" + kw)
-            elif kw in domain_flat:
+            elif len(kw) >= _SUBSTR_MIN_LEN and kw in domain_flat:
                 kw_hits += 1
                 sigs.append("domain_substr:" + kw)
             if kw_hits >= 3:
