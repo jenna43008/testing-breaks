@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "check_rdap": True,
     "admin_password": "admin123",  # CHANGE THIS!
     "vt_api_key": "3b4caf4818ac9630c9fae5226522348ec9d7723c34b4f5a973dd3afdd31f287f",   # VirusTotal API key (hardcoded)
-    "config_version": "7.6.1",              # Used for weight migration between versions
+    "config_version": "7.8",              # Used for weight migration between versions
     
     "weights": {
         # === FRAUD/PHISHING SIGNALS (High weights - these SHOULD trigger DENY) ===
@@ -51,6 +51,8 @@ DEFAULT_CONFIG = {
         "vuln_plugins_strong_mitigation": -18,   # Vuln plugins but 3+ legitimacy signals (established, app store, enterprise MX, etc.)
         "vuln_plugins_moderate_mitigation": -10,  # Vuln plugins but 2 legitimacy signals
         "vuln_plugins_weak_mitigation": -15,      # v7.6: Vuln plugins but 1 legitimacy signal (e.g. VT clean alone)
+        "hacklink_campaign_profile": 25,    # v7.8: Hacklink campaign infrastructure profile (content anomaly + 2 infra signals)
+        "hacklink_campaign_profile_strong": 40,  # v7.8: Strong profile (content anomaly + 3+ infra signals)
         "hacklink_spam_links": 35,         # 5+ hidden spam links in content
         "malicious_script": 100,            # SocGholish/FakeUpdates/obfuscated script injection — HIGH confidence (5+ multi-signal score)
         "malicious_script_medium": 35,      # v7.2: MEDIUM confidence malicious script (3-4 multi-signal score) — moderate penalty; common on sites with third-party tracking
@@ -566,6 +568,14 @@ DEFAULT_CONFIG = {
         {"name": "hacklink_no_auth", "score": 18, "label": "hacklink + no email auth — domain may be abandoned", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_detected", "no_dmarc", "no_spf"], "if_any": [], "if_not": []},
         {"name": "hacklink_vulnerable_wp_new", "score": 22, "label": "vulnerable WP plugins + domain <90d", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_vulnerable_plugins", "domain_lt_90d"], "if_any": [], "if_not": []},
         {"name": "hacklink_spam_links_cloaking", "score": 20, "label": "spam links + 403 cloaking", "category": "Hacklink / SEO Spam", "enabled": False, "if_all": ["hacklink_spam_links", "status_403_cloaking"], "if_any": [], "if_not": []},
+
+        # --- Hacklink Campaign Profile Combos (v7.8) ---
+        # These amplify the campaign profile signal when combined with VT flags or
+        # other high-confidence indicators.  The profile itself is scored in analyzer.py
+        # as a composite (not a pairwise rule) because it requires 3-of-N logic.
+        {"name": "hacklink_profile_vt_flagged", "score": 20, "label": "hacklink campaign profile + VT flagged — infrastructure fingerprint confirmed by threat intel", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_campaign_profile"], "if_any": ["vt_malicious_high", "vt_malicious_medium", "vt_malicious_low", "vt_suspicious", "vt_suspicious_low"], "if_not": []},
+        {"name": "hacklink_profile_blacklisted", "score": 18, "label": "hacklink campaign profile + domain blacklisted", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_campaign_profile", "domain_blacklisted"], "if_any": [], "if_not": []},
+        {"name": "hacklink_profile_transfer_lock", "score": 15, "label": "hacklink campaign profile + recent transfer lock — post-compromise lockdown", "category": "Hacklink / SEO Spam", "enabled": True, "if_all": ["hacklink_campaign_profile", "transfer_lock_recent"], "if_any": [], "if_not": []},
 
         # --- Malicious Script / Hidden Injection (6 rules) ---
         {"name": "malicious_script_new_domain", "score": 30, "label": "malicious script + domain <30d — active drive-by", "category": "Malicious Script", "enabled": True, "if_all": ["malicious_script", "domain_lt_30d"], "if_any": [], "if_not": []},
@@ -1373,6 +1383,15 @@ def load_config() -> dict:
                                         elif field == 'label':
                                             user_rule['label'] = value
                         merged['config_version'] = '7.6.1'
+                    
+                    # v7.8 migration: hacklink campaign profile detection.
+                    # New composite signal (hacklink_campaign_profile) detects the
+                    # infrastructure fingerprint of hacklink-compromised domains even
+                    # when injected content is cloaked or cleaned up.  Two new weights
+                    # and 3 new combo rules are added automatically via DEFAULT_CONFIG
+                    # merge; this migration just bumps the version marker.
+                    if saved_version < '7.8':
+                        merged['config_version'] = '7.8'
                 # Legacy: if old config has combos, ignore them (now in rules)
                 loaded.pop('combos', None)
                 loaded.pop('disabled_combos', None)
