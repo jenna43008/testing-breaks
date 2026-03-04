@@ -4,108 +4,6 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
-VERSION: 7.8 (Mar 2026)
-- HACKLINK CAMPAIGN PROFILE DETECTION: Composite signal that detects the
-  infrastructure fingerprint of hacklink-compromised domains even when the
-  fetcher cannot see injected content (cloaked, cleaned up, or blocked).
-  Requires a content anomaly gate (empty_page, content_facade, or
-  hacklink_keywords) plus 2+ infrastructure signals from the hacklink target
-  profile (self-hosted email, dark UK variant, budget hosting, WordPress,
-  weak email auth, opaque registration).  Scored as a risk amplifier:
-  MODERATE (+25 at gate+2 infra) or HIGH (+40 at gate+3+ infra).
-  NOT an autofail — probabilistic, not confirmatory.
-  3 new combo rules: hacklink_profile_vt_flagged, hacklink_profile_blacklisted,
-  hacklink_profile_transfer_lock.
-  New fields: hacklink_campaign_profile, hacklink_campaign_profile_signals,
-  hacklink_campaign_profile_confidence.
-  Pattern match: 🕸️ Hacklink Campaign Profile (confidence: signals)
-
-VERSION: 7.7.0 (Mar 2026)
-- ROOT DOMAIN FALLBACK: When submitted domain (e.g., stage-app.shiftposts.com)
-  does not resolve, automatically extracts and analyzes the registrable root
-  domain (shiftposts.com) instead. All infrastructure checks (SPF, DMARC, MX,
-  WHOIS, TLS, content, hosting, blacklists, etc.) run against the root domain.
-  Prevents staging/dev subdomains from auto-failing with DENY score 100.
-- SUBMITTED DOMAIN VT CHECK: When root fallback is active, the submitted
-  subdomain is also checked on VirusTotal separately. VT result is always
-  reported in the summary for analyst visibility. Only contributes to the
-  score if VT flags the submitted domain as malicious (40 pts default).
-  This catches cases where a subdomain is specifically weaponized while the
-  root domain remains clean.
-- VULNERABLE PLUGINS SCORING FIX: Replaced score-then-claw-back pattern
-  (flat 25 pts + complex mitigation of -7 to -18) with upfront context split:
-  25 pts when active compromise evidence exists (hacklink keywords, hidden
-  injection, WP compromise, spam links, malicious script), 8 pts when plugins
-  are present but no exploitation evidence. Eliminates the confusing multi-signal
-  mitigation block. Root cause: jukebooks.gr (WooCommerce + Elementor, VT 0/94,
-  enterprise MX, DKIM, e-commerce confirmed) was scoring 47/APPROVE from stacking
-  theoretical plugin risk with opaque registration amplification.
-- OPAQUE REGISTRATION FACADE OVERRIDE: Registration opaque no longer amplifies
-  from 8 to 20 pts when the only content risk signal is a facade (SPA shell)
-  AND the domain has VT clean + strong legitimacy signals (enterprise MX, DKIM,
-  or confirmed e-commerce). Addresses ccTLD registries (.gr, .jp, .kr) where
-  WHOIS is not publicly accessible — opaque registration is a registry limitation,
-  not a risk signal, when combined with strong infrastructure indicators.
-- New fields: submitted_domain, analysis_domain, used_root_fallback,
-  submitted_domain_resolves, submitted_domain_vt_malicious,
-  submitted_domain_vt_suspicious, submitted_domain_vt_detail
-- New scoring signal: submitted_subdomain_vt_malicious (default 40 pts)
-- New weight: hacklink_vulnerable_plugins_no_compromise (default 8 pts)
-- UK VARIANT DARK VT-CLEAN OVERRIDE: tld_variant_uk_no_dns now reduces from
-  28 to 5 pts when domain has VT clean (0/94+) plus 2+ legitimacy signals
-  (DKIM, HTTPS, app store, PTR match, enterprise MX, e-commerce) regardless
-  of domain age. Root cause: hearmenders.com (73/DENY) and itemmastercs2.com
-  (57/DENY) both had domain_age under 365d, triggering full UK variant
-  penalty despite VT 0/94 and strong legitimacy signals.
-- BUDGET HOST AGE AMPLIFIER FIX: Removed hosting_budget_shared from
-  _CONTENT_RISK_SIGNALS. Budget hosting scores 8 pts but no longer
-  triggers the young-domain amplifier (+10-25 pts).
-- DOMAIN CATEGORY RISK PROFILING: New module (domain_category.py)
-  classifies domains into business categories (romance serial fiction,
-  gambling, crypto, dating, sweepstakes, MLM, adult, pharma, VPN/utility).
-  Each category has a notification-abuse risk tier with configurable
-  scoring. Legitimacy attenuation suppresses for established operators.
-  New weights: category_risk_high(15), category_risk_elevated(12),
-  category_risk_moderate(5).
-- BUDGET HOST AGE AMPLIFIER FIX: Removed hosting_budget_shared from the
-  _CONTENT_RISK_SIGNALS set that activates age-based scoring. Budget hosting
-  (SiteGround, Namecheap, etc.) scores its own 8 pts but no longer triggers
-  the young-domain amplifier (+10 to +25 pts). Root cause: itemmastercs2.com
-  (VT 0/94, HTTPS, app store) scored 57/DENY partly because SiteGround
-  hosting activated the age amplifier on a clean young domain.
-
-VERSION: 7.7.1 (Mar 2026)
-- VT EXTERNAL DOMAIN CHECK: Checks external scripts and links found on the
-  analysed page against VirusTotal. A clean-looking domain can reference
-  malicious external resources (e.g. recaptcha.net injected vs legitimate
-  www.recaptcha.net). Filters CDN whitelist and known SaaS domains, checks
-  up to 5 remaining externals. New weights: vt_external_malicious_high(30),
-  vt_external_malicious_medium(22), vt_external_malicious_low(15).
-
-VERSION: 7.6.1 (Mar 2026)
-- SPA FALSE POSITIVE REDUCTION: Five scoring adjustments targeting the pattern
-  where legitimate JS-rendered apps (SPAs) on established domains accumulate
-  deny-level scores from stacking low-confidence signals:
-  1. TLD VARIANT UK: Established (1yr+) VT-clean domains now score 5 instead of
-     28 for dark .co.uk variant — non-UK businesses (Egyptian, Indian, US) don't
-     register .co.uk, so dark variant is expected, not suspicious.
-  2. EMAIL AUTH COMBO CAP: combo_no_dkim_weak_dmarc_spf_soft and
-     combo_budget_host_no_dkim now suppressed on established domains — default
-     Hostinger/budget-host email config on 1yr+ domains is a deliverability
-     choice, not fraud signal. Prevents triple-counting same underlying issue.
-  3. IFRAME+JS REDIRECT: combo_iframe_js_redir suppressed on established VT-clean
-     domains and renamed from "phishing kit loader" to neutral label — iframes on
-     content sites are often video embeds, donation widgets, audio players.
-  4. FACADE+NO_DKIM: combo_facade_no_dkim suppressed on established domains —
-     SPA architecture + default email config shouldn't stack.
-  5. VT CLEAN FOR ESTABLISHED SPAs: VT 0/93 bonus now credited on content facades
-     when domain is 1yr+ — VT scanning a mature SPA as clean IS meaningful.
-- Root cause: quranst.com (Quran education site, Egyptian business, 1yr+ domain,
-  VT 0/93, active social media) scored 100/DENY from stacking: UK variant dark
-  (+28), contact-form-7 (+15/-10), hidden iframe (+15), iframe+JS redirect combo
-  (+12), budget host (+10), facade+no_dkim combo (+10), email auth combos (+10),
-  JS redirect (+3). All signals had benign explanations.
-
 VERSION: 7.5.1 (Feb 2026)
 - PARKING PAGE FALSE POSITIVE SUPPRESSION: Parking pages (HugeDomains, Sedo,
   GoDaddy, Afternic, Dan.com, etc.) no longer trigger phishing kit autofail.
@@ -122,6 +20,20 @@ VERSION: 7.5.1 (Feb 2026)
   (marketplace locks domains for sale — expected behavior, not post-compromise),
   (7) pattern match indicator only shows malicious_script when actually scored.
   New constants: KNOWN_PARKING_DOMAINS (25 domains), KNOWN_PARKING_SCRIPT_DOMAINS (10).
+- NEW DOMAIN FALSE POSITIVE SUPPRESSION: Signals that indicate compromise on
+  established domains but are normal on new domains are now age-gated:
+  (1) empty_page: suppressed on domains < 30 days (site hasn't been built yet),
+  (2) tld_variant_uk_no_dns: suppressed on domains < 90 days (.co.uk not registered yet),
+  (3) hacklink_campaign_profile composite: only fires on domains 90+ days old.
+  All three signals are excluded from the signals set on young domains, preventing
+  combo rules (e.g., combo_empty_page_uk_variant) from cascading into false denials.
+- NEW HACKLINK CAMPAIGN PROFILE COMPOSITE: Identifies domains matching known hacklink
+  target fingerprints (2+ of: empty_page, uk_variant_dark, weak_email_auth,
+  hidden_injection, cpanel). MODERATE at 2 signals, HIGH at 3+. Only fires on
+  established domains (90+ days) — new domains with empty pages and no .co.uk are normal.
+- NEW UK VARIANT DARK SIGNAL: Detects when a .co.uk TLD variant has no DNS, indicating
+  the domain operates on an alternate TLD while the UK variant is dead/unheld. Only
+  scored on established domains (90+ days).
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
   Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
@@ -228,14 +140,9 @@ VERSION: 4.4 (Feb 2026)
 - Added business identity verification for e-commerce sites
 - Added non-hyphen prefix detection (app, my, login, etc.)
 - Added access restriction detection (401/403)
-- v7.6: Demoted 403 to informational-only (not scored) — too many FPs from WAF/bot protection
-  - Zeroed status_403_cloaking weight, disabled all 19 combo rules
-  - access_restricted scoring now requires 401 (not 403-only)
-  - opaque_entity no longer cascades from 403-only
-  - 403 still detected, logged, and displayed for manual review
 """
 
-ANALYZER_VERSION = "7.8"
+ANALYZER_VERSION = "7.5"
 
 import re
 import json
@@ -271,7 +178,6 @@ except ImportError:
     WHOIS_AVAILABLE = False
 
 from config import DEFAULT_CONFIG, get_weight
-from icann_rdap_fallback import icann_rdap_fallback
 
 try:
     from app_store_detection import check_app_store_presence
@@ -293,12 +199,9 @@ except Exception:
 
 try:
     from content_checks import check_content_identity
-    from domain_category import classify_domain
-    DOMAIN_CATEGORY_AVAILABLE = True
     CONTENT_CHECKS_AVAILABLE = True
 except Exception:
     CONTENT_CHECKS_AVAILABLE = False
-    DOMAIN_CATEGORY_AVAILABLE = False
 
 
 # ============================================================================
@@ -316,15 +219,6 @@ class DomainApprovalResult:
     # === METADATA ===
     scan_timestamp: str = ""
     risk_level: str = ""
-    
-    # === SUBMITTED vs ANALYSIS DOMAIN (v7.7) ===
-    submitted_domain: str = ""                   # Original domain as entered by user
-    analysis_domain: str = ""                    # Domain actually used for analysis (root if subdomain didn't resolve)
-    used_root_fallback: bool = False             # True if submitted subdomain didn't resolve and root was used
-    submitted_domain_resolves: bool = False      # Whether the submitted subdomain has an A record
-    submitted_domain_vt_malicious: bool = False  # VT flagged the submitted subdomain as malicious
-    submitted_domain_vt_suspicious: bool = False # VT flagged the submitted subdomain as suspicious
-    submitted_domain_vt_detail: str = ""         # Summary VT info for the submitted subdomain
     
     # === DNS / NETWORK ===
     resolved: bool = False
@@ -430,8 +324,6 @@ class DomainApprovalResult:
     redirect_domains: str = ""
     redirect_cross_domain: bool = False
     redirect_uses_temp: bool = False
-    redirect_arpa_abuse: bool = False           # .arpa hostname found in redirect chain (reverse DNS abuse)
-    redirect_arpa_domains: str = ""             # Which .arpa domains were found
     final_url: str = ""
     
     # === WEB: STATUS CODES ===
@@ -465,7 +357,6 @@ class DomainApprovalResult:
     phishing_kit_filename: str = ""            # Which filename matched (e.g., "gate.php")
     phishing_kit_filename_strong: bool = False # True if strong-signal filename
     has_exfil_drop_script: bool = False        # Telegram/Discord/exfil patterns in source
-    exfil_is_strong: bool = False              # v7.6: At least one STRONG exfil signal (not just js_email_exfil)
     exfil_drop_signals: str = ""               # Semicolon-separated signal names that fired
     exfil_drop_details: str = ""               # Human-readable descriptions
     phishing_kit_detected: bool = False        # Composite: multiple kit signals confirm a kit
@@ -485,8 +376,6 @@ class DomainApprovalResult:
     page_title_match: str = ""                 # Which suspicious pattern matched
     whois_privacy: bool = False                # WHOIS registrant uses privacy/proxy service
     whois_privacy_service: str = ""            # Which privacy service detected
-    registrar_high_risk: bool = False          # Registrar known for lax verification / abuse-friendly
-    registrar_high_risk_name: str = ""         # Which high-risk registrar matched
     
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     has_hijack_path_pattern: bool = False
@@ -540,8 +429,13 @@ class DomainApprovalResult:
     tld_variant_content_words: int = 0            # Word count on variant's page
     tld_variant_signup_content_words: int = 0     # Word count on signup domain's page
     tld_variant_summary: str = ""                 # Human-readable summary of the comparison
-    tld_variant_uk_no_dns: bool = False           # UK business TLD variant (.co.uk) exists in generation but has no DNS
-    tld_variant_uk_no_dns_domain: str = ""        # Which UK variant had no DNS
+    tld_variant_uk_no_dns: bool = False          # v7.5.1: UK TLD variant (.co.uk) has no DNS
+    tld_variant_uk_no_dns_domain: str = ""       # The dark UK variant (e.g., "example.co.uk")
+    
+    # === HACKLINK CAMPAIGN PROFILE (v7.5.1) ===
+    hacklink_campaign_profile: bool = False       # Composite: domain matches hacklink target fingerprint
+    hacklink_campaign_profile_confidence: str = "" # MODERATE or HIGH
+    hacklink_campaign_profile_signals: str = ""   # Semicolon-separated component signals
     
     # === HOSTING PROVIDER DETECTION ===
     hosting_provider: str = ""                  # Detected provider name (e.g., "Hostinger", "GoDaddy")
@@ -580,7 +474,6 @@ class DomainApprovalResult:
     
     # === VIRUSTOTAL REPUTATION ===
     vt_available: bool = False                   # True if VT API key was configured and query succeeded
-    vt_error: str = ""                           # Error message if VT check failed (auth, timeout, etc.)
     vt_malicious_count: int = 0                  # Vendors flagging domain as malicious
     vt_suspicious_count: int = 0                 # Vendors flagging domain as suspicious
     vt_total_vendors: int = 0                    # Total vendors that analyzed the domain
@@ -602,9 +495,6 @@ class DomainApprovalResult:
     hacklink_vulnerable_plugins: str = ""         # Semicolon-separated vulnerable WP plugins
     hacklink_spam_link_count: int = 0            # Number of spam links found in content
     hacklink_spam_links_found: str = ""          # Semicolon-separated spam/phishing URLs found in content
-    hacklink_campaign_profile: bool = False       # v7.8: Domain matches hacklink campaign infrastructure fingerprint
-    hacklink_campaign_profile_signals: str = ""   # v7.8: Which campaign profile signals triggered (semicolon-separated)
-    hacklink_campaign_profile_confidence: str = "" # v7.8: MODERATE or HIGH
     hacklink_malicious_script: bool = False       # SocGholish/FakeUpdates/obfuscated script injection
     hacklink_malicious_script_confidence: str = "" # HIGH, MEDIUM, or NONE — multi-signal confidence level
     hacklink_malicious_script_signals: str = ""    # Semicolon-separated signal names that fired
@@ -619,8 +509,6 @@ class DomainApprovalResult:
     content_title_body_detail: str = ""             # Human-readable mismatch explanation
     content_cross_domain_emails: str = ""           # Semicolon-sep emails from different domain found on page
     content_cross_domain_email_domains: str = ""    # Which foreign domains those emails belong to
-    content_suspicious_contact_email: str = ""       # Emails matching spam-infra or template patterns (semicolon-sep)
-    content_suspicious_contact_type: str = ""        # Type: spam_infra, template_placeholder, or both
     content_page_privacy_emails: str = ""           # Privacy provider emails found on page (proton, tutanota)
     content_page_freemail_contacts: str = ""        # Freemail used as business contact on page
     content_is_broker_page: bool = False             # Domain broker / parking / for-sale page detected
@@ -633,24 +521,8 @@ class DomainApprovalResult:
     content_is_facade: bool = False                  # SPA shell: title present but <30 visible words + external JS
     content_facade_detail: str = ""                  # Explanation of why facade was flagged
     content_external_script_domains: str = ""        # Non-CDN external script domains (semicolon-sep)
-    content_has_viral_loops: bool = False             # app.viral-loops.com script detected (referral fraud tool)
     content_external_link_domains: str = ""          # All external domains linked via <a href> (semicolon-sep, with paths)
-    # === VT EXTERNAL DOMAIN CHECK (v7.7.1) ===
-    vt_external_malicious_domains: str = ""          # Semicolon-sep malicious external domains found on page
-    vt_external_malicious_count: int = 0             # Count of malicious external domains
-    vt_external_malicious_details: str = ""          # JSON: {domain: {malicious: N, total: N, threats: [...]}}
-    vt_external_checked_count: int = 0               # How many external domains were VT-checked
-    content_arpa_links: bool = False                 # Page contains links/forms/scripts pointing to .arpa domains
-    content_arpa_domains: str = ""                   # Which .arpa domains found in page content
     contact_reuse_results: str = ""                   # JSON: contact info found on other domains (OSINT cross-reference)
-    
-    # === DOMAIN CATEGORY RISK PROFILING (v7.7) ===
-    domain_category: str = ""                         # Category key (e.g. "romance_serial_fiction")
-    domain_category_label: str = ""                   # Human-readable label
-    domain_category_confidence: int = 0               # Classification confidence (0-18)
-    domain_category_risk_tier: str = ""               # HIGH, ELEVATED, MODERATE, LOW
-    domain_category_risk_reason: str = ""             # Why this category is risky for notifications
-    domain_category_signals: str = ""                 # Semicolon-separated classification signals
     content_visible_word_count: int = -1             # Number of visible words on page (-1 = not checked)
     registration_opaque: bool = False                # Both RDAP and WHOIS failed — cannot determine domain age/registrar
     domain_reregistered: bool = False                # RDAP shows a reregistration event (domain was dropped + re-bought)
@@ -837,13 +709,6 @@ EXFIL_DROP_PATTERNS = [
     (_re.compile(rb'''\.open\s*\(\s*["']POST["']\s*,\s*["'](https?://[^"']+)["']''', _re.IGNORECASE),
      'js_xhr_external_post', 'XMLHttpRequest POST to external domain'),
 ]
-
-# v7.6: Exfil signal confidence tiers.
-# STRONG signals (Telegram tokens, Discord webhooks, base64 payloads, fetch/XHR POST)
-# are near-certain exfiltration — 1 signal alone can trigger the kit composite.
-# WEAK signals (hardcoded email in JS) are ambiguous — could be a contact form.
-# Weak signals need corroboration (2+ kit evidence signals) to confirm a kit.
-WEAK_EXFIL_SIGNALS = {'js_email_exfil'}
 
 # Client-side credential harvesting patterns (v7.5).
 # These are NEVER scored alone — too common on legitimate sites.
@@ -1199,27 +1064,12 @@ BRAND_SPOOFING_KEYWORDS = [
 # typosquatting, domain name patterns, credential forms, and phishing paths.
 BRAND_KEYWORDS = [
     b'paypal', b'amazon', b'microsoft', b'google', b'facebook',
-    b'instagram', b'netflix', b'bank of america', b'wells fargo',
+    b'instagram', b'netflix', b'bank of america', b'chase', b'wells fargo',
     b'usps', b'fedex', b'dropbox', b'docusign',
 ]
 
 # Short keywords that need word boundary matching (to avoid false positives like "first" matching "irs")
-# "chase" moved here from BRAND_KEYWORDS — substring match hits "purchase", "purchased", etc.
-BRAND_KEYWORDS_SHORT = [b'irs', b'ups', b'dhl', b'chase']
-
-# === E-COMMERCE SHIPPING BRAND SUPPRESSION (v7.6) ===
-# Shipping carrier brands that appear naturally on e-commerce sites.
-# When is_ecommerce_site is True, these brands are filtered from brands_detected
-# to prevent phishing kit false positives on legitimate online stores.
-# A WooCommerce/Shopify store mentioning "UPS shipping" is not impersonating UPS.
-ECOMMERCE_SHIPPING_BRANDS = {"ups", "dhl", "fedex", "usps"}
-
-# === HIGH-RISK REGISTRARS (v7.6) ===
-# Registrar entities disproportionately used for spam/fraud registrations.
-# Matched case-insensitively as substrings against whois_registrar.
-HIGH_RISK_REGISTRARS = [
-    "godaddy online services cayman islands",
-]
+BRAND_KEYWORDS_SHORT = [b'irs', b'ups', b'dhl']
 
 # === KNOWN PARKING / DOMAIN-SALE PROVIDERS (v7.5) ===
 # When the page is a parking page AND external resources/forms point to these
@@ -1258,63 +1108,6 @@ KNOWN_PARKING_SCRIPT_DOMAINS = {
     "pagead2.googlesyndication.com",
     "www.googleadservices.com",
     "cdn.bodis.com",
-}
-
-# === KNOWN LEGITIMATE EXTERNAL SCRIPT DOMAINS (v7.6) ===
-# Common third-party marketing, analytics, social, and fraud-prevention scripts
-# that trigger UNKNOWN_EXTERNAL_SCRIPT when not in the hacklink scanner's CDN
-# whitelist.  Used to suppress malicious_script MEDIUM-confidence false positives
-# on established domains.  These are widely-used, well-known SaaS services.
-KNOWN_LEGITIMATE_SCRIPT_DOMAINS = {
-    # Social sharing / engagement
-    "static.addtoany.com",
-    "platform.twitter.com",
-    "connect.facebook.net",
-    "cdn.syndication.twimg.com",
-    "platform.linkedin.com",
-    "assets.pinterest.com",
-    # Click fraud prevention
-    "www.clickcease.com",
-    "t.clickcease.com",
-    # Analytics & marketing
-    "cdn.amplitude.com",
-    "cdn.segment.com",
-    "cdn.heapanalytics.com",
-    "cdn.mxpnl.com",
-    "plausible.io",
-    "cdn.usefathom.com",
-    "static.hotjar.com",
-    "script.hotjar.com",
-    "snap.licdn.com",
-    "bat.bing.com",
-    "sc-static.net",
-    "widget.intercom.io",
-    "js.intercomcdn.com",
-    "js.driftt.com",
-    "js.hs-scripts.com",
-    "js.hs-analytics.net",
-    "js.hsforms.net",
-    "www.clarity.ms",
-    "cdn.mouseflow.com",
-    "cdn.optimizely.com",
-    # Chat & support
-    "embed.tawk.to",
-    "cdn.livechatinc.com",
-    "static.zdassets.com",
-    # Video / media email
-    "fast.wistia.com",
-    "play.vidyard.com",
-    "js.hscta.net",
-    # Cookie consent
-    "cdn.cookielaw.org",
-    "cdn-cookieyes.com",
-    # CMS / site builders (not in hacklink CDN whitelist)
-    "cdn.shopify.com",
-    "static.parastorage.com",
-    "static.wixstatic.com",
-    # Push notification / messaging SDKs
-    "cdn.onesignal.com",
-    "onesignal.com",
 }
 
 # === OAUTH CONSENT PHISHING PATTERNS (v7.3.1) ===
@@ -1630,8 +1423,7 @@ def classify_mx_provider(mx_records: List[Tuple[int, str]], domain: str, config:
         "mail.protection.outlook.com",   # Microsoft 365 / Exchange Online
         "google.com",                     # Google Workspace
         "googlemail.com",                 # Google Workspace (legacy)
-        "pphosted.com",                   # Proofpoint (classic)
-        "ppe-hosted.com",                 # Proofpoint Protection for Email (PPE)
+        "pphosted.com",                   # Proofpoint
         "mimecast.com",                   # Mimecast
         "barracudanetworks.com",          # Barracuda
     ]
@@ -1661,22 +1453,8 @@ def classify_mx_provider(mx_records: List[Tuple[int, str]], domain: str, config:
             if pattern.lower() in mx_host:
                 return "disposable"
     
-    # v7.6: Detect Domain Connect ESP-delegated MX before selfhosted check.
-    # Pattern: _dc-mx.{hex_hash}.{domain} — this is a CNAME that routes to
-    # the ESP's infrastructure (e.g., MailerLite, Mailchimp).  The MX hostname
-    # contains the customer's domain, which would falsely trigger the selfhosted
-    # check below, but it's actually an ESP delegation, not a self-hosted server.
-    # Also detect _domainconnect. prefix used by some providers.
-    _DC_MX_PREFIXES = ("_dc-mx.", "_domainconnect.")
-    domain_lower = domain.lower()
-    for mx_host in all_mx_hosts:
-        if any(mx_host.startswith(pfx) for pfx in _DC_MX_PREFIXES):
-            if mx_host.endswith('.' + domain_lower):
-                # Domain Connect CNAME pointing through the customer's domain
-                # to an ESP — classify as standard (legitimate ESP relay)
-                return "standard"
-    
     # Check if self-hosted (MX points to same domain or subdomain)
+    domain_lower = domain.lower()
     for mx_host in all_mx_hosts:
         if mx_host == domain_lower or mx_host.endswith('.' + domain_lower):
             return "selfhosted"
@@ -1731,7 +1509,6 @@ def detect_mx_provider_mismatch(
         ('outlook.com',                  'Microsoft 365',   'outlook.com'),
         # Proofpoint
         ('pphosted.com',                 'Proofpoint',      'pphosted.com'),
-        ('ppe-hosted.com',               'Proofpoint',      'ppe-hosted.com'),
         # Mimecast
         ('mimecast.com',                 'Mimecast',        'mimecast.com'),
     ]
@@ -3066,11 +2843,8 @@ UK_TLD_VARIANTS = [
     ('.org.uk', '.uk'),
 ]
 
-# v7.6: Removed .com from universal variants — it caused false positives on
-# niche TLDs (.help, .xyz, .africa, etc.) where the .com is a completely
-# different business.  The .com check still happens for close-cousin TLDs
-# via EXTRA_TLD_VARIANTS (.co, .io, .net, .org, .app → .com).
-UNIVERSAL_TLD_VARIANTS = []
+# Always-check TLD variants (appended to base name regardless of signup TLD)
+UNIVERSAL_TLD_VARIANTS = ['.com']
 
 # Additional pairs for non-UK domains
 EXTRA_TLD_VARIANTS = [
@@ -3162,9 +2936,11 @@ def _generate_tld_variants(domain: str) -> List[str]:
             if candidate != domain.lower():
                 variants.add(candidate)
     
-    # v7.6: Removed the universal .com check — it's now handled only by
-    # EXTRA_TLD_VARIANTS for specific TLD pairs (.co, .io, .net, .org, .app).
-    # Niche TLDs (.help, .xyz, .africa) no longer trigger .com comparisons.
+    # Always check .com if the signup domain isn't .com
+    if tld != '.com':
+        candidate = base + '.com'
+        if candidate != domain.lower():
+            variants.add(candidate)
     
     # If the signup IS .com, check .co.uk (common UK business TLD)
     if tld == '.com':
@@ -3362,8 +3138,6 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
         "variant_content_words": 0,
         "signup_content_words": 0,
         "summary": "",
-        "variant_uk_no_dns": False,          # v7.6: UK business TLD variant generated but has no DNS
-        "variant_uk_no_dns_domain": "",      # Which UK variant had no DNS
     }
     
     # Count words on signup domain's page
@@ -3388,16 +3162,7 @@ def check_tld_variant_spoofing(domain: str, signup_content: bytes = None,
             socket.gethostbyname(variant_domain)
         except Exception:
             diagnostics.append(f"{variant_domain}: no DNS")
-            # v7.6: Track UK business TLD variants that don't resolve.
-            # .co.uk is the primary UK business TLD — if someone registers a
-            # different TLD version and .co.uk has no DNS, it could indicate
-            # the signup domain isn't a legitimate UK business.  Especially
-            # concerning for new domains (<1yr) with thin content.
-            _UK_BUSINESS_TLDS = ('.co.uk', '.org.uk', '.me.uk')
-            if any(variant_domain.endswith(t) for t in _UK_BUSINESS_TLDS):
-                result["variant_uk_no_dns"] = True
-                result["variant_uk_no_dns_domain"] = variant_domain
-            continue  # Variant doesn't resolve — skip asymmetry analysis
+            continue  # Variant doesn't resolve — skip
         
         # Step 2: Fetch variant's page content
         variant_content = None
@@ -3665,20 +3430,7 @@ def follow_redirects(url: str, timeout: float, fetch_content: bool = False) -> D
                 "ssl_error": "", "connection_error": "", "timeout_error": "", "error": ""}
     
     session = requests.Session()
-    # v7.6: Realistic browser headers to avoid false 403s from bot detection.
-    # Many WAFs (Cloudflare, SiteGround, Google Cloud CDN) check User-Agent
-    # version, Accept headers, and sec-ch-ua to distinguish real browsers
-    # from automated scanners.  Missing headers = instant 403.
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "sec-ch-ua": '"Chromium";v="133", "Not(A:Brand";v="99", "Google Chrome";v="133"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "Upgrade-Insecure-Requests": "1",
-    })
+    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"})
     
     result = {
         "ok": False, "initial_status": 0, "hops": 0,
@@ -3912,13 +3664,11 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
             if brand_str in visible_cleaned:
                 result["brands"].append(brand_display)
     
-    # Step 8: Check short brand keywords with strict boundary matching
-    # Uses (?<![\w-]) and (?![\w-]) instead of bare \b to prevent matching
-    # hyphenated compounds like "sign-ups", "pop-ups" for brand "ups"
+    # Step 8: Check short brand keywords with word boundary matching
     for brand in BRAND_KEYWORDS_SHORT:
         brand_str = brand.decode('utf-8', errors='ignore')
         if brand_str not in final_domain and brand_str not in domain:
-            pattern = r'(?<![\w-])' + re.escape(brand_str) + r'(?![\w-])'
+            pattern = r'\b' + re.escape(brand_str) + r'\b'
             if re.search(pattern, visible_cleaned, re.IGNORECASE):
                 result["brands"].append(brand_str)
     
@@ -4063,18 +3813,6 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     # v7.5.1: Same-domain exclusion for js_email_exfil — a site's own contact
     #         email hardcoded in JS (e.g. "contato@example.com.br" on example.com.br)
     #         is a contact form, not credential exfiltration.
-    # v7.6: Hosting platform email whitelist — form handlers on hosting infra
-    #        (e.g. contact@brand-slug.wpcomstaging.com) are not exfil targets.
-    EXFIL_EMAIL_PLATFORM_WHITELIST = {
-        'wpcomstaging.com',       # WordPress.com staging form handler
-        'wordpress.com',          # WordPress.com forms
-        'formspree.io',           # Form endpoint service
-        'getform.io',             # Form endpoint service
-        'formsubmit.co',          # Form endpoint service
-        'usebasin.com',           # Form endpoint service
-        'fabform.io',             # Form endpoint service
-        'web3forms.com',          # Form endpoint service
-    }
     _analyzed_domain_lower = domain.lower().strip('.')
     for pattern_re, signal_name, description in EXFIL_DROP_PATTERNS:
         match = pattern_re.search(content)
@@ -4090,11 +3828,6 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
                     if (email_domain == _analyzed_domain_lower
                             or _analyzed_domain_lower.endswith('.' + email_domain)):
                         continue  # Same-domain contact email — not exfil
-                    # v7.6: Suppress if email is on a known hosting platform form handler
-                    # e.g. contact@brand-slug.wpcomstaging.com is WordPress.com's own infra
-                    if any(email_domain == plat or email_domain.endswith('.' + plat)
-                           for plat in EXFIL_EMAIL_PLATFORM_WHITELIST):
-                        continue  # Hosting platform form handler — not exfil
                 except Exception:
                     pass  # If we can't parse, let it fire as normal
             
@@ -4167,69 +3900,36 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
                 f"corroborating [{corr_names}]"
             )
     
-    # === OAUTH CONSENT PHISHING DETECTION (v7.3.1, tightened v7.5.1) ===
+    # === OAUTH CONSENT PHISHING DETECTION (v7.3.1) ===
     # Attackers set up pages that redirect to real Microsoft/Google OAuth
     # authorization endpoints with malicious app permissions. The phishing
     # domain itself has NO password fields (bypasses credential form detection).
-    #
-    # v7.5.1: Bare OAuth params (response_type=code, redirect_uri) are standard
-    # on ANY site with "Sign in with Microsoft/Google" — flagging those alone
-    # causes massive FPs on legitimate enterprise sites (e.g. qualcomm.com).
-    #
-    # Strong evidence (required to flag):
-    #   - Dangerous scope requests: mail.read, files.readwrite, contacts.read, etc.
-    #   - OAuth endpoint using /common/ wildcard tenant (legit apps use tenant ID)
-    # Weak evidence (informational only, not sufficient alone):
-    #   - response_type=code, redirect_uri, client_id — normal OAuth params
-    #   - OAuth endpoint with specific tenant ID — normal enterprise SSO
+    # Look for: OAuth auth endpoints in links/redirects, response_type=code,
+    # redirect_uri pointing back to the domain, excessive scope requests.
     oauth_evidence = []
-    oauth_has_strong = False  # Need at least one strong signal to flag
     
     # Check for OAuth authorization endpoints in all href/src links
     all_links = re.findall(rb'(?:href|src|action|url)\s*=\s*["\']([^"\']{10,500})["\']', content, re.IGNORECASE)
     all_links_lower = [l.lower() for l in all_links]
-    has_oauth_endpoint = False
     for link in all_links_lower:
         for endpoint in OAUTH_AUTH_ENDPOINTS:
             if endpoint in link:
-                has_oauth_endpoint = True
-                # /common/ wildcard tenant = strong signal (phishing targets any org)
-                if b'/common/' in link:
-                    oauth_evidence.append(f"OAuth endpoint with /common/ wildcard tenant: {endpoint.decode()}")
-                    oauth_has_strong = True
-                else:
-                    oauth_evidence.append(f"OAuth endpoint in link: {endpoint.decode()} (tenant-specific — likely legit SSO)")
+                oauth_evidence.append(f"OAuth endpoint in link: {endpoint.decode()}")
                 break
     
-    # Check for dangerous scope requests — the actual consent phishing fingerprint
-    # Legitimate SSO: scope=openid profile email
-    # Consent phishing: scope=mail.read files.readwrite.all contacts.read
-    dangerous_scope = re.search(
-        rb'scope\s*=\s*[^&"\']*(?:mail\.read|mail\.send|files\.read|files\.readwrite|'
-        rb'contacts\.read|calendars\.read|user\.read\.all|directory\.read)',
-        content, re.IGNORECASE
-    )
-    if dangerous_scope:
-        scope_str = dangerous_scope.group(0).decode('utf-8', errors='ignore')[:120]
-        oauth_evidence.append(f"Dangerous scope request: {scope_str}")
-        oauth_has_strong = True
-    
-    # Weak evidence: bare OAuth params (informational context only)
+    # Check for OAuth parameters in page source (could be in JS, forms, or meta redirects)
     for pattern in OAUTH_PARAM_PATTERNS:
         match = re.search(pattern, content, re.IGNORECASE)
         if match:
             param_str = match.group(0).decode('utf-8', errors='ignore')[:80]
-            # Skip the scope pattern — handled above with dangerous scope check
-            if not param_str.startswith('scope'):
-                oauth_evidence.append(f"OAuth param: {param_str}")
+            oauth_evidence.append(f"OAuth param: {param_str}")
     
     # Also check for inline JS that builds OAuth URLs
     if re.search(rb'(?:oauth|authorize|consent).*(?:response_type|redirect_uri|client_id)', content, re.IGNORECASE):
-        if not oauth_evidence:
+        if not oauth_evidence:  # Only if we haven't already found direct evidence
             oauth_evidence.append("JS references to OAuth authorization flow")
     
-    # Only flag as phishing if strong evidence exists
-    if oauth_evidence and oauth_has_strong:
+    if oauth_evidence:
         result["oauth_phish"] = True
         result["oauth_evidence"] = oauth_evidence
     
@@ -4532,9 +4232,7 @@ def check_corporate_trust_signals(domain: str, timeout: float = 3.0) -> Dict:
     try:
         session = requests.Session()
         session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         
         for page in TRUST_PAGES[:8]:  # Check up to 8 pages to limit requests
@@ -4959,8 +4657,12 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     # === TLD VARIANT SPOOFING ===
     if res.tld_variant_detected:
         all_issues.append(f"TLD VARIANT SPOOF ({res.tld_variant_domain}) → Established business exists at variant TLD")
-    elif res.tld_variant_uk_no_dns:
-        all_issues.append(f"UK VARIANT DARK ({res.tld_variant_uk_no_dns_domain}) → UK business TLD variant has no DNS; domain operating on alternate TLD")
+    # v7.5.1: UK variant dark — .co.uk has no DNS
+    if res.tld_variant_uk_no_dns and "tld_variant_uk_no_dns" in signals:
+        all_issues.append(
+            f"UK VARIANT DARK ({res.tld_variant_uk_no_dns_domain}) → "
+            f"UK business TLD variant has no DNS; domain operating on alternate TLD"
+        )
     # Diagnostic detail (TLD VARIANT CHECK / CHECK ERROR) is stored in res.tld_variant_summary
     # but NOT shown in issues — it was confusing users into thinking spoofing was detected
     
@@ -5030,22 +4732,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         # Older domain with privacy is normal — note for context but not an issue
         pass
     
-    # v7.6: High-risk registrar
-    if res.registrar_high_risk:
-        all_issues.append(f"HIGH-RISK REGISTRAR ({res.registrar_high_risk_name}) → Registrar known for lax verification; disproportionate abuse volume")
-    
-    # v7.6: .arpa reverse DNS namespace abuse
-    if res.redirect_arpa_abuse:
-        _arpa_doms = res.redirect_arpa_domains.replace(";", ", ")
-        all_issues.append(f"⚠️ .ARPA REDIRECT ABUSE ({_arpa_doms}) → Redirect chain passes through reverse DNS namespace; strong phishing indicator (Infoblox Feb 2026)")
-    if res.content_arpa_links:
-        _arpa_doms = res.content_arpa_domains.replace(";", ", ")
-        all_issues.append(f"⚠️ .ARPA CONTENT LINKS ({_arpa_doms}) → Page contains links/scripts pointing to .arpa reverse DNS hostnames; phishing infrastructure indicator")
-    
-    # v7.6: Viral Loops referral fraud tool
-    if res.content_has_viral_loops:
-        all_issues.append("VIRAL LOOPS SCRIPT (app.viral-loops.com) → Referral/giveaway widget commonly abused in fake prize campaigns and spam referral schemes")
-    
     # === VIRUSTOTAL REPUTATION ===
     if res.vt_available:
         if res.vt_malicious_count >= 5:
@@ -5060,38 +4746,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             all_issues.append(f"VT THREAT NAMES: {names}")
         if res.vt_malicious_count == 0 and res.vt_suspicious_count == 0 and res.vt_total_vendors >= 50:
             positives.append(f"VT CLEAN → 0/{res.vt_total_vendors} security vendors flag this domain")
-    elif res.vt_error:
-        all_issues.append(f"⚠️ VT CHECK FAILED → {res.vt_error}")
     
-    # v7.7: Submitted subdomain VT result (when root fallback active)
-    if res.submitted_domain_vt_malicious:
-        all_issues.append(f"🛡️ SUBMITTED SUBDOMAIN VT MALICIOUS ({res.submitted_domain}) → {res.submitted_domain_vt_detail}")
-    elif res.submitted_domain_vt_suspicious:
-        all_issues.append(f"⚠️ SUBMITTED SUBDOMAIN VT SUSPICIOUS ({res.submitted_domain}) → {res.submitted_domain_vt_detail}")
-    
-    # v7.7.1: External domains on page flagged malicious by VT
-    if res.vt_external_malicious_count > 0:
-        try:
-            _ext_details = json.loads(res.vt_external_malicious_details)
-            _ext_parts = []
-            for _ed, _info in _ext_details.items():
-                _threats = ", ".join(_info.get("threats", [])[:3])
-                _part = f"{_ed} ({_info['malicious']}/{_info['total']}"
-                if _threats:
-                    _part += f" threats: {_threats}"
-                _ext_parts.append(_part + ")")
-            _cw = "domain" if res.vt_external_malicious_count == 1 else "domains"
-            all_issues.append(
-                f"MALICIOUS EXTERNAL RESOURCES ({res.vt_external_malicious_count} {_cw}) "
-                + "Page references VT-flagged domains: "
-                + "; ".join(_ext_parts))
-        except Exception:
-            all_issues.append(
-                f"MALICIOUS EXTERNAL RESOURCES ({res.vt_external_malicious_count}) "
-                + "Page references VT-flagged domains: "
-                + res.vt_external_malicious_domains)
-    
-
     # === HACKLINK / SEO SPAM ===
     if res.hacklink_detected:
         kw = res.hacklink_keywords.replace(";", ", ")[:80] if res.hacklink_keywords else "various"
@@ -5118,14 +4773,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     
     if res.hacklink_spam_link_count >= 5:
         all_issues.append(f"SPAM LINKS ({res.hacklink_spam_link_count} hidden links) → Hidden outbound spam links injected into page")
-    
-    if res.hacklink_campaign_profile:
-        _cp_sigs = res.hacklink_campaign_profile_signals.replace(";", ", ")
-        all_issues.append(
-            f"🕸️ HACKLINK CAMPAIGN PROFILE ({res.hacklink_campaign_profile_confidence}) → "
-            f"Domain matches hacklink target infrastructure fingerprint ({_cp_sigs}); "
-            f"injected content may be cloaked or cleaned up"
-        )
     
     # === MALICIOUS SCRIPT / HIDDEN INJECTION (HIGH-VALUE SIGNALS) ===
     # v7.5.1: Suppress on parking pages when all external scripts are from known
@@ -5162,6 +4809,15 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         scripts = res.hacklink_suspicious_scripts.replace(";", ", ")[:120]
         all_issues.append(f"SUSPICIOUS EXTERNAL SCRIPTS ({scripts}) → Third-party scripts from known-bad or suspicious domains")
     
+    # v7.5.1: Hacklink campaign profile
+    if res.hacklink_campaign_profile:
+        _hcp_sigs = res.hacklink_campaign_profile_signals.replace(";", ", ")
+        all_issues.append(
+            f"🕸️ HACKLINK CAMPAIGN PROFILE ({res.hacklink_campaign_profile_confidence}) → "
+            f"Domain matches hacklink target infrastructure fingerprint ({_hcp_sigs}); "
+            f"injected content may be cloaked or cleaned up"
+        )
+    
     # === CONTENT IDENTITY VERIFICATION ===
     if res.content_is_facade:
         wc = res.content_visible_word_count
@@ -5171,13 +4827,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.content_cross_domain_emails:
         domains = res.content_cross_domain_email_domains.replace(";", ", ")
         all_issues.append(f"CROSS-DOMAIN EMAILS ON PAGE → Page contains emails from: {domains}")
-    if res.content_suspicious_contact_email:
-        _sus_emails = res.content_suspicious_contact_email.replace(";", ", ")
-        _sus_type = res.content_suspicious_contact_type
-        if "spam_infra" in _sus_type:
-            all_issues.append(f"SPAM INFRASTRUCTURE CONTACT EMAIL ON PAGE ({_sus_emails})")
-        if "template_placeholder" in _sus_type:
-            all_issues.append(f"TEMPLATE PLACEHOLDER EMAIL ON PAGE ({_sus_emails})")
     if res.content_is_broker_page:
         all_issues.append(f"BROKER/PARKING PAGE → Domain broker or for-sale page detected: {res.content_broker_indicators[:100]}")
     if res.content_page_privacy_emails:
@@ -5275,8 +4924,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     elif res.is_cdn_hosted:
         positives.append(f"CDN-hosted ({res.cdn_provider}) — origin hidden but no abuse indicators")
     
-    # === DOMAIN CATEGORY RISK (v7.7) — moved to pinned summary ===
-
     # === CONTACT CROSS-REFERENCE (OSINT) ===
     if res.contact_reuse_results:
         try:
@@ -5326,10 +4973,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if not res.ptr_exists:
         all_issues.append("NO PTR RECORD → Corporate/enterprise email filters may reject")
     elif not res.ptr_matches_forward:
-        if res.is_cdn_hosted:
-            all_issues.append(f"PTR MISMATCH → Expected for CDN-hosted domain ({res.cdn_provider or 'CDN'}); PTR resolves to CDN infra, not customer domain")
-        else:
-            all_issues.append("PTR MISMATCH → Forward/reverse DNS inconsistent; triggers spam filters")
+        all_issues.append("PTR MISMATCH → Forward/reverse DNS inconsistent; triggers spam filters")
     
     # v4.4: Specific TLS failure messages instead of generic "NO VALID HTTPS"
     if res.tls_handshake_failed:
@@ -5364,7 +5008,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.ns_is_parking:
         all_issues.append(f"PARKING NAMESERVER ({res.ns_parking_match}) → Domain parked/unused/for-sale; not a legitimate sender")
     
-    if res.ns_is_lame_delegation and not res.is_subdomain:
+    if res.ns_is_lame_delegation:
         all_issues.append("LAME DELEGATION (0 NS RECORDS) → Broken or abandoned domain; no functioning DNS")
     
     if res.ns_is_free_dns:
@@ -5427,7 +5071,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append("401 UNAUTHORIZED → Public domain requires authentication - unusual")
     
     if res.has_403:
-        all_issues.append("403 FORBIDDEN → Bot received 403 (likely WAF/bot protection — not scored)")
+        all_issues.append("403 FORBIDDEN → May be blocking scanners (cloaking)")
     
     if res.has_429:
         all_issues.append("429 RATE LIMITED → Throttling automated checks")
@@ -5532,9 +5176,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.trust_pages_found and len(res.trust_pages_found.split(';')) >= 2:
         positives.append(f"Corporate pages found ({len(res.trust_pages_found.split(';'))})")
     
-    if res.is_ecommerce_site:
-        positives.append("Confirmed e-commerce site")
-    
     # === BUILD SUMMARY ===
     # Score each issue by its config weight for filtering and sorting.
     # Issues whose corresponding signal has weight=0 (disabled) are excluded.
@@ -5553,7 +5194,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('CSS HIDING PATTERNS', weights.get('hidden_injection_css_only', 5)),
             ('BLACKLISTED DOMAIN', weights.get('domain_blacklisted', 50)),
             ('HACKLINK SEO SPAM DETECTED', weights.get('hacklink_detected', 50)),
-            ('HACKLINK CAMPAIGN PROFILE', weights.get('hacklink_campaign_profile_strong', 40)),
             ('WORDPRESS COMPROMISED', weights.get('hacklink_wp_compromised', 45)),
             ('BLACKLISTED IP', weights.get('ip_blacklisted', 40)),
             ('SPF +all', weights.get('spf_pass_all', 40)),
@@ -5575,12 +5215,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('YOUNG DOMAIN + RISK', weights.get('young_domain_with_risk_7d', 25)),
             ('REDIRECTS TO PHISHING', weights.get('phishing_infra_redirect', 25)),
             ('VT FLAGGED', weights.get('vt_malicious_medium', 40)),
-            ('SUBMITTED SUBDOMAIN VT MALICIOUS', weights.get('submitted_subdomain_vt_malicious', 40)),
-            ('SUBMITTED SUBDOMAIN VT SUSPICIOUS', 0),  # Informational — not scored
             ('BLOCKED ASN', weights.get('blocked_asn_org_score', 20)),
             ('OPAQUE ENTITY', weights.get('opaque_entity', 20)),
             ('TLD VARIANT SPOOF', weights.get('tld_variant_spoofing', 30)),
-            ('UK VARIANT DARK', weights.get('tld_variant_uk_no_dns', 28)),
             ('EMPTY PAGE', weights.get('empty_page', 20)),
             ('ZERO EMAIL AUTH', 20),
             ('HACKLINK KEYWORDS', weights.get('hacklink_keywords', 15)),
@@ -5649,7 +5286,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('PTR MISMATCH', weights.get('ptr_mismatch', 5)),
             ('BLACKLIST CHECK INCONCLUSIVE', weights.get('blacklist_inconclusive', 5)),
             ('401 UNAUTHORIZED', weights.get('status_401_unauthorized', 5)),
-            ('403 FORBIDDEN', weights.get('status_403_cloaking', 0)),
+            ('403 FORBIDDEN', weights.get('status_403_cloaking', 5)),
             ('429 RATE LIMITED', weights.get('status_429_throttling', 5)),
             ('503 UNAVAILABLE', weights.get('status_503_disposable', 5)),
             ('NO PTR', weights.get('no_ptr', 3)),
@@ -5694,7 +5331,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('BRAND + SPOOFING KEYWORD', ['brand_spoofing_keyword']),
         ('DOMAIN IMPERSONATES', ['domain_brand_impersonation']),
         ('TLD VARIANT SPOOF', ['tld_variant_spoofing']),
-        ('UK VARIANT DARK', ['tld_variant_uk_no_dns']),
         ('SUSPICIOUS PREFIX', ['suspicious_prefix']),
         ('SUSPICIOUS SUFFIX', ['suspicious_suffix']),
         ('TECH SUPPORT SCAM TLD', ['tech_support_tld']),
@@ -5724,10 +5360,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('SUSPICIOUS TITLE', ['suspicious_page_title']),
         ('HARVEST COMBO', ['client_side_harvest_combo']),
         ('WHOIS PRIVACY', ['whois_privacy']),
-        ('HIGH-RISK REGISTRAR', ['registrar_high_risk']),
-        ('.ARPA REDIRECT ABUSE', ['redirect_arpa_abuse']),
-        ('.ARPA CONTENT LINKS', ['content_arpa_links']),
-        ('VIRAL LOOPS SCRIPT', ['viral_loops_script']),
         ('401 UNAUTHORIZED', ['access_restricted']),
         ('403 FORBIDDEN', ['access_restricted']),
         ('429 RATE LIMITED', ['status_429_throttling']),
@@ -5749,7 +5381,6 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('BLACKLIST CHECK INCONCLUSIVE', ['blacklist_inconclusive']),
         ('VT MALICIOUS', ['vt_malicious', 'vt_malicious_medium']),
         ('VT SUSPICIOUS', ['vt_suspicious']),
-        ('SUBMITTED SUBDOMAIN VT MALICIOUS', ['submitted_subdomain_vt_malicious']),
         ('NO SPF', ['no_spf']),
         ('NO DKIM', ['no_dkim']),
         ('NO MX', ['no_mx']),
@@ -5791,10 +5422,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('HOMOGLYPH DOMAIN', ['homoglyph_domain']),
         ('QUISHING PROFILE', ['quishing_profile']),
         ('CDN TUNNEL ABUSE', ['cdn_tunnel_suspect']),
-        ('VULNERABLE WP PLUGINS', ['hacklink_vulnerable_plugins']),
+        ('VULNERABLE WP PLUGINS', ['hacklink_vulnerable_plugins', 'vuln_plugins_no_compromise_mitigated']),
         ('HIDDEN CONTENT INJECTION', ['hidden_injection']),
         ('HACKLINK', ['hacklink_keywords']),
-        ('HACKLINK CAMPAIGN PROFILE', ['hacklink_campaign_profile']),
         ('COMPROMISED WP', ['hacklink_wp_compromised']),
         ('SPAM LINKS', ['hacklink_spam_links']),
         ('MALICIOUS SCRIPT', ['malicious_script']),
@@ -5862,31 +5492,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     else:
         parts.append(f"✅ APPROVE (Score: {res.risk_score})")
     
-    # v7.7: Root domain fallback notice
-    if res.used_root_fallback:
-        fb_note = f"📌 ANALYZED ROOT: {res.analysis_domain} (submitted: {res.submitted_domain} does not resolve)"
-        if res.submitted_domain_vt_detail:
-            fb_note += f" — Submitted domain {res.submitted_domain_vt_detail}"
-        parts.append(fb_note)
-    
     # === PATTERN MATCH INDICATORS ===
     # These help specialists instantly recognize known attack patterns.
     if res.pattern_match:
         parts.append("PATTERN: " + res.pattern_match)
-    
-    # v7.7: Domain category risk — pinned so it never gets truncated
-    if res.domain_category:
-        _tier_icon = {"HIGH": "!!!", "ELEVATED": "!!", "MODERATE": "!"}.get(
-            res.domain_category_risk_tier, "")
-        parts.append(
-            f"CATEGORY RISK ({res.domain_category_risk_tier}{_tier_icon}): "
-            f"{res.domain_category_label}")
-    
-    # v7.7.1: VT-flagged external domains — pinned
-    if res.vt_external_malicious_count > 0:
-        parts.append(
-            f"VT EXTERNAL MALICIOUS ({res.vt_external_malicious_count}): "
-            f"{res.vt_external_malicious_domains}")
     
     # Top issues only (limit to 3 most important by weight)
     if scored_issues:
@@ -5946,36 +5555,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("null_mx", weights.get('null_mx', 12))
     
     # MX provider type scoring (v4.7)
-    # NOTE: mx_enterprise bonus is SUPPRESSED when content_facade is detected,
-    # UNLESS the domain is an established SPA (v7.6) — a $6/month Google Workspace
-    # subscription does not legitimize a brand-new shell domain, but a 13-year-old
-    # domain with DKIM and VT clean is genuinely using enterprise email.
-    # v7.7.1: HALVED when email auth is weak (no DKIM + missing/weak DMARC).
-    # Enterprise MX without proper auth config = paying for Workspace but not
-    # using it properly.  Still some legitimacy signal, just less convincing.
+    # NOTE: mx_enterprise bonus is SUPPRESSED when content_facade is detected.
+    # A $6/month Google Workspace subscription does not legitimize a domain
+    # that serves no real content — only an external JS shell with a title tag.
     if res.mx_provider_type == "enterprise":
-        _is_established_spa = (
-            res.domain_age_days >= 365
-            and (res.mx_provider_type == "enterprise" or res.dkim_exists)
-            and res.vt_malicious_count == 0
-        )
-        if not res.content_is_facade or _is_established_spa:
-            _full_bonus = weights.get('mx_enterprise_bonus', -5)
-            _weak_auth = (
-                not res.dkim_exists
-                and (not res.dmarc_exists or res.dmarc_policy == "none")
-            )
-            # v7.8: Halve when HIGH-tier category risk — enterprise MX doesn't
-            # reduce the compliance/reputation risk of pharma, gambling, crypto etc.
-            # Same principle as content_facade suppression: legitimacy signals
-            # mask threats rather than negate them.
-            _high_cat_risk = res.domain_category_risk_tier == "HIGH"
-            if _weak_auth:
-                add("mx_enterprise", _full_bonus // 2)  # Halved — enterprise MX without auth
-            elif _high_cat_risk:
-                add("mx_enterprise", _full_bonus // 2)  # Halved — enterprise MX on high-risk category
-            else:
-                add("mx_enterprise", _full_bonus)
+        if not res.content_is_facade:
+            add("mx_enterprise", weights.get('mx_enterprise_bonus', -5))
     elif res.mx_provider_type == "disposable":
         add("mx_disposable", weights.get('mx_disposable', 10))
     elif res.mx_provider_type == "selfhosted":
@@ -5995,15 +5580,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if not res.ptr_exists:
         add("no_ptr", weights.get('no_ptr', 4))
     elif not res.ptr_matches_forward:
-        # v7.8: Suppress on CDN-hosted domains — CloudFront, Cloudflare, Fastly,
-        # Akamai etc. all return PTR records pointing to their own infra hostnames
-        # (e.g. server-13-226-238-62.iad61.r.cloudfront.net).  These will NEVER
-        # match the customer's domain.  This is inherent CDN architecture, not a
-        # suspicious mismatch.
-        if res.is_cdn_hosted:
-            add("ptr_mismatch", 0)  # Informational only on CDN
-        else:
-            add("ptr_mismatch", weights.get('ptr_mismatch', 5))
+        add("ptr_mismatch", weights.get('ptr_mismatch', 5))
     
     if res.bimi_exists:
         add("has_bimi", weights.get('has_bimi', -8))
@@ -6015,35 +5592,22 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # IMPORTANT: Platform hosting providers (Render, Netlify, Vercel, etc.) serve their OWN
     # AASA/asset-links files for ALL custom domains. A domain on Render getting "iOS deep links"
     # is detecting Render's app, not the domain owner's app. Suppress the bonus in this case.
-    # v7.8: Halved when HIGH-tier category risk — having an app doesn't reduce the
-    # compliance/reputation risk of pharma, gambling, crypto notifications.
     is_platform_hosted = res.hosting_provider_type == "platform"
-    _halve_app_bonus = res.domain_category_risk_tier == "HIGH"
     if res.app_store_has_presence:
         if res.app_store_confidence == "high":
             if is_platform_hosted:
                 # Platform's AASA, not the domain's — don't give bonus
                 add("app_store_platform_false_positive", 0)
             else:
-                _app_bonus = weights.get('app_store_high', -15)
-                add("app_store_high", _app_bonus // 2 if _halve_app_bonus else _app_bonus)
+                add("app_store_high", weights.get('app_store_high', -15))
         elif res.app_store_confidence == "medium":
             if not is_platform_hosted:
-                _app_bonus = weights.get('app_store_medium', -10)
-                add("app_store_medium", _app_bonus // 2 if _halve_app_bonus else _app_bonus)
+                add("app_store_medium", weights.get('app_store_medium', -10))
         elif res.app_store_confidence == "low":
             # v6.2: Fixed indentation — was incorrectly attached to outer if
             # Suppress when content_facade — an SPA shell shouldn't get app store credit
             if not res.content_is_facade:
                 add("app_store_low", weights.get('app_store_low', -3))
-    
-    # === E-COMMERCE LEGITIMACY BONUS (v7.6) ===
-    # A confirmed e-commerce site (WooCommerce, Shopify, etc.) on an established
-    # domain with clean VirusTotal is strong evidence of a real business.
-    # Scam stores are overwhelmingly new domains (<6mo) with VT flags.
-    # A 19-year-old WooCommerce site with DMARC p=reject is not a scam store.
-    if res.is_ecommerce_site and res.domain_age_days >= 365 and res.vt_malicious_count == 0:
-        add("ecommerce_established", weights.get('ecommerce_established_bonus', -15))
     
     # Blacklists - HIGH weight, these are real fraud signals
     if res.domain_blacklist_count > 0:
@@ -6093,7 +5657,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             "hacklink_spam_links", "hacklink_vulnerable_plugins", "malicious_script",
             "js_redirect", "minimal_shell", "empty_page", "suspicious_tld",
             "hosting_suspect", "hosting_free", "typosquat_detected",
-            "disposable_email", "free_email_domain",
+            "disposable_email", "free_email_domain", "hosting_budget_shared",
             "redirect_cross_domain", "cross_domain_brand_link",
             "tld_variant_spoof", "domain_brand_impersonation",
             "opaque_entity", "sensitive_fields", "phishing_js", "doc_lure",
@@ -6148,13 +5712,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.ns_is_parking:
         add("ns_parking", weights.get('ns_parking', 15))
     if res.ns_is_lame_delegation:
-        # v7.8: Suppress on subdomains — NS records live on the parent zone,
-        # not on the subdomain itself.  Querying NS for a.b.example.com returns
-        # 0 records, which is normal DNS delegation, not broken/abandoned DNS.
-        # Don't add to signals set either — would let combo rules fire on a
-        # false premise (combo_ns_lame_no_mx).
-        if not res.is_subdomain:
-            add("ns_lame_delegation", weights.get('ns_lame_delegation', 20))
+        add("ns_lame_delegation", weights.get('ns_lame_delegation', 20))
     if res.ns_is_free_dns:
         add("ns_free_dns", weights.get('ns_free_dns', 8))
     if res.ns_is_single_ns:
@@ -6166,18 +5724,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_suspicious_suffix:
         add("suspicious_suffix", weights.get('suspicious_suffix', 15))
     if res.is_tech_support_tld:
-        # v7.6: Reduce penalty when site has real content and VT clean.
-        # .help/.support/.tech TLDs have legitimate uses (therapy, documentation,
-        # customer service).  A site with substantial content and 0/93 VT flags
-        # is not a scam page — penalize lightly as TLD risk context, not as a
-        # primary abuse signal.  Full weight still applies to thin/empty sites
-        # or those with VT flags.
-        _is_vt_clean = res.vt_malicious_count == 0 and res.vt_total_vendors >= 50
-        _has_real_content = res.content_visible_word_count >= 30
-        if _is_vt_clean and _has_real_content:
-            add("tech_support_tld", weights.get('tech_support_tld_mitigated', 8))
-        else:
-            add("tech_support_tld", weights.get('tech_support_tld', 18))
+        add("tech_support_tld", weights.get('tech_support_tld', 18))
     if res.domain_impersonates_brand:
         add("domain_brand_impersonation", weights.get('domain_brand_impersonation', 25))
     
@@ -6191,40 +5738,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.tld_variant_detected:
         add("tld_variant_spoofing", weights.get('tld_variant_spoofing', 30))
     
-    # v7.6: UK business TLD variant has no DNS
-    # .co.uk is the primary UK business TLD.  If a signup domain generates a
-    # .co.uk variant and it doesn't resolve, that's concerning for new domains:
-    # legitimate UK businesses use .co.uk; new domains on other TLDs where
-    # the .co.uk is dark suggests impersonation or non-UK origin.
-    # v7.6.1: Reduced for established VT-clean domains.  Non-UK businesses
-    # (Egyptian, Indian, US, etc.) legitimately operate without .co.uk.  A 1yr+
-    # domain with VT 0/93 is clearly the real brand, not an impersonator.
-    if res.tld_variant_uk_no_dns and not res.tld_variant_detected:
-        _is_established_vt_clean = (
-            res.domain_age_days >= 365
-            and res.vt_malicious_count == 0
-            and res.vt_total_vendors >= 50
-        )
-        # v7.7: Reduce when VT-clean + strong legitimacy signals regardless
-        # of domain age.  A .com domain has no obligation to own a .co.uk
-        # variant. VT 0/94 + real infrastructure proves genuineness.
-        _legitimacy_count = sum([
-            bool(res.dkim_exists),
-            bool(res.https_valid),
-            bool(res.app_store_has_presence),
-            bool(res.ptr_matches_forward),
-            bool(res.mx_provider_type == "enterprise"),
-            bool(res.is_ecommerce_site),
-        ])
-        _is_vt_clean_with_signals = (
-            res.vt_malicious_count == 0
-            and res.vt_total_vendors >= 50
-            and _legitimacy_count >= 2
-        )
-        if _is_established_vt_clean or _is_vt_clean_with_signals:
-            add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns_established', 5))
-        else:
+    # v7.5.1: UK TLD variant dark — .co.uk has no DNS
+    # On ESTABLISHED domains (90+ days): strong signal that the domain is operating
+    # on an alternate TLD while the legitimate .co.uk is dead/unheld — common in
+    # hacklink campaigns and domain takeovers.
+    # On NEW domains (< 90 days): suppress entirely — the owner simply hasn't registered .co.uk.
+    # Don't add to signals set on young domains to prevent combo rule cascading.
+    if res.tld_variant_uk_no_dns:
+        _ukv_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
+        if _ukv_age_ok:
             add("tld_variant_uk_no_dns", weights.get('tld_variant_uk_no_dns', 28))
+        # else: young domain — don't score or track
     
     # E-commerce / Retail scam indicators
     if res.is_retail_scam_tld:
@@ -6232,15 +5756,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_cross_domain_brand_link:
         add("cross_domain_brand_link", weights.get('cross_domain_brand_link', 18))
     if res.is_ecommerce_site and res.missing_business_identity:
-        # v7.6: Missing business identity is a scam-store indicator, but its severity
-        # depends on domain context.  A brand-new store with no legal info is high risk.
-        # A 19-year-old domain with DMARC p=reject and VT clean just hasn't filled in
-        # their "About" page yet — annoying but not fraudulent.
-        _is_established_vt_clean = res.domain_age_days >= 365 and res.vt_malicious_count == 0
-        if _is_established_vt_clean:
-            add("ecommerce_no_identity", weights.get('ecommerce_no_identity_established', 5))
-        else:
-            add("ecommerce_no_identity", weights.get('ecommerce_no_identity', 15))
+        add("ecommerce_no_identity", weights.get('ecommerce_no_identity', 15))
     
     # Web/TLS
     if not res.https_valid:
@@ -6271,10 +5787,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_401:
         add("status_401_unauthorized", weights.get('status_401_unauthorized', 12))
     
-    # 403 = logged for visibility, NOT scored (weight=0 in config)
-    # Too many false positives from WAF/bot protection (Cloudflare, AWS WAF, Akamai, etc.)
+    # 403 = cloaking/scanner blocking - VERY strong signal
     if res.has_403:
-        add("status_403_cloaking", weights.get('status_403_cloaking', 0))
+        add("status_403_cloaking", weights.get('status_403_cloaking', 15))
     
     # 429 = throttling scanners - medium signal
     if res.has_429:
@@ -6285,9 +5800,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("status_503_disposable", weights.get('status_503_disposable', 8))
     
     # === ACCESS RESTRICTION / CORPORATE TRUST SIGNALS ===
-    # Access restricted on what should be a public domain
-    # Only score when 401 is present — 403 alone is too often WAF/bot protection
-    if res.is_access_restricted and res.has_401:
+    # Access restricted (401 or 403) on what should be a public domain
+    if res.is_access_restricted:
         add("access_restricted", weights.get('access_restricted', 10))
     
     # Missing trust signals (no about/contact pages)
@@ -6319,21 +5833,11 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.is_parking_page:
         add("parking_page", weights.get('parking_page', 6))
     if res.has_credential_form:
-        # v7.6: On e-commerce sites, login/registration forms are standard features
-        # (WooCommerce, Shopify accounts).  Only score when hard phishing evidence
-        # is present — exfil scripts, kit filenames, or phishing paths.
-        _ecom_suppress = res.is_ecommerce_site and not (res.has_exfil_drop_script or res.has_phishing_kit_filename or res.phishing_paths_found)
-        if not _ecom_suppress:
-            add("credential_form", weights.get('credential_form', 20))
+        add("credential_form", weights.get('credential_form', 20))
     if res.has_sensitive_fields:
         add("sensitive_fields", weights.get('sensitive_fields', 10))
     if res.form_posts_external:
-        # v7.6: On e-commerce sites, checkout forms POST to external payment
-        # processors (Stripe, PayPal, Square, etc.).  This is expected behavior,
-        # not credential exfiltration.  Same hard-evidence gate as credential_form.
-        _ecom_suppress = res.is_ecommerce_site and not (res.has_exfil_drop_script or res.has_phishing_kit_filename or res.phishing_paths_found)
-        if not _ecom_suppress:
-            add("form_posts_external", weights.get('form_posts_external', 10))
+        add("form_posts_external", weights.get('form_posts_external', 10))
     if res.brands_detected:
         add("brand_impersonation", weights.get('brand_impersonation', 22))
     if res.phishing_paths_found:
@@ -6376,33 +5880,6 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.whois_privacy:
         add("whois_privacy", weights.get('whois_privacy', 0))
     
-    # v7.6: High-risk registrar penalty
-    # Certain registrar entities are disproportionately used for spam/fraud
-    # registrations due to lax verification.  Penalty scales with domain age:
-    # new domains (<90d) get full weight, established domains (1yr+) get 0.
-    if res.registrar_high_risk:
-        if res.domain_age_days >= 0 and res.domain_age_days < 90:
-            add("registrar_high_risk", weights.get('registrar_high_risk', 8))
-        elif res.domain_age_days >= 0 and res.domain_age_days < 365:
-            add("registrar_high_risk", weights.get('registrar_high_risk_moderate', 4))
-        # 1yr+ domains: no penalty (long-standing domains aren't suspicious for registrar choice)
-    
-    # v7.6: .arpa reverse DNS namespace abuse (Infoblox research, Feb 2026)
-    # .arpa is reserved for DNS infrastructure (PTR records). Any .arpa hostname
-    # in a redirect chain or page links is near-certain phishing infrastructure.
-    # Zero legitimate false-positive risk — no real website redirects through .arpa.
-    if res.redirect_arpa_abuse:
-        add("redirect_arpa_abuse", weights.get('redirect_arpa_abuse', 30))
-    if res.content_arpa_links:
-        add("content_arpa_links", weights.get('content_arpa_links', 20))
-    
-    # v7.6: Viral Loops referral fraud tool
-    # app.viral-loops.com is a referral/giveaway widget heavily abused in
-    # fake prize campaigns and spam referral schemes.  Its presence on a
-    # domain under review is a strong indicator of promotional fraud.
-    if res.content_has_viral_loops:
-        add("viral_loops_script", weights.get('viral_loops_script', 25))
-    
     # === HIJACKED DOMAIN / STEPPING STONE INDICATORS ===
     if res.has_hijack_path_pattern:
         add("hijack_path_pattern", weights.get('hijack_path_pattern', 12))
@@ -6435,33 +5912,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             add("vt_negative_community", weights.get('vt_negative_community', 10))
         
         if mal == 0 and sus == 0 and res.vt_total_vendors >= 50:
-            # Don't credit VT clean scan of a content facade (SPA shell with no
-            # real content) — UNLESS the domain is established (1yr+).  A mature
-            # SPA that VT scans 0/93 is genuinely clean; the facade is architectural,
-            # not evasive.  New/young facades still don't get the credit because VT
-            # may not have had time to detect dynamically-loaded malicious content.
-            _established_spa = res.content_is_facade and res.domain_age_days >= 365
-            if not res.content_is_facade or _established_spa:
+            # Don't credit VT clean scan of a content facade (SPA shell with no real content)
+            if not res.content_is_facade:
                 add("vt_clean", weights.get('vt_clean', -5))
-    
-    # === v7.7: SUBMITTED SUBDOMAIN VT SCORING ===
-    # When root fallback is active, the submitted subdomain was checked separately on VT.
-    # Only scored if VT flagged it as malicious — otherwise informational only in summary.
-    if res.submitted_domain_vt_malicious:
-        add("submitted_subdomain_vt_malicious", weights.get('submitted_subdomain_vt_malicious', 40))
-    
-    # === VT EXTERNAL MALICIOUS DOMAIN SCORING (v7.7.1) ===
-    # Penalise domains whose pages reference external resources flagged malicious by VT.
-    # A compromised or malicious page may load scripts/links from VT-flagged domains
-    # even when the host domain itself appears clean (e.g. recaptcha.net on a clean site).
-    if res.vt_external_malicious_count > 0:
-        _ext_mal_n = res.vt_external_malicious_count
-        if _ext_mal_n >= 3:
-            add("vt_external_malicious_high", weights.get("vt_external_malicious_high", 30))
-        elif _ext_mal_n >= 2:
-            add("vt_external_malicious_medium", weights.get("vt_external_malicious_medium", 22))
-        else:
-            add("vt_external_malicious_low", weights.get("vt_external_malicious_low", 15))
     
     # === HACKLINK / SEO SPAM SCORING ===
     if res.hacklink_detected:
@@ -6477,16 +5930,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("hacklink_wp_compromised", weights.get('hacklink_wp_compromised', 45))
     
     if res.hacklink_vulnerable_plugins:
-        # v7.7: Score by context — popular plugins on uncompromised sites are
-        # theoretical risk only, not evidence of active exploitation.
-        _has_vuln_compromise = any(s in signals for s in [
-            "hacklink_keywords", "hidden_injection", "hacklink_wp_compromised",
-            "hacklink_spam_links", "malicious_script",
-        ])
-        if _has_vuln_compromise:
-            add("hacklink_vulnerable_plugins", weights.get('hacklink_vulnerable_plugins', 25))
-        else:
-            add("hacklink_vulnerable_plugins", weights.get('hacklink_vulnerable_plugins_no_compromise', 8))
+        add("hacklink_vulnerable_plugins", weights.get('hacklink_vulnerable_plugins', 25))
     
     if res.hacklink_spam_link_count >= 5:
         add("hacklink_spam_links", weights.get('hacklink_spam_links', 35))
@@ -6494,10 +5938,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # === MALICIOUS SCRIPT INJECTION (SocGholish/FakeUpdates/obfuscated) ===
     # v7.2: Multi-signal confidence — HIGH gets full weight, MEDIUM gets reduced weight
     # v7.5: Suppress on parking pages when ALL external scripts are from known providers
-    # v7.6: Suppress MEDIUM-confidence on established domains when all external scripts
-    #        are from known legitimate services (analytics, social, fraud prevention)
     _suppress_malicious_script = False
-    _downgrade_malicious_script = False  # v7.6: Reduce MEDIUM weight on established domains
     if res.hacklink_malicious_script and res.is_parking_page:
         # Check if all external script domains are known parking providers
         _ext_domains = [d.strip().lower() for d in
@@ -6516,42 +5957,11 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             if _ms_sigs.issubset(_parking_artifact_sigs):
                 _suppress_malicious_script = True
     
-    # v7.6: Established domain + MEDIUM confidence + all scripts from known services
-    # = false positive from legitimate third-party marketing/analytics tools.
-    # Only suppress MEDIUM (not HIGH) — HIGH confidence has stronger signal evidence.
-    # Two levels:
-    #   1. All scripts from known services → full suppression
-    #   2. Established + VT clean → reduced weight (MEDIUM is already uncertain;
-    #      established VT-clean domain is very unlikely to be compromised)
-    if (res.hacklink_malicious_script
-            and not _suppress_malicious_script
-            and res.hacklink_malicious_script_confidence == "MEDIUM"
-            and res.domain_age_days >= 365
-            and res.vt_malicious_count == 0):
-        _ext_domains = [d.strip().lower() for d in
-                        (res.content_external_script_domains or "").split(";") if d.strip()]
-        if _ext_domains:
-            _all_known = KNOWN_LEGITIMATE_SCRIPT_DOMAINS | KNOWN_PARKING_SCRIPT_DOMAINS
-            _unknown = [d for d in _ext_domains if d not in _all_known]
-            if not _unknown:
-                # All scripts from known legitimate services — full suppression
-                _suppress_malicious_script = True
-        # Even if not all scripts are whitelisted, reduce weight for established domains.
-        # MEDIUM confidence on a 1yr+ VT-clean domain is more likely false positive
-        # from legitimate third-party tools than actual compromise.
-        if not _suppress_malicious_script:
-            _downgrade_malicious_script = True
-    
     if res.hacklink_malicious_script and not _suppress_malicious_script:
         if res.hacklink_malicious_script_confidence == "HIGH":
             add("malicious_script", weights.get('malicious_script', 100))
         elif res.hacklink_malicious_script_confidence == "MEDIUM":
-            if _downgrade_malicious_script:
-                # v7.6: Established VT-clean domain — MEDIUM confidence is likely
-                # from legitimate third-party scripts, not actual compromise
-                add("malicious_script", weights.get('malicious_script_medium_established', 10))
-            else:
-                add("malicious_script", weights.get('malicious_script_medium', 25))
+            add("malicious_script", weights.get('malicious_script_medium', 25))
     
     # === HIDDEN CONTENT INJECTION (CSS cloaking: display:none, font-size:0) ===
     # HIGH = hidden content WITH embedded links (near-certain hacklink/SEO spam)
@@ -6573,14 +5983,6 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.content_cross_domain_emails:
         add("content_cross_domain_email", weights.get('content_cross_domain_email', 35))
     
-    # v7.7.1: Suspicious contact emails (spam infra or template placeholders)
-    if res.content_suspicious_contact_email:
-        _sus_type = res.content_suspicious_contact_type
-        if "spam_infra" in _sus_type:
-            add("contact_email_spam_infra", weights.get('contact_email_spam_infra', 25))
-        if "template_placeholder" in _sus_type:
-            add("contact_email_template", weights.get('contact_email_template', 15))
-    
     if res.content_is_broker_page:
         add("content_broker_page", weights.get('content_broker_page', 20))
     
@@ -6591,70 +5993,20 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("content_placeholder", weights.get('content_placeholder', 10))
     
     if res.content_is_facade:
-        # v7.6: Content facade was made informational-only because legitimate SPAs
-        # (React/Angular/Next.js) can present as "title + no visible text."
-        #
-        # v7.8: Score on ESTABLISHED domains (1yr+) when corroborating infrastructure
-        # risk signals are present.  A 27-year-old domain with 10 visible words and
-        # weak email auth / UK variant dark / cross-domain links is NOT a new SPA —
-        # it's an abandoned or compromised domain.  Young domains stay at 0 because
-        # facade is expected during development.
-        #
-        # Exemption: VT-clean + DKIM + DMARC enforcement = legitimate SPA architecture.
-        # These domains have invested in email auth, which compromised/abandoned ones haven't.
-        _facade_established = res.domain_age_days >= 365
-        _facade_has_corroboration = bool(
-            "tld_variant_uk_no_dns" in signals
-            or "cross_domain_brand_link" in signals
-            or "registration_opaque" in signals
-            or "hosting_budget_shared" in signals
-            or "hosting_suspect" in signals
-            or "hosting_free" in signals
-            or ("no_dkim" in signals and ("dmarc_p_none" in signals or "no_dmarc" in signals))
-        )
-        _facade_legit_spa = (
-            res.vt_malicious_count == 0
-            and res.vt_total_vendors >= 50
-            and res.dkim_exists
-            and res.dmarc_policy in ("quarantine", "reject")
-        )
-        if _facade_established and _facade_has_corroboration and not _facade_legit_spa:
-            add("content_facade", weights.get('content_facade_established', 10))
-        else:
-            add("content_facade", 0)  # Informational — signal only, enables combo rules
+        add("content_facade", weights.get('content_facade', 25))
     
     # === REGISTRATION OPACITY ===
     # Both RDAP and WHOIS failed to return domain creation date.
     # Legitimate domains almost always have accessible registration data.
     # Scored conditionally: standalone is mild, but combined with content
     # risk signals (facade, mismatch, broker) it becomes much more significant.
-    # v7.7: Exception for VT-clean e-commerce/SPA sites where facade is just
-    # SPA architecture (JS-rendered content) and opaque WHOIS is a ccTLD
-    # registry limitation (e.g. .gr, .jp, .kr), not a risk signal.
     if res.registration_opaque:
         _content_risk_present = (
             res.content_is_facade or res.content_title_body_mismatch or
             res.content_cross_domain_emails or res.content_is_broker_page or
             res.content_is_placeholder
         )
-        # v7.7: VT-clean + strong infra signals = facade is architectural, not evasive.
-        # Don't amplify opaque registration when the only "content risk" is an SPA shell
-        # on a domain with enterprise MX, DKIM, or confirmed e-commerce.
-        _facade_only_risk = (
-            _content_risk_present
-            and res.content_is_facade
-            and not res.content_title_body_mismatch
-            and not res.content_cross_domain_emails
-            and not res.content_is_broker_page
-            and not res.content_is_placeholder
-        )
-        _has_legitimacy_override = (
-            _facade_only_risk
-            and res.vt_malicious_count == 0
-            and res.vt_total_vendors >= 50
-            and (res.mx_provider_type == "enterprise" or res.dkim_exists or res.is_ecommerce_site)
-        )
-        if _content_risk_present and not _has_legitimacy_override:
+        if _content_risk_present:
             add("registration_opaque", weights.get('registration_opaque_with_risk', 20))
         else:
             add("registration_opaque", weights.get('registration_opaque', 8))
@@ -6685,22 +6037,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # (HugeDomains, Sedo, Afternic) routinely add transfer locks to protect
     # domains listed for sale.  A recent lock on a parked domain is expected
     # marketplace behavior, not a post-compromise lockdown signal.
-    # v7.7.1: Both transfer_lock_recent and whois_recently_updated are added
-    # independently so combo rules requiring both can fire.  Previous elif
-    # prevented whois_recently_updated from entering the signals set when
-    # transfer_lock_recent was True, silently breaking combo detection.
     if not res.is_parking_page:
         if res.domain_transfer_lock_recent:
-            # v7.8: Established domains (1yr+) get a base score for recent transfer
-            # lock.  A 5-year-old domain that just added clientTransferProhibited
-            # is inherently suspicious — it suggests post-compromise lockdown or
-            # ownership change.  Young domains get 0 because transfer locks are
-            # normal post-registration behavior.
-            if res.domain_age_days >= 365:
-                add("transfer_lock_recent", weights.get('transfer_lock_recent_base', 15))
-            else:
-                add("transfer_lock_recent", 0)
-        if res.whois_recently_updated:
+            add("transfer_lock_recent", 0)
+        elif res.whois_recently_updated:
             add("whois_recently_updated", 0)
         
         # Only score transfer lock / WHOIS update when content risk is present
@@ -6717,35 +6057,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             "subdomain_delegation_high", "subdomain_delegation_medium",
             "ct_reactivated",
             "oauth_phish", "homoglyph_domain", "cdn_tunnel_suspect", "quishing_profile",
-            "content_title_mismatch", "content_cross_domain_email", "content_broker_page", "registration_opaque",
+            "content_title_mismatch", "content_cross_domain_email", "content_broker_page", "content_facade", "registration_opaque",
             "domain_reregistered_recent", "domain_reregistered",
         }
-        # v7.7.1: content_facade only escalates transfer lock on young/suspicious
-        # domains.  Established VT-clean SPAs (React/Angular/Next.js) legitimately
-        # present as "1 visible word, content loaded via JS" — that architectural
-        # pattern should not be treated as post-compromise evidence on a domain
-        # that's been around for years with a clean reputation.
-        _established_vt_clean = (
-            res.domain_age_days >= 365
-            and res.vt_malicious_count == 0
-            and res.vt_total_vendors >= 50
-        )
-        if not _established_vt_clean:
-            _TRANSFER_RISK_SIGNALS.add("content_facade")
-        # v7.8: HIGH-tier category risk (pharma, gambling, crypto, etc.) makes a
-        # recent WHOIS update meaningful — ownership changes on high-risk-category
-        # domains warrant scrutiny even when infrastructure looks clean.
-        # Injected as a synthetic signal because category_risk scoring runs later;
-        # the signal set doesn't have domain_category_risk yet at this point.
-        if res.domain_category_risk_tier == "HIGH":
-            signals.add("_category_risk_high")
-            _TRANSFER_RISK_SIGNALS.add("_category_risk_high")
         if (res.domain_transfer_lock_recent or res.whois_recently_updated):
             has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
             if has_transfer_risk:
                 if res.domain_transfer_lock_recent:
                     add("transfer_lock_with_risk", weights.get('transfer_lock_recent', 15))
-                if res.whois_recently_updated:
+                else:
                     add("whois_updated_with_risk", weights.get('whois_recently_updated', 10))
     
     # === MX HIJACK FINGERPRINT (v7.3.1) ===
@@ -6758,8 +6078,16 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             add("mx_hijack_low", weights.get('mx_hijack_low', 0))  # informational only
     
     # === EMPTY PAGE ===
+    # v7.5.1: Suppress on young domains (< 30 days) — a brand-new domain with an empty
+    # page is expected behavior (site hasn't been built yet), not a compromise indicator.
+    # On established domains, an empty page suggests stripped/gutted content post-compromise.
+    # IMPORTANT: Don't add to signals set on young domains — this prevents combo rules
+    # (e.g., combo_empty_page_uk_variant) from cascading into false denials.
     if res.is_empty_page:
-        add("empty_page", weights.get('empty_page', 20))
+        _empty_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 30
+        if _empty_age_ok:
+            add("empty_page", weights.get('empty_page', 20))
+        # else: young domain — don't score or track (prevents combo cascade)
     
     # === CERTIFICATE TRANSPARENCY ===
     if res.ct_recent_issuance:
@@ -6816,46 +6144,35 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             add("minimal_shell_email_auth_mitigated", weights.get('minimal_shell_email_auth_mitigated', -8))
 
     # === VULNERABLE PLUGINS WITHOUT COMPROMISE EVIDENCE ===
-    # v7.7: Scoring now split upfront at the add() call: 25 pts with compromise
-    # evidence, 8 pts without. No downstream mitigation block needed.
-
-    # === DOMAIN CATEGORY RISK SCORING (v7.7) ===
-    if res.domain_category:
-        _cat_tier = res.domain_category_risk_tier
-        _cat_base = {
-            "HIGH": weights.get('category_risk_high', 30),
-            "ELEVATED": weights.get('category_risk_elevated', 12),
-            "MODERATE": weights.get('category_risk_moderate', 5),
-        }.get(_cat_tier, 0)
-        
-        if _cat_base > 0:
-            _cat_legit = sum([
-                bool(res.mx_provider_type == "enterprise"),
+    # Contact Form 7, Elementor, etc. are on millions of legitimate WordPress sites.
+    # Having them installed is theoretical risk, not evidence of actual compromise.
+    # When there's NO evidence of exploitation AND the domain has strong legitimacy
+    # signals, reduce the weight significantly — it's just a popular plugin, not a hack.
+    if "hacklink_vulnerable_plugins" in signals:
+        has_compromise_evidence = any(s in signals for s in [
+            "hacklink_keywords", "hidden_injection", "hacklink_wp_compromised",
+            "hacklink_spam_links", "malicious_script",
+        ])
+        if not has_compromise_evidence:
+            # Domain has strong positive signals — theoretical vuln only
+            is_established = res.domain_age_days and res.domain_age_days >= 365
+            has_app_presence = res.app_store_has_presence
+            has_enterprise_mx = res.mx_provider_type == "enterprise"
+            legitimacy_signals = sum([
+                bool(has_strong_email_auth),
+                bool(is_established),
+                bool(has_app_presence),
+                bool(has_enterprise_mx),
                 bool(res.dkim_exists),
-                bool(res.domain_age_days >= 365),
-                bool(res.vt_malicious_count == 0 and res.vt_total_vendors >= 50),
             ])
-            # HIGH tier = compliance/reputation risk regardless of infrastructure
-            # legitimacy.  A well-configured pharma sender is still pharma.
-            # Legitimacy signals reduce the score but never below half the base.
-            if _cat_tier == "HIGH":
-                _cat_floor = max(1, _cat_base // 2)
-                if _cat_legit >= 3:
-                    add("domain_category_risk", _cat_floor)
-                elif _cat_legit >= 2:
-                    add("domain_category_risk", max(_cat_floor, _cat_base * 2 // 3))
-                else:
-                    add("domain_category_risk", _cat_base)
-            # ELEVATED/MODERATE = softer risk where legitimacy genuinely reduces concern
-            else:
-                if _cat_legit >= 3:
-                    add("domain_category_risk", 0)
-                elif _cat_legit >= 2:
-                    add("domain_category_risk", max(1, _cat_base // 2))
-                else:
-                    add("domain_category_risk", _cat_base)
-    
-        # === UNIFIED RULES ENGINE ===
+            # 3+ legitimacy signals = clearly legitimate site with a popular plugin
+            if legitimacy_signals >= 3:
+                add("vuln_plugins_no_compromise_mitigated", weights.get('vuln_plugins_strong_mitigation', -18))
+            # 2 legitimacy signals = likely legitimate, moderate reduction
+            elif legitimacy_signals >= 2:
+                add("vuln_plugins_no_compromise_mitigated", weights.get('vuln_plugins_moderate_mitigation', -10))
+
+    # === UNIFIED RULES ENGINE ===
     # All scoring logic beyond base weights (former combos + custom rules)
     # Rules support if/then/else logic:
     #   if_all:  ALL listed signals must be present (AND)
@@ -6897,13 +6214,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         if rule_label:
             rules_labels.append(rule_label)
     
-    # NOTE: Score finalization moved to after all detection code (v7.8 fix).
-    # Previously this block ran here, BEFORE hacklink campaign profile detection,
-    # causing hacklink_campaign_profile scores to be silently dropped from
-    # res.score_breakdown, res.risk_score, res.signals_triggered, and
-    # res.recommendation.  The autofail block re-serialized only when autofail
-    # fired, masking the bug for confirmed threats but breaking scoring for
-    # probabilistic detections (campaign profile).
+    res.risk_score = max(0, min(score, 100))
+    
+    bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
+    res.risk_level = next((l for lo, hi, l in bands if lo <= res.risk_score <= hi), "UNKNOWN")
+    
+    res.recommendation = "APPROVE" if res.risk_score <= threshold else "DENY"
+    res.signals_triggered = ";".join(sorted(signals))
+    res.combos_triggered = ""  # Deprecated: combos are now unified rules
+    res.rules_triggered = ";".join(rules_hit)
+    res.rules_labels = ";".join(rules_labels)
+    res.score_breakdown = json.dumps(breakdown)
     
     # === BUILD ASN DISPLAY STRING ===
     if res.hosting_asn and res.hosting_asn_org:
@@ -6978,20 +6299,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_harvest_combo:
         kit_evidence.append(f"harvest combo: {res.harvest_signals}")
     
-    # v7.6: Tiered exfil confidence for kit composite.
-    # Strong exfil (Telegram/Discord/base64/fetch POST) alone triggers the kit.
-    # Weak exfil (js_email_exfil — often a contact form) needs 3+ evidence items
-    # instead of the normal 2+, because "hardcoded email + credential form" is an
-    # extremely common pattern on legitimate WordPress/contact-form sites.
-    _has_only_weak_exfil = res.has_exfil_drop_script and not res.exfil_is_strong
-    _min_evidence = 3 if _has_only_weak_exfil else 2
-    
-    if len(kit_evidence) >= _min_evidence or res.exfil_is_strong:
+    if len(kit_evidence) >= 2 or res.has_exfil_drop_script:
         # v7.5 defense-in-depth: On parking pages, brand + form_external are
         # artifacts of the domain purchase flow (suppressed upstream in v7.5).
         # As a safety net, if the only evidence is parking-attributable signals
         # and no exfil/kit-filename/credential-form is present, do NOT fire.
-        if res.is_parking_page and not res.exfil_is_strong:
+        if res.is_parking_page and not res.has_exfil_drop_script:
             _hard_evidence = [e for e in kit_evidence if not (
                 e.startswith("brand:") or
                 e == "form posts to external domain" or
@@ -7001,122 +6314,46 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 res.phishing_kit_detected = True
                 res.phishing_kit_reason = " + ".join(kit_evidence)
             # else: suppress — only soft/parking-artifact evidence on a parking page
-        # v7.6 defense-in-depth: E-commerce sites (WooCommerce, Shopify, etc.)
-        # naturally have credential forms (login/registration), brand references
-        # (shipping carriers, payment processors), and external form actions
-        # (payment gateways like Stripe, PayPal checkout).  This trifecta is the
-        # normal anatomy of an online store, NOT a phishing kit.
-        #
-        # Only fire the kit composite on e-commerce sites when hard evidence
-        # exists that goes beyond normal store operations:
-        #   - exfil/drop scripts (data harvesting to attacker server)
-        #   - kit filenames (next.php, login.php, etc.)
-        #   - phishing paths (/signin, /verify, /secure, etc.)
-        #   - harvest combo signals (keylogger, credential capture)
-        elif res.is_ecommerce_site and not res.exfil_is_strong:
-            _hard_evidence = [e for e in kit_evidence if not (
-                e.startswith("brand:") or
-                e == "credential form" or
-                e == "form posts to external domain" or
-                e == "obfuscated JS"
-            )]
-            if len(_hard_evidence) >= 1:
-                # Hard evidence + ecommerce soft signals = still suspicious
-                res.phishing_kit_detected = True
-                res.phishing_kit_reason = " + ".join(kit_evidence)
-            # else: suppress — only normal ecommerce signals (brand + form + external)
         else:
             res.phishing_kit_detected = True
             res.phishing_kit_reason = " + ".join(kit_evidence)
     
-    # === HACKLINK CAMPAIGN PROFILE DETECTION (v7.8) ===
-    # Detects the infrastructure fingerprint of hacklink-compromised domains even
-    # when injected content is cloaked, cleaned up, or blocked from the fetcher.
+    # === HACKLINK CAMPAIGN PROFILE COMPOSITE (v7.5.1) ===
+    # Identifies domains matching known hacklink target infrastructure fingerprints.
+    # This is a PROFILE match, not confirmed hacklink — the domain's infrastructure
+    # resembles domains commonly targeted or used in hacklink/SEO spam campaigns.
     #
-    # Hacklink campaigns (predominantly Turkish-origin) target WordPress sites on
-    # budget shared hosting, inject SEO spam visible only to search crawlers, and
-    # leave a distinctive infrastructure footprint.  This composite catches domains
-    # where the fetcher sees clean/empty content but the surrounding infrastructure
-    # signals match the known campaign profile.
+    # Signals that contribute to the profile:
+    #   - empty_page: site content stripped or never present
+    #   - uk_variant_dark: .co.uk variant has no DNS (common in UK hacklink campaigns)
+    #   - weak_email_auth: no DKIM + DMARC p=none + SPF softfail (low investment in auth)
+    #   - hidden_injection: CSS-cloaked content detected
+    #   - cpanel_detected: cPanel hosting (frequently targeted in mass exploitation)
     #
-    # Architecture:
-    #   Gate condition: At least 1 "content anomaly" signal (something wrong with the page)
-    #   Infrastructure signals: 2+ supporting infra indicators from the hacklink target profile
-    #   Score: MODERATE (gate + 2 infra) or HIGH (gate + 3+ infra)
-    #
-    # NOT an autofail — this is probabilistic, not confirmatory.  Score amplifier
-    # that pushes past threshold when enough signals converge.
-    #
-    # Suppressed when hacklink_detected is already True (no need to profile-detect
-    # what the scanner already confirmed via content analysis).
-    if not res.hacklink_detected:
-        # --- Content anomaly gate ---
-        # Something is "off" about the page content: empty, facade, or keyword hit
-        _campaign_gate_signals = []
-        if "empty_page" in signals:
-            _campaign_gate_signals.append("empty_page")
-        if "content_facade" in signals:
-            _campaign_gate_signals.append("content_facade")
-        if "hacklink_keywords" in signals:
-            _campaign_gate_signals.append("hacklink_keywords")
-        
-        if _campaign_gate_signals:
-            # --- Infrastructure profile signals ---
-            # Each represents a facet of the hacklink campaign target profile.
-            # Weak email auth is grouped (any combination counts as 1 signal).
-            _campaign_infra_signals = []
-            
-            if "mx_selfhosted" in signals or "mx_mail_prefix" in signals:
-                _campaign_infra_signals.append("self_hosted_email")
-            if "tld_variant_uk_no_dns" in signals:
-                _campaign_infra_signals.append("uk_variant_dark")
-            if "hosting_budget_shared" in signals or "cpanel_detected" in signals:
-                _campaign_infra_signals.append("budget_hosting")
-            if "registration_opaque" in signals:
-                _campaign_infra_signals.append("registration_opaque")
-            # Weak email auth group: no_dkim + (dmarc_p_none or no_dmarc)
-            _has_weak_auth = (
-                ("no_dkim" in signals)
-                and ("dmarc_p_none" in signals or "no_dmarc" in signals)
-            )
-            if _has_weak_auth:
-                _campaign_infra_signals.append("weak_email_auth")
-            # WordPress detected (from hacklink scanner)
-            if res.hacklink_is_wordpress:
-                _campaign_infra_signals.append("wordpress_cms")
-            
-            _total_infra = len(_campaign_infra_signals)
-            _all_profile_signals = _campaign_gate_signals + _campaign_infra_signals
-            
-            if _total_infra >= 3:
-                # HIGH confidence — strong infrastructure fingerprint
-                res.hacklink_campaign_profile = True
-                res.hacklink_campaign_profile_confidence = "HIGH"
-                res.hacklink_campaign_profile_signals = ";".join(_all_profile_signals)
-                add("hacklink_campaign_profile",
-                    weights.get('hacklink_campaign_profile_strong', 40))
-            elif _total_infra >= 2:
-                # MODERATE confidence — partial fingerprint
-                res.hacklink_campaign_profile = True
-                res.hacklink_campaign_profile_confidence = "MODERATE"
-                res.hacklink_campaign_profile_signals = ";".join(_all_profile_signals)
-                add("hacklink_campaign_profile",
-                    weights.get('hacklink_campaign_profile', 25))
+    # CRITICAL: Only fires on established domains (90+ days).
+    # On new domains, empty pages and missing UK variants are normal setup behavior.
+    _hcp_signals = []
+    if res.is_empty_page:
+        _hcp_signals.append("empty_page")
+    if res.tld_variant_uk_no_dns:
+        _hcp_signals.append("uk_variant_dark")
+    if not res.has_dkim and res.dmarc_policy == "none" and "softfail" in (res.spf_record or "").lower():
+        _hcp_signals.append("weak_email_auth")
+    if res.hacklink_hidden_injection:
+        _hcp_signals.append("hidden_injection")
+    if res.hacklink_is_cpanel:
+        _hcp_signals.append("cpanel")
     
-    # === FINALIZE SCORE, SIGNALS, BREAKDOWN (v7.8 relocated) ===
-    # Must run AFTER all detection code (phishing kit, hacklink campaign profile)
-    # so that all add() calls are reflected in the serialized output.
-    res.risk_score = max(0, min(score, 100))
-    
-    bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
-    res.risk_level = next((l for lo, hi, l in bands if lo <= res.risk_score <= hi), "UNKNOWN")
-    
-    res.recommendation = "APPROVE" if res.risk_score <= threshold else "DENY"
-    res.signals_triggered = ";".join(sorted(signals))
-    res.combos_triggered = ""  # Deprecated: combos are now unified rules
-    res.rules_triggered = ";".join(rules_hit)
-    res.rules_labels = ";".join(rules_labels)
-    res.score_breakdown = json.dumps(breakdown)
+    # 2+ signals = profile match, but ONLY on established domains
+    _hcp_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
+    if len(_hcp_signals) >= 2 and _hcp_age_ok:
+        # Confidence: 3+ signals = HIGH, 2 = MODERATE
+        _hcp_conf = "HIGH" if len(_hcp_signals) >= 3 else "MODERATE"
+        res.hacklink_campaign_profile = True
+        res.hacklink_campaign_profile_confidence = _hcp_conf
+        res.hacklink_campaign_profile_signals = ";".join(_hcp_signals)
+        _hcp_weight = weights.get('hacklink_campaign_profile', 25)
+        add("hacklink_campaign_profile", _hcp_weight)
     
     # === BUILD PATTERN MATCH INDICATOR ===
     # Identifies known attack patterns for specialist visibility.
@@ -7135,6 +6372,13 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         elif "render" in reason.lower() and "phish" in reason.lower():
             _patterns.append("🇸🇪 Swedish Invoice Phish (partial match)")
     
+    # Hacklink Campaign Profile (v7.5.1)
+    if res.hacklink_campaign_profile:
+        _patterns.append(
+            f"🕸️ Hacklink Campaign Profile ({res.hacklink_campaign_profile_confidence}: "
+            f"{res.hacklink_campaign_profile_signals.replace(';', ', ')})"
+        )
+    
     # Hacklink / SEO Spam pattern
     _hl_signals = []
     if res.hacklink_detected:
@@ -7151,12 +6395,6 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         _hl_signals.append(f"{res.hacklink_spam_link_count} spam links")
     if _hl_signals:
         _patterns.append(f"🕷️ Hacklink/SEO Spam ({', '.join(_hl_signals)})")
-    
-    # Hacklink Campaign Profile (v7.8) — indirect detection via infrastructure fingerprint
-    if res.hacklink_campaign_profile:
-        _cp_conf = res.hacklink_campaign_profile_confidence
-        _cp_sigs = res.hacklink_campaign_profile_signals.replace(";", ", ")
-        _patterns.append(f"🕸️ Hacklink Campaign Profile ({_cp_conf}: {_cp_sigs})")
     
     res.pattern_match = " + ".join(_patterns) if _patterns else ""
     
@@ -7242,49 +6480,16 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     
     res = DomainApprovalResult(domain=domain)
     res.scan_timestamp = datetime.now(timezone.utc).isoformat()
-    res.submitted_domain = domain  # Always record what was submitted
     
-    # === v7.7: ROOT DOMAIN FALLBACK ===
-    # Extract the registrable root domain (e.g., stage-app.shiftposts.com → shiftposts.com)
-    root_domain = get_registrable_domain(domain)
-    is_subdomain_input = (root_domain != domain.lower().rstrip('.'))
-    
-    # DNS Resolution — try submitted domain first, fall back to root
-    submitted_resolves = False
-    root_resolves = False
+    # DNS Resolution
     try:
         res.ip_address = socket.gethostbyname(domain)
         res.resolved = True
-        submitted_resolves = True
-        res.submitted_domain_resolves = True
-        res.analysis_domain = domain
-    except Exception:
-        pass
-    
-    if not submitted_resolves and is_subdomain_input:
-        # Submitted subdomain doesn't resolve — try root domain
-        try:
-            res.ip_address = socket.gethostbyname(root_domain)
-            res.resolved = True
-            root_resolves = True
-            res.used_root_fallback = True
-            res.analysis_domain = root_domain
-            # Update res.domain to reflect the domain actually analyzed
-            res.domain = root_domain
-            # Switch the working domain to root for all downstream checks
-            domain = root_domain
-        except Exception:
-            pass
-    
-    if not res.resolved:
+    except:
         res.recommendation = "DENY"
-        if is_subdomain_input:
-            res.summary = f"DENY: Neither submitted domain ({res.submitted_domain}) nor root domain ({root_domain}) resolves"
-        else:
-            res.summary = "DENY: Domain does not resolve"
+        res.summary = "DENY: Domain does not resolve"
         res.risk_level = "ERROR"
         res.risk_score = 100
-        res.analysis_domain = res.submitted_domain
         return asdict(res)
     
     # PTR
@@ -7503,15 +6708,6 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.final_url = https_result["final_url"]
     res.content_length = https_result["content_length"]
     
-    # v7.6: Check redirect chain for .arpa abuse (Infoblox: reverse DNS phishing)
-    # .arpa is reserved for DNS infrastructure (PTR records, etc.) and should never
-    # host web content or appear in redirect chains.  Any .arpa hostname in the
-    # chain is near-certain indicator of reverse DNS namespace abuse for phishing.
-    _arpa_in_chain = [d for d in https_result["domains"] if d.endswith('.arpa') or '.arpa.' in d]
-    if _arpa_in_chain:
-        res.redirect_arpa_abuse = True
-        res.redirect_arpa_domains = ";".join(_arpa_in_chain[:5])
-    
     all_statuses = https_result["all_statuses"]
     res.status_codes_seen = ";".join(str(s) for s in sorted(all_statuses) if s > 0)
     res.has_401 = 401 in all_statuses
@@ -7528,7 +6724,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         elif res.has_401:
             res.access_restriction_note = "401 Unauthorized - requires authentication for public site"
         else:
-            res.access_restriction_note = "403 Forbidden — likely WAF/bot protection (informational only)"
+            res.access_restriction_note = "403 Forbidden - access blocked"
     
     # Content analysis
     content = https_result["content"]
@@ -7598,10 +6794,6 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                 if _all_parking:
                     res.form_posts_external = False
         
-        # NOTE: E-commerce shipping brand suppression moved to after hacklink scanning
-        # (see "ECOMMERCE SHIPPING BRAND SUPPRESSION" below) so it runs after BOTH
-        # analyze_ecommerce_indicators() and WooCommerce plugin detection have completed.
-        
         # Phishing kit detection (v7.3)
         if ca["kit_filename"]:
             res.has_phishing_kit_filename = True
@@ -7611,10 +6803,6 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.has_exfil_drop_script = True
             res.exfil_drop_signals = ";".join(ca["exfil_signals"])
             res.exfil_drop_details = ";".join(ca["exfil_details"])
-            # v7.6: Determine if any signal is strong (not just js_email_exfil)
-            res.exfil_is_strong = any(
-                sig not in WEAK_EXFIL_SIGNALS for sig in ca["exfil_signals"]
-            )
         
         # Client-side harvest detection (v7.5)
         if ca["harvest_signals"]:
@@ -7678,9 +6866,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.missing_trust_signals = trust_signals["missing_trust_signals"]
         
         # If access is restricted AND no trust signals found, mark as opaque entity
-        # But NOT for 403-only — WAF/bot protection blocks trust page checks too,
-        # creating a false cascade. Only flag opaque when 401 is involved.
-        if res.is_access_restricted and res.missing_trust_signals and res.has_401:
+        if res.is_access_restricted and res.missing_trust_signals:
             res.is_opaque_entity = True
     
     # App Store Presence Detection (legitimacy signal)
@@ -7713,8 +6899,6 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.tld_variant_content_words = tld_variant["variant_content_words"]
         res.tld_variant_signup_content_words = tld_variant["signup_content_words"]
         res.tld_variant_summary = tld_variant["summary"]
-        res.tld_variant_uk_no_dns = tld_variant.get("variant_uk_no_dns", False)
-        res.tld_variant_uk_no_dns_domain = tld_variant.get("variant_uk_no_dns_domain", "")
         
         # TLD variant allowlist: suppress for domains explicitly cleared by admin review
         tld_variant_allowlist = [d.lower().strip() for d in config.get('tld_variant_allowlist', [])]
@@ -7722,18 +6906,30 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             if domain_lower in tld_variant_allowlist or any(domain_lower.endswith('.' + a) for a in tld_variant_allowlist):
                 res.tld_variant_detected = False
                 res.tld_variant_summary = f"ALLOWLISTED — {res.tld_variant_domain} variant suppressed by admin"
+        
+        # v7.5.1: UK TLD variant dark detection
+        # When a .co.uk variant has NO DNS, this is an infrastructure signal:
+        # - On ESTABLISHED domains: suggests domain takeover or shell domain where
+        #   the .co.uk was abandoned/never held by the attacker
+        # - On NEW domains: expected behavior (owner only registered .com)
+        summary_lower = (res.tld_variant_summary or "").lower()
+        if "co.uk: no dns" in summary_lower or ".co.uk: no dns" in summary_lower:
+            # Extract the dark variant domain from the summary
+            import re as _re_uk
+            _uk_match = _re_uk.search(r'(\S+\.co\.uk):\s*no dns', summary_lower)
+            if _uk_match:
+                res.tld_variant_uk_no_dns = True
+                res.tld_variant_uk_no_dns_domain = _uk_match.group(1)
     except Exception as e:
         # Surface error in results so it's visible during debugging
         res.tld_variant_summary = f"CHECK ERROR: {type(e).__name__}: {str(e)[:200]}"
     
     # === VIRUSTOTAL REPUTATION CHECK ===
     # Uses the VT API to check domain reputation across 70+ security vendors
-    # v7.7: When root fallback is active, check BOTH root (scored) and submitted (summary-only unless malicious)
     vt_api_key = src.get('vt_api_key', '') or os.environ.get('VT_API_KEY', '')
     if VT_CHECKER_AVAILABLE and vt_api_key:
         try:
             vt = VirusTotalChecker(api_key=vt_api_key)
-            # Primary VT check: the analysis domain (root or submitted, whichever resolved)
             vt_result = vt.check_domain(domain)
             res.vt_available = vt_result.get("vt_available", False)
             res.vt_malicious_count = vt_result.get("malicious_count", 0)
@@ -7746,31 +6942,8 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.vt_malicious_vendors = ";".join(vt_result.get("malicious_vendors", []))
             res.vt_categories = json.dumps(vt_result.get("categories", {}))
             res.vt_last_analysis = vt_result.get("last_analysis_date", "") or ""
-        except Exception as e:
-            res.vt_error = f"{type(e).__name__}: {str(e)[:200]}"
-        
-        # v7.7: If root fallback is active, also check the submitted subdomain on VT
-        # Reported in summary; only contributes to score if VT flags it as malicious
-        if res.used_root_fallback and res.submitted_domain != domain:
-            try:
-                vt_sub_result = vt.check_domain(res.submitted_domain)
-                sub_mal = vt_sub_result.get("malicious_count", 0)
-                sub_sus = vt_sub_result.get("suspicious_count", 0)
-                sub_total = vt_sub_result.get("total_vendors", 0)
-                sub_threats = vt_sub_result.get("threat_names", [])
-                if sub_mal > 0:
-                    res.submitted_domain_vt_malicious = True
-                    res.submitted_domain_vt_detail = (
-                        f"VT {sub_mal}/{sub_total} malicious"
-                        + (f" — threats: {';'.join(sub_threats[:5])}" if sub_threats else "")
-                    )
-                elif sub_sus > 0:
-                    res.submitted_domain_vt_suspicious = True
-                    res.submitted_domain_vt_detail = f"VT {sub_sus}/{sub_total} suspicious"
-                else:
-                    res.submitted_domain_vt_detail = f"VT 0/{sub_total} (clean)"
-            except Exception:
-                res.submitted_domain_vt_detail = "VT check failed for submitted subdomain"
+        except Exception:
+            pass  # Non-critical — don't break analysis if VT check fails
     
     # === HACKLINK / SEO SPAM DETECTION ===
     # Scans page content for Turkish hacklink injection, gambling keywords, 
@@ -7820,30 +6993,6 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         except Exception:
             pass  # Non-critical — don't break analysis if hacklink check fails
     
-    # === WOOCOMMERCE PLUGIN → ECOMMERCE UPGRADE (v7.6.1) ===
-    # WooCommerce detected in WordPress plugins is strong evidence of e-commerce
-    # even when content keyword detection fails (e.g., under-construction page,
-    # storefront not fully rendering, or minimal product listings on homepage).
-    if not res.is_ecommerce_site and "woocommerce" in (res.hacklink_vulnerable_plugins or "").lower():
-        res.is_ecommerce_site = True
-    
-    # === E-COMMERCE SHIPPING BRAND SUPPRESSION (v7.6) ===
-    # E-commerce sites (WooCommerce, Shopify, etc.) naturally reference shipping
-    # carriers like UPS, DHL, FedEx in product pages, checkout flows, and FAQs.
-    # Combined with credential forms (login/registration) and external form actions
-    # (payment processors), these trigger the phishing kit composite = false autofail.
-    #
-    # When e-commerce is confirmed, filter shipping carrier brands from brands_detected.
-    # Actual brand impersonation (e.g., a fake UPS tracking site) won't have e-commerce
-    # indicators like cart, product listings, add-to-cart buttons, etc.
-    #
-    # Runs here (after both analyze_ecommerce_indicators and hacklink plugin scanning)
-    # so that WooCommerce plugin detection can upgrade is_ecommerce_site first.
-    if res.is_ecommerce_site and res.brands_detected:
-        _ecom_brands = [b.strip() for b in res.brands_detected.split(";")]
-        _filtered = [b for b in _ecom_brands if b.lower() not in ECOMMERCE_SHIPPING_BRANDS]
-        res.brands_detected = ";".join(_filtered) if _filtered else ""
-    
     # === CONTENT IDENTITY VERIFICATION ===
     # Scans page content for identity mismatches, cloned content, cross-domain
     # email references, domain broker facades, and placeholder pages.
@@ -7866,45 +7015,6 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             free_emails = cc.get("page_freemail_contacts", [])
             if free_emails:
                 res.content_page_freemail_contacts = ";".join(free_emails[:10])
-            
-            # v7.7.1: Detect suspicious contact emails on page
-            # Spam-infra domains (mailtrap, mailinator, etc.) and template placeholders
-            _page_all_emails = cc.get("page_emails", []) or []
-            _all_check = list(set(_page_all_emails + (xd_emails or [])))
-            if _all_check:
-                import re as _re_em
-                _SPAM_INFRA = _re_em.compile(
-                    r'(?:mailtrap|spamtrap|honeypot|mailninja|trapmail|'
-                    r'ninjamail|fakeinbox|tempmail|throwaway|disposable|'
-                    r'guerrillamail|mailinator|yopmail|sharklasers|'
-                    r'guerrilla|trashmail|tempinbox)',
-                    _re_em.IGNORECASE)
-                _TEMPLATE_EMAILS = {
-                    "info@company.com", "info@example.com", "info@yourcompany.com",
-                    "info@yourdomain.com", "info@domain.com", "info@website.com",
-                    "email@example.com", "email@domain.com", "email@company.com",
-                    "your@email.com", "contact@company.com", "contact@example.com",
-                    "contact@yourcompany.com", "contact@yourdomain.com",
-                    "admin@example.com", "support@example.com",
-                    "name@example.com", "user@example.com",
-                    "test@test.com", "test@example.com",
-                    "hello@company.com", "hello@example.com",
-                }
-                _sus_found = []
-                _sus_types = set()
-                for _em in _all_check:
-                    _eml = _em.lower().strip()
-                    if _eml in _TEMPLATE_EMAILS:
-                        _sus_found.append(_eml)
-                        _sus_types.add("template_placeholder")
-                    elif "@" in _eml:
-                        _ed = _eml.split("@", 1)[1]
-                        if _SPAM_INFRA.search(_ed):
-                            _sus_found.append(_eml)
-                            _sus_types.add("spam_infra")
-                if _sus_found:
-                    res.content_suspicious_contact_email = ";".join(_sus_found[:10])
-                    res.content_suspicious_contact_type = ";".join(sorted(_sus_types))
             res.content_is_broker_page = cc.get("is_broker_page", False)
             broker_ind = cc.get("broker_indicators", [])
             if broker_ind:
@@ -7923,167 +7033,14 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             ext_scripts = cc.get("external_script_domains", [])
             if ext_scripts:
                 res.content_external_script_domains = ";".join(ext_scripts[:10])
-                # v7.6: Detect viral-loops.com (referral fraud / fake giveaway tool)
-                if any('viral-loops.com' in d.lower() for d in ext_scripts):
-                    res.content_has_viral_loops = True
-                # v7.6: Check scripts for .arpa domains too
-                _arpa_scripts = [d for d in ext_scripts if '.arpa' in d.lower()]
-                if _arpa_scripts:
-                    res.content_arpa_links = True
-                    existing = res.content_arpa_domains.split(";") if res.content_arpa_domains else []
-                    res.content_arpa_domains = ";".join(list(set(existing + _arpa_scripts))[:5])
             ext_links = cc.get("external_link_domains", [])
             if ext_links:
                 res.content_external_link_domains = ";".join(ext_links[:20])
-                # v7.6: Check for .arpa domains in page links (reverse DNS abuse)
-                _arpa_links = [d for d in ext_links if '.arpa' in d.lower()]
-                if _arpa_links:
-                    res.content_arpa_links = True
-                    res.content_arpa_domains = ";".join(_arpa_links[:5])
             res.content_visible_word_count = cc.get("visible_word_count", -1)
         except Exception:
             pass  # Non-critical — don't break analysis if content check fails
     
-    # === VT EXTERNAL DOMAIN CHECK (v7.7.1) ===
-    # Check external links/scripts found on the page against VirusTotal.
-    # A clean domain can host malicious external resources (e.g. recaptcha.net
-    # injected into a compromised page vs legitimate www.recaptcha.net).
-    if VT_CHECKER_AVAILABLE and vt_api_key and (res.content_external_script_domains or res.content_external_link_domains):
-        try:
-            from urllib.parse import urlparse as _vt_urlparse
-            try:
-                from hacklink_keyword_scanner import CDN_WHITELIST as _CDN_WL
-            except ImportError:
-                _CDN_WL = set()
-
-            # Merge external scripts + links, extract bare domains
-            _ext_raw = set()
-            for _d in (res.content_external_script_domains or "").split(";"):
-                _d = _d.strip()
-                if _d:
-                    _ext_raw.add(_d.lower())
-            for _d in (res.content_external_link_domains or "").split(";"):
-                _d = _d.strip()
-                if _d:
-                    try:
-                        if "://" not in _d:
-                            _d = "http://" + _d
-                        _ext_raw.add(_vt_urlparse(_d).netloc.lower())
-                    except Exception:
-                        _ext_raw.add(_d.split("/")[0].lower())
-
-            # v7.7.1: Extract URLs embedded INSIDE <script> tag bodies
-            # This catches domains like recaptcha.net referenced in JS code
-            # (fetch/XMLHttpRequest/Image.src/window.location targets)
-            if content:
-                try:
-                    import re as _re_ext
-                    _html_str = content.decode("utf-8", errors="ignore") if isinstance(content, bytes) else content
-                    # Extract inline script bodies
-                    _script_bodies = _re_ext.findall(
-                        r'<script[^>]*>(.+?)</script>', _html_str,
-                        _re_ext.DOTALL | _re_ext.IGNORECASE)
-                    for _sb in _script_bodies:
-                        # Find all http(s) URLs in script body
-                        _js_urls = _re_ext.findall(
-                            r'https?://([a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?)+)',
-                            _sb)
-                        for _js_host in _js_urls:
-                            _js_host = _js_host.lower().rstrip(".")
-                            if _js_host and len(_js_host) >= 4:
-                                _ext_raw.add(_js_host)
-                except Exception:
-                    pass
-
-            # Filter: remove same-domain, CDN whitelist, known SaaS scripts
-            _analysis_domain = domain.lower()
-            _root_parts = _analysis_domain.rsplit(".", 2)
-            _root_domain = ".".join(_root_parts[-2:]) if len(_root_parts) >= 2 else _analysis_domain
-
-            _ext_candidates = []
-            for _ed in sorted(_ext_raw):
-                if not _ed or len(_ed) < 4:
-                    continue
-                if _ed == _analysis_domain or _ed.endswith("." + _analysis_domain):
-                    continue
-                if _ed == _root_domain or _ed.endswith("." + _root_domain):
-                    continue
-                _skip = False
-                for _wl_set in (_CDN_WL, KNOWN_LEGITIMATE_SCRIPT_DOMAINS):
-                    if _ed in _wl_set:
-                        _skip = True
-                        break
-                    for _wl in _wl_set:
-                        if _ed.endswith("." + _wl) or _wl.endswith("." + _ed):
-                            _skip = True
-                            break
-                    if _skip:
-                        break
-                if not _skip:
-                    _ext_candidates.append(_ed)
-
-            # Limit to 5 checks to preserve VT API quota
-            _ext_to_check = _ext_candidates[:5]
-
-            if _ext_to_check:
-                _vt_ext = VirusTotalChecker(api_key=vt_api_key)
-                _vt_ext_malicious = {}
-                for _check_domain in _ext_to_check:
-                    try:
-                        _vt_r = _vt_ext.check_domain(_check_domain)
-                        _mal_ct = _vt_r.get("malicious_count", 0)
-                        if _mal_ct > 0:
-                            _vt_ext_malicious[_check_domain] = {
-                                "malicious": _mal_ct,
-                                "suspicious": _vt_r.get("suspicious_count", 0),
-                                "total": _vt_r.get("total_vendors", 0),
-                                "threats": _vt_r.get("threat_names", [])[:5],
-                                "vendors": _vt_r.get("malicious_vendors", [])[:5],
-                            }
-                    except Exception:
-                        pass
-
-                res.vt_external_checked_count = len(_ext_to_check)
-                if _vt_ext_malicious:
-                    res.vt_external_malicious_count = len(_vt_ext_malicious)
-                    res.vt_external_malicious_domains = ";".join(_vt_ext_malicious.keys())
-                    res.vt_external_malicious_details = json.dumps(_vt_ext_malicious)
-        except Exception:
-            pass  # Non-critical
-
-
-    # === DOMAIN CATEGORY RISK PROFILING (v7.7) ===
-    if DOMAIN_CATEGORY_AVAILABLE:
-        try:
-            _cat_page_text = ""
-            if content:
-                try:
-                    _cat_raw = content.decode("utf-8", errors="ignore") if isinstance(content, bytes) else content
-                    import re as _re2
-                    _cat_stripped = _re2.sub(r"<script[^>]*>.*?</script>", "", _cat_raw, flags=_re2.DOTALL|_re2.IGNORECASE)
-                    _cat_stripped = _re2.sub(r"<style[^>]*>.*?</style>", "", _cat_stripped, flags=_re2.DOTALL|_re2.IGNORECASE)
-                    _cat_stripped = _re2.sub(r"<[^>]+>", " ", _cat_stripped)
-                    _cat_page_text = " ".join(_cat_stripped.split())[:3000]
-                except Exception:
-                    pass
-            
-            _cat_result = classify_domain(
-                domain=domain,
-                page_title=res.page_title or "",
-                page_content_text=_cat_page_text,
-                app_store_packages=res.app_store_android_packages or "",
-            )
-            if _cat_result["category"] != "unclassified":
-                res.domain_category = _cat_result["category"]
-                res.domain_category_label = _cat_result["category_label"]
-                res.domain_category_confidence = _cat_result["confidence"]
-                res.domain_category_risk_tier = _cat_result["risk_tier"]
-                res.domain_category_risk_reason = _cat_result["risk_reason"]
-                res.domain_category_signals = ";".join(_cat_result["matched_signals"])
-        except Exception:
-            pass  # Non-critical
-    
-        # === CONTACT CROSS-REFERENCE (OSINT) ===
+    # === CONTACT CROSS-REFERENCE (OSINT) ===
     # Search web for emails/phones found on the page appearing on other domains.
     # Informational only — helps analysts spot coordinated campaigns.
     try:
@@ -8119,20 +7076,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         if res.domain_age_days >= 0:
             res.domain_age_source = "whois"
     
-    # ICANN RDAP proxy fallback if both RDAP and WHOIS failed
-    # Covers ccTLDs (.ng, .ke, .gh, .tz, .za, etc.) missing from IANA bootstrap
-    _icann_result = None
-    if check_rdap and res.domain_age_days < 0 and not res.domain_age_source:
-        try:
-            _icann_result = icann_rdap_fallback(domain)
-            if _icann_result["creation_days_ago"] >= 0:
-                res.rdap_created = _icann_result["creation_date"]
-                res.domain_age_days = _icann_result["creation_days_ago"]
-                res.domain_age_source = "icann_rdap_proxy"
-        except Exception:
-            pass  # Never let fallback crash analysis
-
-    # All three lookups failed — cannot determine domain age/registrar
+    # Both RDAP and WHOIS failed — cannot determine domain age/registrar
     # Legitimate domains almost always have accessible registration data.
     if check_rdap and res.domain_age_days < 0 and not res.domain_age_source:
         res.registration_opaque = True
@@ -8149,26 +7093,6 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             # v7.4: WHOIS privacy detection
             res.whois_privacy = we.get("privacy", False)
             res.whois_privacy_service = we.get("privacy_service", "")
-            # ICANN RDAP proxy fallback for registrar/updated date
-            # when python-whois missed them (common on ccTLDs)
-            if not res.whois_registrar or res.whois_recently_updated_days == -1:
-                try:
-                    _icann_enrich = _icann_result or icann_rdap_fallback(domain)
-                    if _icann_enrich["registrar"] and not res.whois_registrar:
-                        res.whois_registrar = _icann_enrich["registrar"]
-                    if _icann_enrich["updated_days_ago"] >= 0 and we["updated_days_ago"] == -1:
-                        res.whois_updated = _icann_enrich["updated_date"]
-                        res.whois_recently_updated_days = _icann_enrich["updated_days_ago"]
-                except Exception:
-                    pass
-            # v7.6: High-risk registrar detection
-            if res.whois_registrar:
-                _reg_lower = res.whois_registrar.lower()
-                for pattern in HIGH_RISK_REGISTRARS:
-                    if pattern in _reg_lower:
-                        res.registrar_high_risk = True
-                        res.registrar_high_risk_name = res.whois_registrar
-                        break
             # Recently-added lock on established domain = post-compromise lockdown signal
             # Lock present + WHOIS updated ≤90 days + domain >1yr old
             if (we["transfer_locked"] and 
