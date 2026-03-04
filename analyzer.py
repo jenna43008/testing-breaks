@@ -5326,7 +5326,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if not res.ptr_exists:
         all_issues.append("NO PTR RECORD → Corporate/enterprise email filters may reject")
     elif not res.ptr_matches_forward:
-        all_issues.append("PTR MISMATCH → Forward/reverse DNS inconsistent; triggers spam filters")
+        if res.is_cdn_hosted:
+            all_issues.append(f"PTR MISMATCH → Expected for CDN-hosted domain ({res.cdn_provider or 'CDN'}); PTR resolves to CDN infra, not customer domain")
+        else:
+            all_issues.append("PTR MISMATCH → Forward/reverse DNS inconsistent; triggers spam filters")
     
     # v4.4: Specific TLS failure messages instead of generic "NO VALID HTTPS"
     if res.tls_handshake_failed:
@@ -5361,7 +5364,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.ns_is_parking:
         all_issues.append(f"PARKING NAMESERVER ({res.ns_parking_match}) → Domain parked/unused/for-sale; not a legitimate sender")
     
-    if res.ns_is_lame_delegation:
+    if res.ns_is_lame_delegation and not res.is_subdomain:
         all_issues.append("LAME DELEGATION (0 NS RECORDS) → Broken or abandoned domain; no functioning DNS")
     
     if res.ns_is_free_dns:
@@ -5992,7 +5995,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if not res.ptr_exists:
         add("no_ptr", weights.get('no_ptr', 4))
     elif not res.ptr_matches_forward:
-        add("ptr_mismatch", weights.get('ptr_mismatch', 5))
+        # v7.8: Suppress on CDN-hosted domains — CloudFront, Cloudflare, Fastly,
+        # Akamai etc. all return PTR records pointing to their own infra hostnames
+        # (e.g. server-13-226-238-62.iad61.r.cloudfront.net).  These will NEVER
+        # match the customer's domain.  This is inherent CDN architecture, not a
+        # suspicious mismatch.
+        if res.is_cdn_hosted:
+            add("ptr_mismatch", 0)  # Informational only on CDN
+        else:
+            add("ptr_mismatch", weights.get('ptr_mismatch', 5))
     
     if res.bimi_exists:
         add("has_bimi", weights.get('has_bimi', -8))
@@ -6137,7 +6148,13 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.ns_is_parking:
         add("ns_parking", weights.get('ns_parking', 15))
     if res.ns_is_lame_delegation:
-        add("ns_lame_delegation", weights.get('ns_lame_delegation', 20))
+        # v7.8: Suppress on subdomains — NS records live on the parent zone,
+        # not on the subdomain itself.  Querying NS for a.b.example.com returns
+        # 0 records, which is normal DNS delegation, not broken/abandoned DNS.
+        # Don't add to signals set either — would let combo rules fire on a
+        # false premise (combo_ns_lame_no_mx).
+        if not res.is_subdomain:
+            add("ns_lame_delegation", weights.get('ns_lame_delegation', 20))
     if res.ns_is_free_dns:
         add("ns_free_dns", weights.get('ns_free_dns', 8))
     if res.ns_is_single_ns:
