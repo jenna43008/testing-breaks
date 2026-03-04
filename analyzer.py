@@ -4,6 +4,22 @@ Domain Analysis Engine for Sender Approval
 ==========================================
 Core analysis logic extracted for use in web app.
 
+VERSION: 7.8 (Mar 2026)
+- HACKLINK CAMPAIGN PROFILE DETECTION: Composite signal that detects the
+  infrastructure fingerprint of hacklink-compromised domains even when the
+  fetcher cannot see injected content (cloaked, cleaned up, or blocked).
+  Requires a content anomaly gate (empty_page, content_facade, or
+  hacklink_keywords) plus 2+ infrastructure signals from the hacklink target
+  profile (self-hosted email, dark UK variant, budget hosting, WordPress,
+  weak email auth, opaque registration).  Scored as a risk amplifier:
+  MODERATE (+25 at gate+2 infra) or HIGH (+40 at gate+3+ infra).
+  NOT an autofail — probabilistic, not confirmatory.
+  3 new combo rules: hacklink_profile_vt_flagged, hacklink_profile_blacklisted,
+  hacklink_profile_transfer_lock.
+  New fields: hacklink_campaign_profile, hacklink_campaign_profile_signals,
+  hacklink_campaign_profile_confidence.
+  Pattern match: 🕸️ Hacklink Campaign Profile (confidence: signals)
+
 VERSION: 7.7.0 (Mar 2026)
 - ROOT DOMAIN FALLBACK: When submitted domain (e.g., stage-app.shiftposts.com)
   does not resolve, automatically extracts and analyzes the registrable root
@@ -219,7 +235,7 @@ VERSION: 4.4 (Feb 2026)
   - 403 still detected, logged, and displayed for manual review
 """
 
-ANALYZER_VERSION = "7.6.1"
+ANALYZER_VERSION = "7.8"
 
 import re
 import json
@@ -586,6 +602,9 @@ class DomainApprovalResult:
     hacklink_vulnerable_plugins: str = ""         # Semicolon-separated vulnerable WP plugins
     hacklink_spam_link_count: int = 0            # Number of spam links found in content
     hacklink_spam_links_found: str = ""          # Semicolon-separated spam/phishing URLs found in content
+    hacklink_campaign_profile: bool = False       # v7.8: Domain matches hacklink campaign infrastructure fingerprint
+    hacklink_campaign_profile_signals: str = ""   # v7.8: Which campaign profile signals triggered (semicolon-separated)
+    hacklink_campaign_profile_confidence: str = "" # v7.8: MODERATE or HIGH
     hacklink_malicious_script: bool = False       # SocGholish/FakeUpdates/obfuscated script injection
     hacklink_malicious_script_confidence: str = "" # HIGH, MEDIUM, or NONE — multi-signal confidence level
     hacklink_malicious_script_signals: str = ""    # Semicolon-separated signal names that fired
@@ -5098,6 +5117,14 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.hacklink_spam_link_count >= 5:
         all_issues.append(f"SPAM LINKS ({res.hacklink_spam_link_count} hidden links) → Hidden outbound spam links injected into page")
     
+    if res.hacklink_campaign_profile:
+        _cp_sigs = res.hacklink_campaign_profile_signals.replace(";", ", ")
+        all_issues.append(
+            f"🕸️ HACKLINK CAMPAIGN PROFILE ({res.hacklink_campaign_profile_confidence}) → "
+            f"Domain matches hacklink target infrastructure fingerprint ({_cp_sigs}); "
+            f"injected content may be cloaked or cleaned up"
+        )
+    
     # === MALICIOUS SCRIPT / HIDDEN INJECTION (HIGH-VALUE SIGNALS) ===
     # v7.5.1: Suppress on parking pages when all external scripts are from known
     # parking providers (CookieYes, HugeDomains, Google analytics).
@@ -5521,6 +5548,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('CSS HIDING PATTERNS', weights.get('hidden_injection_css_only', 5)),
             ('BLACKLISTED DOMAIN', weights.get('domain_blacklisted', 50)),
             ('HACKLINK SEO SPAM DETECTED', weights.get('hacklink_detected', 50)),
+            ('HACKLINK CAMPAIGN PROFILE', weights.get('hacklink_campaign_profile_strong', 40)),
             ('WORDPRESS COMPROMISED', weights.get('hacklink_wp_compromised', 45)),
             ('BLACKLISTED IP', weights.get('ip_blacklisted', 40)),
             ('SPF +all', weights.get('spf_pass_all', 40)),
@@ -5761,6 +5789,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('VULNERABLE WP PLUGINS', ['hacklink_vulnerable_plugins']),
         ('HIDDEN CONTENT INJECTION', ['hidden_injection']),
         ('HACKLINK', ['hacklink_keywords']),
+        ('HACKLINK CAMPAIGN PROFILE', ['hacklink_campaign_profile']),
         ('COMPROMISED WP', ['hacklink_wp_compromised']),
         ('SPAM LINKS', ['hacklink_spam_links']),
         ('MALICIOUS SCRIPT', ['malicious_script']),
@@ -6921,6 +6950,80 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             res.phishing_kit_detected = True
             res.phishing_kit_reason = " + ".join(kit_evidence)
     
+    # === HACKLINK CAMPAIGN PROFILE DETECTION (v7.8) ===
+    # Detects the infrastructure fingerprint of hacklink-compromised domains even
+    # when injected content is cloaked, cleaned up, or blocked from the fetcher.
+    #
+    # Hacklink campaigns (predominantly Turkish-origin) target WordPress sites on
+    # budget shared hosting, inject SEO spam visible only to search crawlers, and
+    # leave a distinctive infrastructure footprint.  This composite catches domains
+    # where the fetcher sees clean/empty content but the surrounding infrastructure
+    # signals match the known campaign profile.
+    #
+    # Architecture:
+    #   Gate condition: At least 1 "content anomaly" signal (something wrong with the page)
+    #   Infrastructure signals: 2+ supporting infra indicators from the hacklink target profile
+    #   Score: MODERATE (gate + 2 infra) or HIGH (gate + 3+ infra)
+    #
+    # NOT an autofail — this is probabilistic, not confirmatory.  Score amplifier
+    # that pushes past threshold when enough signals converge.
+    #
+    # Suppressed when hacklink_detected is already True (no need to profile-detect
+    # what the scanner already confirmed via content analysis).
+    if not res.hacklink_detected:
+        # --- Content anomaly gate ---
+        # Something is "off" about the page content: empty, facade, or keyword hit
+        _campaign_gate_signals = []
+        if "empty_page" in signals:
+            _campaign_gate_signals.append("empty_page")
+        if "content_facade" in signals:
+            _campaign_gate_signals.append("content_facade")
+        if "hacklink_keywords" in signals:
+            _campaign_gate_signals.append("hacklink_keywords")
+        
+        if _campaign_gate_signals:
+            # --- Infrastructure profile signals ---
+            # Each represents a facet of the hacklink campaign target profile.
+            # Weak email auth is grouped (any combination counts as 1 signal).
+            _campaign_infra_signals = []
+            
+            if "mx_selfhosted" in signals or "mx_mail_prefix" in signals:
+                _campaign_infra_signals.append("self_hosted_email")
+            if "tld_variant_uk_no_dns" in signals:
+                _campaign_infra_signals.append("uk_variant_dark")
+            if "hosting_budget_shared" in signals or "cpanel_detected" in signals:
+                _campaign_infra_signals.append("budget_hosting")
+            if "registration_opaque" in signals:
+                _campaign_infra_signals.append("registration_opaque")
+            # Weak email auth group: no_dkim + (dmarc_p_none or no_dmarc)
+            _has_weak_auth = (
+                ("no_dkim" in signals)
+                and ("dmarc_p_none" in signals or "no_dmarc" in signals)
+            )
+            if _has_weak_auth:
+                _campaign_infra_signals.append("weak_email_auth")
+            # WordPress detected (from hacklink scanner)
+            if res.hacklink_is_wordpress:
+                _campaign_infra_signals.append("wordpress_cms")
+            
+            _total_infra = len(_campaign_infra_signals)
+            _all_profile_signals = _campaign_gate_signals + _campaign_infra_signals
+            
+            if _total_infra >= 3:
+                # HIGH confidence — strong infrastructure fingerprint
+                res.hacklink_campaign_profile = True
+                res.hacklink_campaign_profile_confidence = "HIGH"
+                res.hacklink_campaign_profile_signals = ";".join(_all_profile_signals)
+                add("hacklink_campaign_profile",
+                    weights.get('hacklink_campaign_profile_strong', 40))
+            elif _total_infra >= 2:
+                # MODERATE confidence — partial fingerprint
+                res.hacklink_campaign_profile = True
+                res.hacklink_campaign_profile_confidence = "MODERATE"
+                res.hacklink_campaign_profile_signals = ";".join(_all_profile_signals)
+                add("hacklink_campaign_profile",
+                    weights.get('hacklink_campaign_profile', 25))
+    
     # === BUILD PATTERN MATCH INDICATOR ===
     # Identifies known attack patterns for specialist visibility.
     _patterns = []
@@ -6954,6 +7057,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         _hl_signals.append(f"{res.hacklink_spam_link_count} spam links")
     if _hl_signals:
         _patterns.append(f"🕷️ Hacklink/SEO Spam ({', '.join(_hl_signals)})")
+    
+    # Hacklink Campaign Profile (v7.8) — indirect detection via infrastructure fingerprint
+    if res.hacklink_campaign_profile:
+        _cp_conf = res.hacklink_campaign_profile_confidence
+        _cp_sigs = res.hacklink_campaign_profile_signals.replace(";", ", ")
+        _patterns.append(f"🕸️ Hacklink Campaign Profile ({_cp_conf}: {_cp_sigs})")
     
     res.pattern_match = " + ".join(_patterns) if _patterns else ""
     
