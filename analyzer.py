@@ -6572,14 +6572,37 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("content_placeholder", weights.get('content_placeholder', 10))
     
     if res.content_is_facade:
-        # v7.6: Content facade is now informational only (no standalone score).
-        # A page with a title but virtually no visible body text can be a parked
-        # domain, default registrar page, or a legitimate SPA — too many false
-        # positives to score on its own.  Facade detection still serves as:
-        #   - Combo fuel (amplifies registration_opaque, domain_reregistered, VT flags)
-        #   - Bonus suppression (blocks enterprise MX credit, app store credit, VT clean credit)
-        #   - Issue display (analysts see it in the report)
-        add("content_facade", 0)  # Zero points — signal only, enables combo rules
+        # v7.6: Content facade was made informational-only because legitimate SPAs
+        # (React/Angular/Next.js) can present as "title + no visible text."
+        #
+        # v7.8: Score on ESTABLISHED domains (1yr+) when corroborating infrastructure
+        # risk signals are present.  A 27-year-old domain with 10 visible words and
+        # weak email auth / UK variant dark / cross-domain links is NOT a new SPA —
+        # it's an abandoned or compromised domain.  Young domains stay at 0 because
+        # facade is expected during development.
+        #
+        # Exemption: VT-clean + DKIM + DMARC enforcement = legitimate SPA architecture.
+        # These domains have invested in email auth, which compromised/abandoned ones haven't.
+        _facade_established = res.domain_age_days >= 365
+        _facade_has_corroboration = bool(
+            "tld_variant_uk_no_dns" in signals
+            or "cross_domain_brand_link" in signals
+            or "registration_opaque" in signals
+            or "hosting_budget_shared" in signals
+            or "hosting_suspect" in signals
+            or "hosting_free" in signals
+            or ("no_dkim" in signals and ("dmarc_p_none" in signals or "no_dmarc" in signals))
+        )
+        _facade_legit_spa = (
+            res.vt_malicious_count == 0
+            and res.vt_total_vendors >= 50
+            and res.dkim_exists
+            and res.dmarc_policy in ("quarantine", "reject")
+        )
+        if _facade_established and _facade_has_corroboration and not _facade_legit_spa:
+            add("content_facade", weights.get('content_facade_established', 10))
+        else:
+            add("content_facade", 0)  # Informational — signal only, enables combo rules
     
     # === REGISTRATION OPACITY ===
     # Both RDAP and WHOIS failed to return domain creation date.
@@ -6855,17 +6878,13 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         if rule_label:
             rules_labels.append(rule_label)
     
-    res.risk_score = max(0, min(score, 100))
-    
-    bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
-    res.risk_level = next((l for lo, hi, l in bands if lo <= res.risk_score <= hi), "UNKNOWN")
-    
-    res.recommendation = "APPROVE" if res.risk_score <= threshold else "DENY"
-    res.signals_triggered = ";".join(sorted(signals))
-    res.combos_triggered = ""  # Deprecated: combos are now unified rules
-    res.rules_triggered = ";".join(rules_hit)
-    res.rules_labels = ";".join(rules_labels)
-    res.score_breakdown = json.dumps(breakdown)
+    # NOTE: Score finalization moved to after all detection code (v7.8 fix).
+    # Previously this block ran here, BEFORE hacklink campaign profile detection,
+    # causing hacklink_campaign_profile scores to be silently dropped from
+    # res.score_breakdown, res.risk_score, res.signals_triggered, and
+    # res.recommendation.  The autofail block re-serialized only when autofail
+    # fired, masking the bug for confirmed threats but breaking scoring for
+    # probabilistic detections (campaign profile).
     
     # === BUILD ASN DISPLAY STRING ===
     if res.hosting_asn and res.hosting_asn_org:
@@ -7064,6 +7083,21 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 res.hacklink_campaign_profile_signals = ";".join(_all_profile_signals)
                 add("hacklink_campaign_profile",
                     weights.get('hacklink_campaign_profile', 25))
+    
+    # === FINALIZE SCORE, SIGNALS, BREAKDOWN (v7.8 relocated) ===
+    # Must run AFTER all detection code (phishing kit, hacklink campaign profile)
+    # so that all add() calls are reflected in the serialized output.
+    res.risk_score = max(0, min(score, 100))
+    
+    bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
+    res.risk_level = next((l for lo, hi, l in bands if lo <= res.risk_score <= hi), "UNKNOWN")
+    
+    res.recommendation = "APPROVE" if res.risk_score <= threshold else "DENY"
+    res.signals_triggered = ";".join(sorted(signals))
+    res.combos_triggered = ""  # Deprecated: combos are now unified rules
+    res.rules_triggered = ";".join(rules_hit)
+    res.rules_labels = ";".join(rules_labels)
+    res.score_breakdown = json.dumps(breakdown)
     
     # === BUILD PATTERN MATCH INDICATOR ===
     # Identifies known attack patterns for specialist visibility.
