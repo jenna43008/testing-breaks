@@ -6649,7 +6649,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # transfer_lock_recent was True, silently breaking combo detection.
     if not res.is_parking_page:
         if res.domain_transfer_lock_recent:
-            add("transfer_lock_recent", 0)
+            # v7.8: Established domains (1yr+) get a base score for recent transfer
+            # lock.  A 5-year-old domain that just added clientTransferProhibited
+            # is inherently suspicious — it suggests post-compromise lockdown or
+            # ownership change.  Young domains get 0 because transfer locks are
+            # normal post-registration behavior.
+            if res.domain_age_days >= 365:
+                add("transfer_lock_recent", weights.get('transfer_lock_recent_base', 15))
+            else:
+                add("transfer_lock_recent", 0)
         if res.whois_recently_updated:
             add("whois_recently_updated", 0)
         
