@@ -5960,8 +5960,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 not res.dkim_exists
                 and (not res.dmarc_exists or res.dmarc_policy == "none")
             )
+            # v7.8: Halve when HIGH-tier category risk — enterprise MX doesn't
+            # reduce the compliance/reputation risk of pharma, gambling, crypto etc.
+            # Same principle as content_facade suppression: legitimacy signals
+            # mask threats rather than negate them.
+            _high_cat_risk = res.domain_category_risk_tier == "HIGH"
             if _weak_auth:
                 add("mx_enterprise", _full_bonus // 2)  # Halved — enterprise MX without auth
+            elif _high_cat_risk:
+                add("mx_enterprise", _full_bonus // 2)  # Halved — enterprise MX on high-risk category
             else:
                 add("mx_enterprise", _full_bonus)
     elif res.mx_provider_type == "disposable":
@@ -5995,17 +6002,22 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # IMPORTANT: Platform hosting providers (Render, Netlify, Vercel, etc.) serve their OWN
     # AASA/asset-links files for ALL custom domains. A domain on Render getting "iOS deep links"
     # is detecting Render's app, not the domain owner's app. Suppress the bonus in this case.
+    # v7.8: Halved when HIGH-tier category risk — having an app doesn't reduce the
+    # compliance/reputation risk of pharma, gambling, crypto notifications.
     is_platform_hosted = res.hosting_provider_type == "platform"
+    _halve_app_bonus = res.domain_category_risk_tier == "HIGH"
     if res.app_store_has_presence:
         if res.app_store_confidence == "high":
             if is_platform_hosted:
                 # Platform's AASA, not the domain's — don't give bonus
                 add("app_store_platform_false_positive", 0)
             else:
-                add("app_store_high", weights.get('app_store_high', -15))
+                _app_bonus = weights.get('app_store_high', -15)
+                add("app_store_high", _app_bonus // 2 if _halve_app_bonus else _app_bonus)
         elif res.app_store_confidence == "medium":
             if not is_platform_hosted:
-                add("app_store_medium", weights.get('app_store_medium', -10))
+                _app_bonus = weights.get('app_store_medium', -10)
+                add("app_store_medium", _app_bonus // 2 if _halve_app_bonus else _app_bonus)
         elif res.app_store_confidence == "low":
             # v6.2: Fixed indentation — was incorrectly attached to outer if
             # Suppress when content_facade — an SPA shell shouldn't get app store credit
