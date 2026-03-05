@@ -79,6 +79,14 @@ VERSION: 7.5.1 (Feb 2026)
   from UNIVERSAL_TLD_VARIANTS, emptied EXTRA_TLD_VARIANTS (.co/.io/.net/.org→.com),
   and removed the .com→.co.uk reverse check. Only UK TLD pairs (.uk↔.co.uk)
   remain as proven spoofing detection patterns.
+- SPA LEGITIMACY CHECK: content_facade signal now counts trust signals that are
+  incompatible with phishing shells (enterprise MX +2, app store high/medium +2,
+  strict SPF +1, DKIM +1, VT clean 50+ vendors +1, domain 180+ days +1). Score
+  4+ → facade fully suppressed (signal excluded from set, blocking combo rules).
+  Score 3 → facade weight halved. Score 0-2 → full weight. Enterprise MX bonus
+  is restored when facade is de-escalated. Fixes React/Vue/Next.js SPA false
+  positives on domains with strong trust signals (vetfo.us = pet health startup
+  on M365 with strict SPF, was denied at 55 as "content facade").
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
   Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
@@ -5592,7 +5600,18 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.mx_exists and not res.mx_is_null:
         if res.mx_provider_type == "enterprise":
             if res.content_is_facade:
-                positives.append("Enterprise MX (suppressed — content facade)")
+                # v7.5.1: Check if facade has SPA trust signals
+                _spa_t = 0
+                if res.mx_provider_type == "enterprise": _spa_t += 2
+                if res.app_store_has_presence and res.app_store_confidence in ("high", "medium"): _spa_t += 2
+                if res.spf_exists and res.spf_mechanism == "-all": _spa_t += 1
+                if res.dkim_exists: _spa_t += 1
+                if res.vt_malicious_count == 0 and res.vt_total_vendors >= 50: _spa_t += 1
+                if res.domain_age_days >= 180: _spa_t += 1
+                positives.append(
+                    "Enterprise MX (Google/Microsoft/Proofpoint)" if _spa_t >= 4
+                    else "Enterprise MX (suppressed — content facade)"
+                )
             else:
                 positives.append("Enterprise MX (Google/Microsoft/Proofpoint)")
         else:
@@ -5983,12 +6002,18 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("null_mx", weights.get('null_mx', 12))
     
     # MX provider type scoring (v4.7)
-    # NOTE: mx_enterprise bonus is SUPPRESSED when content_facade is detected.
-    # A $6/month Google Workspace subscription does not legitimize a domain
-    # that serves no real content — only an external JS shell with a title tag.
+    # NOTE: mx_enterprise bonus is SUPPRESSED when content_facade is detected
+    # AND no strong SPA trust signals are present.  If the SPA legitimacy check
+    # already de-escalated the facade (trust score >= 3), restore the MX bonus.
     if res.mx_provider_type == "enterprise":
         if not res.content_is_facade:
             add("mx_enterprise", weights.get('mx_enterprise_bonus', -5))
+        else:
+            # Check if facade was de-escalated by SPA legitimacy check
+            if "content_facade" not in signals:
+                # Facade fully suppressed → SPA trust signals strong → give MX bonus
+                add("mx_enterprise", weights.get('mx_enterprise_bonus', -5))
+            # else: facade is still weighted → suppress MX bonus
     elif res.mx_provider_type == "disposable":
         add("mx_disposable", weights.get('mx_disposable', 10))
     elif res.mx_provider_type == "selfhosted":
@@ -6052,7 +6077,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         elif res.app_store_confidence == "low":
             # v6.2: Fixed indentation — was incorrectly attached to outer if
             # Suppress when content_facade — an SPA shell shouldn't get app store credit
-            if not res.content_is_facade:
+            # v7.5.1: Unless facade was de-escalated by SPA trust signals
+            if not res.content_is_facade or "content_facade" not in signals:
                 add("app_store_low", weights.get('app_store_low', -3))
     
     # Blacklists - HIGH weight, these are real fraud signals
@@ -6368,7 +6394,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         
         if mal == 0 and sus == 0 and res.vt_total_vendors >= 50:
             # Don't credit VT clean scan of a content facade (SPA shell with no real content)
-            if not res.content_is_facade:
+            # v7.5.1: Unless facade was de-escalated by SPA trust signals
+            if not res.content_is_facade or "content_facade" not in signals:
                 add("vt_clean", weights.get('vt_clean', -5))
     
     # === HACKLINK / SEO SPAM SCORING ===
@@ -6448,7 +6475,38 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("content_placeholder", weights.get('content_placeholder', 10))
     
     if res.content_is_facade:
-        add("content_facade", weights.get('content_facade', 25))
+        # v7.5.1: SPA LEGITIMACY CHECK — Modern React/Vue/Next.js apps serve empty HTML
+        # shells where JavaScript renders everything client-side.  This is indistinguishable
+        # from a phishing shell on content alone.  However, phishing shells almost NEVER
+        # have enterprise MX, app store presence, strict SPF, and clean VT — these signals
+        # indicate a real SPA, not a phishing operation.
+        #
+        # Count strong legitimacy signals that are incompatible with phishing shells:
+        _spa_trust = 0
+        if res.mx_provider_type == "enterprise":
+            _spa_trust += 2  # Enterprise MX (Google/Microsoft) — strongest signal
+        if res.app_store_has_presence and res.app_store_confidence in ("high", "medium"):
+            _spa_trust += 2  # Real app store listing
+        if res.spf_exists and res.spf_mechanism == "-all":
+            _spa_trust += 1  # Strict SPF — investment in email auth
+        if res.dkim_exists:
+            _spa_trust += 1  # DKIM configured
+        if res.vt_malicious_count == 0 and res.vt_total_vendors >= 50:
+            _spa_trust += 1  # VT clean across 50+ vendors
+        if res.domain_age_days >= 180:
+            _spa_trust += 1  # Established domain (6+ months)
+        
+        # 4+ trust signals = almost certainly a real SPA → reduce facade to informational
+        # 3 trust signals = probably a real SPA → halve the facade weight
+        # 0-2 trust signals = could be phishing → full facade weight
+        if _spa_trust >= 4:
+            # Don't add to signals set — prevents combo rules from firing
+            pass  # SPA with strong trust signals — completely suppress
+        elif _spa_trust >= 3:
+            _half = weights.get('content_facade', 25) // 2
+            add("content_facade", _half)
+        else:
+            add("content_facade", weights.get('content_facade', 25))
     
     # === REGISTRATION OPACITY ===
     # Both RDAP and WHOIS failed to return domain creation date.
