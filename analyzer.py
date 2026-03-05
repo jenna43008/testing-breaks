@@ -73,6 +73,12 @@ VERSION: 7.5.1 (Feb 2026)
   IANA RDAP bootstrap discovery (finds ccTLD RDAP servers not in rdap.org's
   static list). Registration lookup chain is now 4-deep:
   RDAP → python-whois → socket WHOIS → HTTP WHOIS → registration_opaque.
+- TLD VARIANT .COM CHECK REMOVED: The universal .com variant check generated
+  massive false positives — every short domain name has a .com owned by someone
+  else (tele.store flagged for tele.com, vetfo.us for vetfo.com). Removed .com
+  from UNIVERSAL_TLD_VARIANTS, emptied EXTRA_TLD_VARIANTS (.co/.io/.net/.org→.com),
+  and removed the .com→.co.uk reverse check. Only UK TLD pairs (.uk↔.co.uk)
+  remain as proven spoofing detection patterns.
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
   Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
@@ -2929,15 +2935,18 @@ UK_TLD_VARIANTS = [
 ]
 
 # Always-check TLD variants (appended to base name regardless of signup TLD)
-UNIVERSAL_TLD_VARIANTS = ['.com']
+# v7.5.1: Removed '.com' — too generic. Almost every short domain name has a
+# .com variant owned by a different entity.  This was generating massive false
+# positives (e.g., tele.store flagged for tele.com, vetfo.us for vetfo.com).
+# The UK pairs (.uk ↔ .co.uk) are the only proven spoofing detection pattern.
+UNIVERSAL_TLD_VARIANTS = []
 
 # Additional pairs for non-UK domains
+# v7.5.1: Removed all .com targets — same reason as above.
+# Keep only pairs between similar ccTLD extensions where spoofing is plausible.
 EXTRA_TLD_VARIANTS = [
-    ('.co', '.com'),
-    ('.io', '.com'),
-    ('.net', '.com'),
-    ('.org', '.com'),
-    ('.app', '.com'),
+    # Intentionally empty — only UK pairs are proven to detect real spoofing.
+    # Re-add specific pairs here if a new spoofing pattern emerges.
 ]
 
 # Minimum word count for a page to be considered "substantive"
@@ -3014,22 +3023,15 @@ def _generate_tld_variants(domain: str) -> List[str]:
             if candidate != domain.lower():
                 variants.add(candidate)
     
-    # Check other TLD pairs
+    # Check other TLD pairs (currently empty — only UK pairs active)
     for signup_tld, variant_tld in EXTRA_TLD_VARIANTS:
         if tld == signup_tld:
             candidate = base + variant_tld
             if candidate != domain.lower():
                 variants.add(candidate)
     
-    # Always check .com if the signup domain isn't .com
-    if tld != '.com':
-        candidate = base + '.com'
-        if candidate != domain.lower():
-            variants.add(candidate)
-    
-    # If the signup IS .com, check .co.uk (common UK business TLD)
-    if tld == '.com':
-        variants.add(base + '.co.uk')
+    # v7.5.1: Removed universal .com check and .com→.co.uk check.
+    # The .com TLD is too generic to serve as spoofing evidence.
     
     return list(variants)
 
