@@ -87,6 +87,12 @@ VERSION: 7.5.1 (Feb 2026)
   is restored when facade is de-escalated. Fixes React/Vue/Next.js SPA false
   positives on domains with strong trust signals (vetfo.us = pet health startup
   on M365 with strict SPF, was denied at 55 as "content facade").
+- PHISHING PATHS SPLIT: PHISHING_PATHS split into two lists — high-confidence
+  (genuinely suspicious: /tunnel/, /webscr, /paypal, /banking, /wp-admin/) and
+  STANDARD_AUTH_PATHS (normal app endpoints: /signin, /login, /auth/, /portal/,
+  /account, /doc/, /share/).  Standard auth paths only count as phishing kit
+  evidence when brand impersonation is also detected — a /signin page on
+  nextphoto.app is normal; a /signin page impersonating Chase is phishing.
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
   Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
@@ -690,17 +696,22 @@ URL_SHORTENERS = [
 ]
 
 PHISHING_PATHS = [
-    '/signin', '/login', '/secure', '/verify', '/update', '/confirm',
-    '/account', '/banking', '/webscr', '/paypal', '/amazon',
-    # v7.3: Additional kit directory patterns
-    '/auth/', '/portal/', '/invoice/', '/doc/', '/share/',
+    # === HIGH-CONFIDENCE: Genuinely suspicious — rarely seen on legitimate sites ===
+    '/banking', '/webscr', '/paypal', '/amazon',
     '/account/verification', '/secure/login', '/admin/verify',
     '/wp-admin/update/', '/verification/',
     # v7.3.1: HTML credential-harvesting kit directory patterns
-    # Source: Feb 2025 observed phishing paths (121 samples).
-    # /tunnel/ appeared in 18/121 paths — dominant kit directory.
-    # /tunel/ is an attacker typo variant (3 additional hits).
     '/tunnel/', '/tunel/',
+]
+
+# Standard authentication paths — these are NORMAL on web applications.
+# /signin, /login, /auth/, /portal/ exist on every SaaS, mobile app backend,
+# and Firebase/Auth0/Supabase deployment.  These should NOT count as phishing
+# kit evidence by themselves — only when combined with brand impersonation
+# or other non-auth signals.
+STANDARD_AUTH_PATHS = [
+    '/signin', '/login', '/secure', '/verify', '/update', '/confirm',
+    '/account', '/auth/', '/portal/', '/invoice/', '/doc/', '/share/',
 ]
 
 # ============================================================================
@@ -3638,6 +3649,7 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
         "external_js": False, "obfuscation": False, "credential_form": False,
         "sensitive_fields": False, "brands": [], "form_external": False,
         "malware": [], "suspicious_iframe": False, "parking": False, "phishing_paths": [],
+        "auth_paths": [],  # v7.5.1: Standard auth paths found (tracked separately)
         # Phishing kit detection (v7.3)
         "kit_filename": "", "kit_filename_strong": False,
         "exfil_signals": [], "exfil_details": [],
@@ -3884,6 +3896,19 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     for p in PHISHING_PATHS:
         if p in path:
             result["phishing_paths"].append(p)
+    # v7.5.1: Also check standard auth paths — tracked separately so the
+    # phishing kit composite can distinguish "has /signin" (normal for apps)
+    # from "has /tunnel/" (genuinely suspicious).
+    _auth_paths_found = []
+    for p in STANDARD_AUTH_PATHS:
+        if p in path:
+            _auth_paths_found.append(p)
+    # Only add auth paths to phishing_paths if brand impersonation is also present
+    # (a login page impersonating Chase IS phishing; a login page for nextphoto.app is not)
+    if _auth_paths_found and result.get("brands"):
+        result["phishing_paths"].extend(_auth_paths_found)
+    # Track auth paths separately for transparency even when not scored
+    result["auth_paths"] = _auth_paths_found
     
     # === PHISHING KIT FILENAME DETECTION (v7.3) ===
     # Check if the URL path ends with a known kit entry-point filename.
