@@ -5457,7 +5457,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
                 if res.mx_provider_type == "enterprise": _spa_t += 2
                 if res.app_store_has_presence and res.app_store_confidence in ("high", "medium"): _spa_t += 2
                 if res.spf_exists and res.spf_mechanism == "-all": _spa_t += 1
-                if res.dkim_exists: _spa_t += 1
+                if res.dkim_exists or bool(res.dkim_selectors_found): _spa_t += 1
                 if res.vt_malicious_count == 0 and res.vt_total_vendors >= 50: _spa_t += 1
                 if res.domain_age_days >= 180: _spa_t += 1
                 positives.append(
@@ -6158,34 +6158,38 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("parking_page", weights.get('parking_page', 6))
     if res.has_credential_form:
         # v7.5.1 GENERALIZED: On established, well-authenticated domains, credential
-        # forms are customer/user logins, not phishing.  This covers e-commerce (WooCommerce),
-        # financial (credit unions, banks), SaaS, and any domain that legitimately has a
-        # login page.  Requirements: established (90+ days) AND either e-commerce detected
-        # OR strong email auth (enterprise MX + DKIM, or DMARC reject/quarantine + DKIM).
+        # forms are customer/user logins, not phishing.
         _is_trusted_auth_site = False
         _age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
+        # Defensive: check both dkim_exists AND dkim_selectors_found (belt + suspenders)
+        _has_dkim = res.dkim_exists or bool(res.dkim_selectors_found)
         if _age_ok:
             if res.is_ecommerce_site:
                 _is_trusted_auth_site = True
-            elif res.mx_provider_type == "enterprise" and res.dkim_exists:
+            elif res.mx_provider_type == "enterprise" and _has_dkim:
                 _is_trusted_auth_site = True
-            elif res.dkim_exists and res.dmarc_policy in ("reject", "quarantine"):
+            elif _has_dkim and res.dmarc_policy in ("reject", "quarantine"):
+                _is_trusted_auth_site = True
+            # v7.5.1: Also suppress when DMARC is quarantine/reject + enterprise MX
+            # (even without DKIM — enterprise MX + DMARC quarantine = serious auth investment)
+            elif res.mx_provider_type == "enterprise" and res.dmarc_policy in ("reject", "quarantine"):
                 _is_trusted_auth_site = True
         if not _is_trusted_auth_site:
             add("credential_form", weights.get('credential_form', 20))
     if res.has_sensitive_fields:
         add("sensitive_fields", weights.get('sensitive_fields', 10))
     if res.form_posts_external:
-        # v7.5.1 GENERALIZED: Same logic — external form posts on trusted auth sites
-        # are payment processors / banking integrations, not credential exfiltration.
         _is_trusted_auth_site2 = False
         _age_ok2 = res.domain_age_days < 0 or res.domain_age_days >= 90
+        _has_dkim2 = res.dkim_exists or bool(res.dkim_selectors_found)
         if _age_ok2:
             if res.is_ecommerce_site:
                 _is_trusted_auth_site2 = True
-            elif res.mx_provider_type == "enterprise" and res.dkim_exists:
+            elif res.mx_provider_type == "enterprise" and _has_dkim2:
                 _is_trusted_auth_site2 = True
-            elif res.dkim_exists and res.dmarc_policy in ("reject", "quarantine"):
+            elif _has_dkim2 and res.dmarc_policy in ("reject", "quarantine"):
+                _is_trusted_auth_site2 = True
+            elif res.mx_provider_type == "enterprise" and res.dmarc_policy in ("reject", "quarantine"):
                 _is_trusted_auth_site2 = True
         if not _is_trusted_auth_site2:
             add("form_posts_external", weights.get('form_posts_external', 10))
@@ -6234,10 +6238,13 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         
         if _weak_harvest_only:
             _age_ok_h = res.domain_age_days < 0 or res.domain_age_days >= 90
+            _has_dkim_h = res.dkim_exists or bool(res.dkim_selectors_found)
             if _age_ok_h:
-                if res.mx_provider_type == "enterprise" and res.dkim_exists:
+                if res.mx_provider_type == "enterprise" and _has_dkim_h:
                     _suppress_harvest = True
-                elif res.dkim_exists and res.dmarc_policy in ("reject", "quarantine"):
+                elif _has_dkim_h and res.dmarc_policy in ("reject", "quarantine"):
+                    _suppress_harvest = True
+                elif res.mx_provider_type == "enterprise" and res.dmarc_policy in ("reject", "quarantine"):
                     _suppress_harvest = True
         
         if not _suppress_harvest:
@@ -6377,7 +6384,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             _spa_trust += 2  # Real app store listing
         if res.spf_exists and res.spf_mechanism == "-all":
             _spa_trust += 1  # Strict SPF — investment in email auth
-        if res.dkim_exists:
+        if res.dkim_exists or bool(res.dkim_selectors_found):
             _spa_trust += 1  # DKIM configured
         if res.vt_malicious_count == 0 and res.vt_total_vendors >= 50:
             _spa_trust += 1  # VT clean across 50+ vendors
@@ -6481,7 +6488,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 }
                 _is_fully_authed = (
                     res.mx_provider_type == "enterprise" and
-                    res.dkim_exists and
+                    (res.dkim_exists or bool(res.dkim_selectors_found)) and
                     res.spf_exists and res.spf_mechanism == "-all"
                 )
                 _has_hard_risk = bool(signals & _HARD_TRANSFER_RISK)
@@ -6777,12 +6784,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         elif not res.has_exfil_drop_script:
             _trusted_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
             _is_trusted_auth = False
+            _has_dkim_t = res.dkim_exists or bool(res.dkim_selectors_found)
             if _trusted_age_ok:
                 if res.is_ecommerce_site:
                     _is_trusted_auth = True
-                elif res.mx_provider_type == "enterprise" and res.dkim_exists:
+                elif res.mx_provider_type == "enterprise" and _has_dkim_t:
                     _is_trusted_auth = True
-                elif res.dkim_exists and res.dmarc_policy in ("reject", "quarantine"):
+                elif _has_dkim_t and res.dmarc_policy in ("reject", "quarantine"):
+                    _is_trusted_auth = True
+                elif res.mx_provider_type == "enterprise" and res.dmarc_policy in ("reject", "quarantine"):
                     _is_trusted_auth = True
             
             if _is_trusted_auth:
@@ -6835,7 +6845,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         _hcp_signals.append("empty_page")
     if res.tld_variant_uk_no_dns:
         _hcp_signals.append("uk_variant_dark")
-    if not res.dkim_exists and res.dmarc_policy == "none" and res.spf_mechanism == "~all":
+    if not (res.dkim_exists or bool(res.dkim_selectors_found)) and res.dmarc_policy == "none" and res.spf_mechanism == "~all":
         _hcp_signals.append("weak_email_auth")
     if res.hacklink_hidden_injection:
         _hcp_signals.append("hidden_injection")
