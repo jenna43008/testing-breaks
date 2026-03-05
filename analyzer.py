@@ -6670,7 +6670,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
     res.risk_level = next((l for lo, hi, l in bands if lo <= res.risk_score <= hi), "UNKNOWN")
     
-    res.recommendation = "APPROVE" if res.risk_score <= threshold else "DENY"
+    res.recommendation = "APPROVE" if res.risk_score < threshold else "DENY"
     res.signals_triggered = ";".join(sorted(signals))
     res.combos_triggered = ""  # Deprecated: combos are now unified rules
     res.rules_triggered = ";".join(rules_hit)
