@@ -68,6 +68,11 @@ VERSION: 7.5.1 (Feb 2026)
   Covers 22 ccTLDs (.ng, .ke, .gh, .pk, .za, .ua, etc.) with known WHOIS servers.
   Compound TLD extraction (.com.ng, .co.za, .org.pk) now consistently includes
   gov, edu, ac, mil indicators across all three lookup functions.
+- HTTP WHOIS FALLBACK: When port 43 is blocked (Streamlit Cloud), queries
+  web-based WHOIS services over HTTPS. Two sources: who.is HTML scraping and
+  IANA RDAP bootstrap discovery (finds ccTLD RDAP servers not in rdap.org's
+  static list). Registration lookup chain is now 4-deep:
+  RDAP → python-whois → socket WHOIS → HTTP WHOIS → registration_opaque.
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
   Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
@@ -4608,6 +4613,132 @@ def whois_socket_lookup(domain: str, timeout: float = 8.0) -> Tuple[str, int]:
         return "", -1
 
 
+# === HTTP WHOIS FALLBACK (v7.5.1) ===
+# When socket WHOIS fails (e.g., Streamlit Cloud blocks port 43), query
+# web-based WHOIS services over HTTPS.  This is the final fallback in the
+# registration lookup chain: RDAP → python-whois → socket WHOIS → HTTP WHOIS.
+def whois_http_lookup(domain: str, timeout: float = 8.0) -> Tuple[str, int]:
+    """
+    Query web-based WHOIS services over HTTPS for domains where RDAP,
+    python-whois, and socket WHOIS all fail.
+    Returns: (creation_date_iso, age_days)
+    """
+    if not REQUESTS_AVAILABLE:
+        return "", -1
+    
+    import re as _re_http
+    
+    parts = domain.lower().split('.')
+    _sld_indicators = {'co', 'com', 'org', 'net', 'gov', 'edu', 'ac', 'mil'}
+    if len(parts) > 2 and parts[-2] in _sld_indicators:
+        base = '.'.join(parts[-3:])
+    else:
+        base = '.'.join(parts[-2:])
+    
+    _DATE_PATTERNS = [
+        _re_http.compile(
+            r'(?:Creation Date|Registration Date|Created|Registered|Created On|created|'
+            r'Registration Time|Domain Registration Date)\s*[:=]\s*(.+)',
+            _re_http.IGNORECASE
+        ),
+    ]
+    
+    _DATE_FORMATS = [
+        "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d", "%d-%b-%Y", "%d %b %Y", "%d/%m/%Y",
+        "%Y.%m.%d", "%B %d, %Y", "%d-%m-%Y", "%Y-%m-%d %H:%M:%S",
+        "%a %b %d %H:%M:%S %Z %Y",  # Ruby-style: Tue Jan 10 00:00:00 UTC 2023
+    ]
+    
+    def _parse_date(date_str: str):
+        """Try to parse a date string in multiple formats."""
+        date_str = date_str.strip().rstrip('.')
+        # Strip trailing comments/notes after the date
+        # e.g., "2020-01-15 (some note)" → "2020-01-15"
+        date_str = _re_http.split(r'\s*[\(\[]', date_str)[0].strip()
+        
+        for fmt in _DATE_FORMATS:
+            try:
+                dt = datetime.strptime(date_str[:40], fmt)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                age_days = (datetime.now(timezone.utc) - dt).days
+                if 0 <= age_days <= 36500:  # Sanity: 0-100 years
+                    return dt.isoformat(), age_days
+            except (ValueError, TypeError):
+                continue
+        # Last resort: fromisoformat
+        try:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age_days = (datetime.now(timezone.utc) - dt).days
+            if 0 <= age_days <= 36500:
+                return dt.isoformat(), age_days
+        except (ValueError, TypeError):
+            pass
+        return "", -1
+    
+    # Service 1: who.is (HTML scraping)
+    try:
+        r = requests.get(
+            f"https://who.is/whois/{base}",
+            timeout=timeout,
+            headers={"User-Agent": "Mozilla/5.0 DomainVerification/1.0"},
+            allow_redirects=True,
+        )
+        if r.status_code == 200:
+            text = r.text
+            for pattern in _DATE_PATTERNS:
+                m = pattern.search(text)
+                if m:
+                    iso, age = _parse_date(m.group(1))
+                    if age >= 0:
+                        return iso, age
+    except Exception:
+        pass
+    
+    # Service 2: IANA RDAP bootstrap (sometimes works for ccTLDs that
+    # have RDAP but aren't in rdap.org's bootstrap file)
+    try:
+        # Get the RDAP server from IANA bootstrap
+        tld = parts[-1]
+        bootstrap_r = requests.get(
+            "https://data.iana.org/rdap/dns.json",
+            timeout=5,
+            headers={"User-Agent": "DomainVerification/1.0"},
+        )
+        if bootstrap_r.status_code == 200:
+            bootstrap_data = bootstrap_r.json()
+            rdap_url = None
+            for entry in bootstrap_data.get("services", []):
+                tld_list, urls = entry[0], entry[1]
+                if tld in tld_list:
+                    rdap_url = urls[0].rstrip('/')
+                    break
+            
+            if rdap_url:
+                rdap_r = requests.get(
+                    f"{rdap_url}/domain/{base}",
+                    timeout=timeout,
+                    headers={"Accept": "application/rdap+json, application/json"},
+                    allow_redirects=True,
+                )
+                if rdap_r.status_code == 200:
+                    data = rdap_r.json()
+                    for ev in data.get("events", []):
+                        if ev.get("eventAction", "").lower() == "registration":
+                            date_str = ev.get("eventDate", "")
+                            if date_str:
+                                iso, age = _parse_date(date_str)
+                                if age >= 0:
+                                    return iso, age
+    except Exception:
+        pass
+    
+    return "", -1
+
+
 def whois_enrich(domain: str) -> dict:
     """
     Extract registrar, statuses, and updated date from WHOIS.
@@ -7539,6 +7670,15 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.domain_age_days = _sock_age
             res.whois_created = _sock_created
             res.domain_age_source = "whois_socket"
+    
+    # v7.5.1: HTTP WHOIS fallback — queries web-based WHOIS services over HTTPS.
+    # This is the final fallback when port 43 is blocked (e.g., Streamlit Cloud).
+    if check_rdap and res.domain_age_days < 0:
+        _http_created, _http_age = whois_http_lookup(domain, timeout=min(timeout, 8.0))
+        if _http_age >= 0:
+            res.domain_age_days = _http_age
+            res.whois_created = _http_created
+            res.domain_age_source = "whois_http"
     
     # Both RDAP and WHOIS failed — cannot determine domain age/registrar
     # Legitimate domains almost always have accessible registration data.
