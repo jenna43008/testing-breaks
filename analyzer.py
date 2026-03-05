@@ -1,209 +1,22 @@
 from __future__ import annotations
 """
-Domain Analysis Engine for Sender Approval
-==========================================
-Core analysis logic extracted for use in web app.
-
-VERSION: 7.5.1 (Feb 2026)
-- PARKING PAGE FALSE POSITIVE SUPPRESSION: Parking pages (HugeDomains, Sedo,
-  GoDaddy, Afternic, Dan.com, etc.) no longer trigger phishing kit autofail.
-  Root cause: domain purchase forms POST to parking provider (→ form_posts_external)
-  and payment options reference Chase/PayPal/Stripe (→ brand_impersonation), which
-  combined to fire the 2-signal phishing kit composite = false autofail at score 100.
-  Fix: (1) brand detection suppressed on parking pages, (2) form_posts_external
-  suppressed when form target is a known parking domain, (3) malicious_script
-  suppressed when parking page + all external scripts are from known providers
-  (CookieYes, HugeDomains analytics → SocGholish false positive), (4) phishing
-  kit composite defense-in-depth: parking-artifact evidence alone cannot fire,
-  (5) js_redirect suppressed on parking pages (purchase flow JS navigation),
-  (6) transfer_lock_recent + transfer_lock_with_risk suppressed on parking pages
-  (marketplace locks domains for sale — expected behavior, not post-compromise),
-  (7) pattern match indicator only shows malicious_script when actually scored.
-  New constants: KNOWN_PARKING_DOMAINS (25 domains), KNOWN_PARKING_SCRIPT_DOMAINS (10).
-- NEW DOMAIN FALSE POSITIVE SUPPRESSION: Signals that indicate compromise on
-  established domains but are normal on new domains are now age-gated:
-  (1) empty_page: suppressed on domains < 30 days (site hasn't been built yet),
-  (2) tld_variant_uk_no_dns: suppressed on domains < 90 days (.co.uk not registered yet),
-  (3) hacklink_campaign_profile composite: only fires on domains 90+ days old.
-  All three signals are excluded from the signals set on young domains, preventing
-  combo rules (e.g., combo_empty_page_uk_variant) from cascading into false denials.
-- NEW HACKLINK CAMPAIGN PROFILE COMPOSITE: Identifies domains matching known hacklink
-  target fingerprints (2+ of: empty_page, uk_variant_dark, weak_email_auth,
-  hidden_injection, cpanel). MODERATE at 2 signals, HIGH at 3+. Only fires on
-  established domains (90+ days) — new domains with empty pages and no .co.uk are normal.
-- NEW UK VARIANT DARK SIGNAL: Detects when a .co.uk TLD variant has no DNS, indicating
-  the domain operates on an alternate TLD while the UK variant is dead/unheld. Only
-  scored on established domains (90+ days).
-- ECOMMERCE PHISHING KIT FALSE POSITIVE SUPPRESSION: WooCommerce/e-commerce sites
-  with established domains (90+ days) no longer trigger phishing kit autofail when the
-  only evidence is: credential_form (customer login), shipping brand mentions (UPS,
-  FedEx, DHL, USPS), and form_posts_external (payment processors). These are normal
-  e-commerce behavior. WooCommerce detected via plugin scanning now also sets
-  is_ecommerce_site=True. Hard evidence (kit filenames, exfil scripts, phishing paths)
-  still fires the composite regardless. Individual credential_form and
-  form_posts_external signals are also excluded from the signals set on
-  established e-commerce sites, preventing combo rule cascading.
-- SECURITY TOOLING TRUST BONUS: Detects reCAPTCHA, Cloudflare Bot Management,
-  hCaptcha, Akamai Bot Manager, DataDome, and PerimeterX/HUMAN. Each gives
-  -5 points (capped at -10 total). Detection was already in analyze_content()
-  but was never wired to result fields or scoring.
-- CERT ISSUED BUT TLS DEAD: New signal detecting when a certificate was issued
-  within the last 90 days (via CT logs) but TLS is currently refusing connections
-  or failing handshake. On established domains (1yr+) scores 18pts, on younger
-  domains 8pts, suppressed on domains <30 days. CT function now also returns
-  last_cert_issuer and days_since_last_cert for precise issue text.
-- GDPR ccTLD REGISTRATION OPAQUE SUPPRESSION: registration_opaque no longer fires
-  on European ccTLDs (.de, .eu, .fr, .nl, .be, .at, .ch, .it, .es, .se, .no, .dk,
-  .fi, .pl, .cz, .ie, and 16 more) where WHOIS/RDAP data is restricted by GDPR
-  or registry policy. These registries suppress creation dates by default.
-- TYPOSQUAT CONTEXT CHECK: When a typosquat match is detected but the page title
-  contains the domain's own brand name and does NOT contain the matched brand,
-  the typosquat is suppressed. Example: vetfo.us matches "venmo" (0.85 similarity)
-  but page title "VetFo - Your Pet's Health" clearly indicates a pet health brand.
-- ROOT DOMAIN FALLBACK: When a submitted subdomain doesn't resolve, the analyzer
-  now tries the registrable root domain before returning "does not resolve."
-  app.py prefix stripping expanded with mailing., newsletter., notify., etc.
-- SOCKET WHOIS FALLBACK: Tertiary registration lookup for TLDs not covered by
-  RDAP or python-whois. Queries the TLD's WHOIS server directly over TCP port 43.
-  Covers 22 ccTLDs (.ng, .ke, .gh, .pk, .za, .ua, etc.) with known WHOIS servers.
-  Compound TLD extraction (.com.ng, .co.za, .org.pk) now consistently includes
-  gov, edu, ac, mil indicators across all three lookup functions.
-- HTTP WHOIS FALLBACK: When port 43 is blocked (Streamlit Cloud), queries
-  web-based WHOIS services over HTTPS. Two sources: who.is HTML scraping and
-  IANA RDAP bootstrap discovery (finds ccTLD RDAP servers not in rdap.org's
-  static list). Registration lookup chain is now 4-deep:
-  RDAP → python-whois → socket WHOIS → HTTP WHOIS → registration_opaque.
-- TLD VARIANT .COM CHECK REMOVED: The universal .com variant check generated
-  massive false positives — every short domain name has a .com owned by someone
-  else (tele.store flagged for tele.com, vetfo.us for vetfo.com). Removed .com
-  from UNIVERSAL_TLD_VARIANTS, emptied EXTRA_TLD_VARIANTS (.co/.io/.net/.org→.com),
-  and removed the .com→.co.uk reverse check. Only UK TLD pairs (.uk↔.co.uk)
-  remain as proven spoofing detection patterns.
-- SPA LEGITIMACY CHECK: content_facade signal now counts trust signals that are
-  incompatible with phishing shells (enterprise MX +2, app store high/medium +2,
-  strict SPF +1, DKIM +1, VT clean 50+ vendors +1, domain 180+ days +1). Score
-  4+ → facade fully suppressed (signal excluded from set, blocking combo rules).
-  Score 3 → facade weight halved. Score 0-2 → full weight. Enterprise MX bonus
-  is restored when facade is de-escalated. Fixes React/Vue/Next.js SPA false
-  positives on domains with strong trust signals (vetfo.us = pet health startup
-  on M365 with strict SPF, was denied at 55 as "content facade").
-- PHISHING PATHS SPLIT: PHISHING_PATHS split into two lists — high-confidence
-  (genuinely suspicious: /tunnel/, /webscr, /paypal, /banking, /wp-admin/) and
-  STANDARD_AUTH_PATHS (normal app endpoints: /signin, /login, /auth/, /portal/,
-  /account, /doc/, /share/).  Standard auth paths only count as phishing kit
-  evidence when brand impersonation is also detected — a /signin page on
-  nextphoto.app is normal; a /signin page impersonating Chase is phishing.
-- CT RECENT ISSUANCE ROUTINE RENEWAL SUPPRESSION: ct_recent_issuance no longer
-  fires on domains with 5+ certs in CT logs and 180+ days of age — that's just
-  Let's Encrypt auto-renewing every 60-90 days, not a new deployment. Still fires
-  on young domains, domains with few certs, and reactivated domains.
-- CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
-  (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
-  Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
-  the %.domain prefix only matches certificates with subdomain SANs.
-
-VERSION: 7.5 (Feb 2026)
-- AUTOFAIL OVERRIDE: Deterministic DENY for confirmed threats regardless of score.
-  Three conditions force instant denial that no bonus can override:
-  1. PHISHING KIT CONFIRMED — composite detection (exfil script or 2+ kit indicators)
-  2. HACKLINK/SEO SPAM CONFIRMED — hacklink scanner positive detection
-  3. SWEDISH PHISH TREND CONFIRMED — Render ASN + self-hosted MX + phish factory fingerprint
-- New field: autofail_reason — audit trail for why autofail fired
-- Fixed: phishing_kit_detected composite was evaluated AFTER verdict, meaning bonuses
-  (e.g. mx_enterprise -10) could pull confirmed kits below deny threshold
-- Fixed: high_risk_phish_infra (Swedish phish) was evaluated AFTER verdict
-
-VERSION: 7.2 (Feb 2026)
-- MALICIOUS SCRIPT detection overhaul: replaced broad single-regex SocGholish pattern
-  with multi-signal scoring architecture (10 weighted signals, CDN whitelist, Shannon
-  entropy path analysis, NDSW/NDSX pattern matching)
-- CDN WHITELIST: 50+ known-good script domains excluded from detection to eliminate
-  false positives from legitimate React/Angular/Vue SPAs loading jQuery, Analytics, etc.
-- CONFIDENCE LEVELS: malicious_script now reports HIGH (5+ signal score, full weight)
-  or MEDIUM (3-4 signal score, reduced weight) instead of binary flag
-- New config weight: malicious_script_medium (default 25) for MEDIUM-confidence detections
-- New result fields: hacklink_malicious_script_confidence, hacklink_malicious_script_signals,
-  hacklink_malicious_script_score
-
-VERSION: 7.1 (Feb 2026)
-- MALICIOUS SCRIPT detection: SocGholish/FakeUpdates/obfuscated script injection scored as
-  standalone high-weight signal (40 pts) — extracted from hacklink scanner's injection_patterns
-- HIDDEN INJECTION detection: CSS-cloaked content (display:none, font-size:0px, negative
-  text-indent) scored standalone (35 pts) — the #1 indicator of hacklink SEO spam
-- cPanel hosting detection: surfaced from hacklink scanner as cpanel_detected signal
-- WHOIS enrichment: registrar, statuses, updated date, transfer lock status extracted
-  via python-whois for every scanned domain
-- TRANSFER LOCK detection: domains missing clientTransferProhibited flagged (12 pts);
-  combo with old domain age = domain takeover signal
-- WHOIS recently updated: domains with WHOIS changes in last 30 days flagged (8 pts);
-  combo with cPanel = compromise indicator
-- EMPTY PAGE detection: reachable domains returning <50 bytes flagged (15 pts)
-- CERTIFICATE TRANSPARENCY (crt.sh): cert count, issuers, first/last seen, recent
-  issuance (7d); zero CT history = never-used domain (12 pts); recent issuance on
-  old domain = takeover/reactivation signal
-- 10 new combo rules: cpanel+transfer_lock, vt+hacklink_keywords, transfer_lock+old_domain,
-  malicious_script combos, hidden_injection combos, empty_page combos
-
-VERSION: 7.0 (Feb 2026)
-- Integrated VirusTotal domain reputation check (malicious/suspicious vendor counts,
-  threat names, community score, detection rate)
-- Integrated hacklink/SEO spam detection (Turkish hacklink keywords, injection patterns,
-  WordPress compromise indicators, vulnerable plugin detection, spam link counting)
-- Hacklink scanner reuses pre-fetched page content — no duplicate HTTP requests
-- New VT scoring signals: vt_malicious_high/medium/low, vt_suspicious, vt_clean (bonus)
-- New hacklink scoring signals: hacklink_detected, hacklink_keywords, hacklink_wp_compromised,
-  hacklink_vulnerable_plugins, hacklink_spam_links
-- 15 new combo rules for VT + hacklink cross-correlation
-- VT API key configurable via admin UI, sidebar, or VT_API_KEY env var
-
-VERSION: 6.3 (Feb 2026)
-- Added WHOIS fallback when RDAP returns no creation date (python-whois)
-- New signal: domain_created_today — fires when domain registered 0-1 days ago
-- Heavy base penalty (50) + combo rules for brand impersonation, blacklist, typosquat, TLD spoof
-- New fields: whois_created, domain_age_source, domain_created_today
-- Summary prominently flags same-day/yesterday registrations
-
-VERSION: 6.2 (Feb 2026)
-- Fixed DNSBL rate limit bug: blacklist checks silently returning "clean" on timeout
-- check_blacklist() now distinguishes NXDOMAIN (clean) from timeout/error (inconclusive)
-- Added retry with backoff for failed DNSBL queries (2 retries, 1.5s delay)
-- Added inter-query delay (0.3s) between consecutive DNSBL lookups to avoid bursts
-- Added in-memory DNSBL result cache (5min TTL) to prevent redundant queries
-- New fields: domain_blacklist_inconclusive, ip_blacklist_inconclusive
-- Inconclusive blacklist checks flagged in summary + add configurable score penalty (default 15)
-
-VERSION: 5.2 (Feb 2026)
-- Added brand + spoofing keyword detection (easyjetconnect, amazonverify, etc.)
-- Expanded IMPERSONATED_BRANDS to include airlines, travel, banks, shipping, telecoms
-- New signal: brand_spoofing_keyword — fires when brand name + phishing keyword detected
-- Brand+keyword scores on top of domain_brand_impersonation for amplified risk
-
-VERSION: 4.7 (Feb 2026)
-- Added TLD variant spoofing detection (gordondown.uk → gordondown.co.uk pattern)
-- Generates TLD variants (.uk↔.co.uk, .com, .io↔.com, etc.)
-- Compares content volume, email infrastructure, and business identity asymmetry
-- Flags when established business exists at variant TLD and signup domain is hollow
-
-VERSION: 4.6 (Feb 2026)
-- Added hosting provider detection (NS records, ASN lookup, PTR patterns)
-- Configurable scoring tiers: budget shared hosts, free hosting, suspect hosts
-- ASN lookup via Team Cymru DNS for reliable network identification
-
-VERSION: 4.5 (Feb 2026)
-- Added app store presence detection (iOS AASA, Android Asset Links, page scan, iTunes API)
-- App store presence as legitimacy bonus signal (rare for spammers to maintain real apps)
-- Confidence-tiered scoring: high/medium/low app presence → scaled bonus
-
-VERSION: 4.4 (Feb 2026)
-- Added explicit TLS handshake failure detection (ssl.SSLError catch)
-- Added tls_handshake_failed / tls_connection_failed flags + scoring
-- Fixed bare except in follow_redirects (typed error capture)
-- Added e-commerce/retail scam detection (.shop, .store, .sale TLDs)
-- Added cross-domain brand link detection (clone store indicator)
-- Added business identity verification for e-commerce sites
-- Added non-hyphen prefix detection (app, my, login, etc.)
-- Added access restriction detection (401/403)
+Domain Analysis Engine for Sender Approval — v7.5.1
+Evaluates domain infrastructure signals for email sender approval decisions.
 """
+
+# Full changelog: see CHANGELOG.md or git history
+# v7.5.1: Parking page FP fix, new domain age gating, hacklink campaign profile,
+#   UK variant dark, e-commerce/financial site defense, SPA legitimacy check,
+#   security tooling bonus, cert-but-TLS-dead, GDPR ccTLD handling, typosquat
+#   context check, phishing paths split, CT renewal suppression, zero auth floor,
+#   TLD variant .com removal, root domain fallback, socket/HTTP WHOIS fallback,
+#   transfer lock reduction for fully-authenticated domains.
+# v7.5: Autofail override, phishing kit composite, CT apex fix.
+# v7.2: Multi-signal malicious script detection, CDN whitelist.
+# v7.1: Malicious script/hidden injection/cPanel/transfer lock/CT signals.
+# v7.0: VirusTotal + hacklink/SEO spam integration.
+# v6.x: WHOIS fallback, DNSBL fix, brand+keyword detection.
+# v4.x: TLD variant, hosting detection, app store, TLS, e-commerce.
 
 ANALYZER_VERSION = "7.5.1"
 
@@ -6339,19 +6152,37 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.is_parking_page:
         add("parking_page", weights.get('parking_page', 6))
     if res.has_credential_form:
-        # v7.5.1: On established e-commerce sites, credential forms are customer
-        # account logins (WooCommerce, Shopify), not phishing.  Don't add to
-        # signals set at all — prevents combo rules (cred_form + no_https = +12)
-        # from cascading into false points.
-        _ecom_suppress = res.is_ecommerce_site and (res.domain_age_days < 0 or res.domain_age_days >= 90)
-        if not _ecom_suppress:
+        # v7.5.1 GENERALIZED: On established, well-authenticated domains, credential
+        # forms are customer/user logins, not phishing.  This covers e-commerce (WooCommerce),
+        # financial (credit unions, banks), SaaS, and any domain that legitimately has a
+        # login page.  Requirements: established (90+ days) AND either e-commerce detected
+        # OR strong email auth (enterprise MX + DKIM, or DMARC reject/quarantine + DKIM).
+        _is_trusted_auth_site = False
+        _age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
+        if _age_ok:
+            if res.is_ecommerce_site:
+                _is_trusted_auth_site = True
+            elif res.mx_provider_type == "enterprise" and res.dkim_exists:
+                _is_trusted_auth_site = True
+            elif res.dkim_exists and res.dmarc_policy in ("reject", "quarantine"):
+                _is_trusted_auth_site = True
+        if not _is_trusted_auth_site:
             add("credential_form", weights.get('credential_form', 20))
     if res.has_sensitive_fields:
         add("sensitive_fields", weights.get('sensitive_fields', 10))
     if res.form_posts_external:
-        # v7.5.1: On established e-commerce sites, external form posts are payment
-        # processor integrations (Stripe, PayPal, Square), not credential exfiltration.
-        if not (res.is_ecommerce_site and (res.domain_age_days < 0 or res.domain_age_days >= 90)):
+        # v7.5.1 GENERALIZED: Same logic — external form posts on trusted auth sites
+        # are payment processors / banking integrations, not credential exfiltration.
+        _is_trusted_auth_site2 = False
+        _age_ok2 = res.domain_age_days < 0 or res.domain_age_days >= 90
+        if _age_ok2:
+            if res.is_ecommerce_site:
+                _is_trusted_auth_site2 = True
+            elif res.mx_provider_type == "enterprise" and res.dkim_exists:
+                _is_trusted_auth_site2 = True
+            elif res.dkim_exists and res.dmarc_policy in ("reject", "quarantine"):
+                _is_trusted_auth_site2 = True
+        if not _is_trusted_auth_site2:
             add("form_posts_external", weights.get('form_posts_external', 10))
     if res.brands_detected:
         add("brand_impersonation", weights.get('brand_impersonation', 22))
@@ -6386,8 +6217,26 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     
     # === v7.5: CLIENT-SIDE HARVEST COMBO ===
     # Only scored when harvest patterns are corroborated by other phishing signals.
+    # v7.5.1: On trusted auth sites (enterprise MX + DKIM, established), suppress
+    # when the only harvest signal is harvest_input_value — every login form reads
+    # input values as part of normal authentication.  Stronger signals (keylogger,
+    # cookie theft, formdata exfil) still fire regardless.
     if res.has_harvest_combo:
-        add("client_side_harvest_combo", weights.get('client_side_harvest_combo', 25))
+        _suppress_harvest = False
+        _harvest_sigs = set((res.harvest_signals or "").split(";"))
+        _harvest_sigs.discard("")
+        _weak_harvest_only = _harvest_sigs.issubset({"harvest_input_value"})
+        
+        if _weak_harvest_only:
+            _age_ok_h = res.domain_age_days < 0 or res.domain_age_days >= 90
+            if _age_ok_h:
+                if res.mx_provider_type == "enterprise" and res.dkim_exists:
+                    _suppress_harvest = True
+                elif res.dkim_exists and res.dmarc_policy in ("reject", "quarantine"):
+                    _suppress_harvest = True
+        
+        if not _suppress_harvest:
+            add("client_side_harvest_combo", weights.get('client_side_harvest_combo', 25))
     
     # === v7.4: WHOIS PRIVACY ===
     # Standalone: very low weight (most legitimate domains use privacy too).
@@ -6610,8 +6459,34 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         if (res.domain_transfer_lock_recent or res.whois_recently_updated):
             has_transfer_risk = bool(signals & _TRANSFER_RISK_SIGNALS)
             if has_transfer_risk:
+                # v7.5.1: On fully-authenticated domains (enterprise MX + DKIM + SPF strict),
+                # a recent transfer lock is more likely administrative than post-compromise.
+                # Score at half weight when the only risk signals are "soft" indicators
+                # (vulnerable plugins, ptr mismatch) that are common on legitimate sites.
+                _HARD_TRANSFER_RISK = {
+                    "hacklink_keywords", "hidden_injection", "hacklink_wp_compromised",
+                    "hacklink_spam_links", "malicious_script", "empty_page",
+                    "hosting_suspect", "hosting_free", "typosquat_detected",
+                    "tld_variant_spoof", "domain_brand_impersonation",
+                    "vt_malicious", "vt_malicious_medium", "vt_suspicious",
+                    "blocked_asn", "mx_hijack_high",
+                    "ct_reactivated", "oauth_phish", "homoglyph_domain",
+                    "content_title_mismatch", "content_cross_domain_email",
+                    "domain_reregistered_recent", "domain_reregistered",
+                }
+                _is_fully_authed = (
+                    res.mx_provider_type == "enterprise" and
+                    res.dkim_exists and
+                    res.spf_exists and res.spf_mechanism == "-all"
+                )
+                _has_hard_risk = bool(signals & _HARD_TRANSFER_RISK)
+                
                 if res.domain_transfer_lock_recent:
-                    add("transfer_lock_with_risk", weights.get('transfer_lock_recent', 15))
+                    if _is_fully_authed and not _has_hard_risk:
+                        # Soft risk only on fully-authenticated domain → don't add to signals
+                        pass  # Prevents combo rules from firing
+                    else:
+                        add("transfer_lock_with_risk", weights.get('transfer_lock_recent', 15))
                 else:
                     add("whois_updated_with_risk", weights.get('whois_recently_updated', 10))
     
@@ -6887,41 +6762,54 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 res.phishing_kit_reason = " + ".join(kit_evidence)
             # else: suppress — only soft/parking-artifact evidence on a parking page
         
-        # v7.5.1 defense-in-depth: On confirmed e-commerce sites (WooCommerce,
-        # Shopify, etc.) with established domains, three signals are EXPECTED
-        # business behavior, not phishing:
-        #   - credential_form = customer account login
-        #   - brand: ups/fedex/dhl/usps = shipping carrier mentions
-        #   - form_posts_external = payment processor integration (Stripe, PayPal)
+        # v7.5.1 defense-in-depth: On confirmed e-commerce sites OR established
+        # well-authenticated domains (enterprise MX + DKIM, or DMARC reject/quarantine
+        # + DKIM), three signals are EXPECTED business behavior, not phishing:
+        #   - credential_form = customer/user login
+        #   - brand: ups/fedex/dhl/usps = shipping carriers (e-commerce only)
+        #   - form_posts_external = payment/banking processor integration
         # Strip these as evidence; only fire if hard evidence remains.
-        elif res.is_ecommerce_site and not res.has_exfil_drop_script:
-            _ecom_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
-            if _ecom_age_ok:
+        elif not res.has_exfil_drop_script:
+            _trusted_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
+            _is_trusted_auth = False
+            if _trusted_age_ok:
+                if res.is_ecommerce_site:
+                    _is_trusted_auth = True
+                elif res.mx_provider_type == "enterprise" and res.dkim_exists:
+                    _is_trusted_auth = True
+                elif res.dkim_exists and res.dmarc_policy in ("reject", "quarantine"):
+                    _is_trusted_auth = True
+            
+            if _is_trusted_auth:
                 def _is_shipping_brand(evidence_str):
                     """Check if a brand evidence item only contains shipping brands."""
                     if not evidence_str.startswith("brand:"):
                         return False
-                    # Extract brand names: "brand: ups;fedex" → ["ups", "fedex"]
                     brand_part = evidence_str.split(":", 1)[1].strip()
                     detected = [b.strip().lower() for b in brand_part.split(";")]
                     return all(b in ECOMMERCE_SHIPPING_BRANDS for b in detected if b)
                 
-                _ecom_evidence = [e for e in kit_evidence if not (
+                def _is_weak_harvest(evidence_str):
+                    """Check if harvest combo only contains harvest_input_value."""
+                    if not evidence_str.startswith("harvest combo:"):
+                        return False
+                    harvest_part = evidence_str.split(":", 1)[1].strip()
+                    sigs = {s.strip() for s in harvest_part.split(";") if s.strip()}
+                    return sigs.issubset({"harvest_input_value"})
+                
+                _trusted_evidence = [e for e in kit_evidence if not (
                     e == "credential form" or
                     e == "form posts to external domain" or
-                    _is_shipping_brand(e)
+                    _is_weak_harvest(e) or
+                    (res.is_ecommerce_site and _is_shipping_brand(e))
                 )]
-                if len(_ecom_evidence) >= 2 or res.has_exfil_drop_script:
+                if len(_trusted_evidence) >= 2:
                     res.phishing_kit_detected = True
                     res.phishing_kit_reason = " + ".join(kit_evidence)
-                # else: suppress — only e-commerce-normal evidence on a real store
+                # else: suppress — only normal-business evidence on a trusted site
             else:
-                # New e-commerce site (< 90 days) — don't suppress
                 res.phishing_kit_detected = True
                 res.phishing_kit_reason = " + ".join(kit_evidence)
-        else:
-            res.phishing_kit_detected = True
-            res.phishing_kit_reason = " + ".join(kit_evidence)
     
     # === HACKLINK CAMPAIGN PROFILE COMPOSITE (v7.5.1) ===
     # Identifies domains matching known hacklink target infrastructure fingerprints.
@@ -7047,6 +6935,24 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         signals.add("autofail")
         res.signals_triggered = ";".join(sorted(signals))
         res.score_breakdown = json.dumps(breakdown)
+    
+    # === ZERO EMAIL AUTH FLOOR (v7.5.1) ===
+    # When a domain has NO SPF, NO DKIM, AND NO DMARC, emails will be rejected
+    # by Gmail and Yahoo regardless of what we do.  There is no business value in
+    # approving a domain that can't deliver email.  Set a minimum score that
+    # ensures denial, with a clear reason for the operator.
+    if not res.spf_exists and not res.dkim_exists and not res.dmarc_exists:
+        _zero_auth_floor = threshold + 5  # Minimum score = threshold + 5
+        if res.risk_score < _zero_auth_floor:
+            res.risk_score = _zero_auth_floor
+            res.recommendation = "DENY"
+            # Re-derive risk_level
+            bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
+            res.risk_level = next((l for lo, hi, l in bands if lo <= res.risk_score <= hi), "UNKNOWN")
+            breakdown["zero_email_auth_floor"] = 0  # Policy override marker
+            signals.add("zero_email_auth_floor")
+            res.signals_triggered = ";".join(sorted(signals))
+            res.score_breakdown = json.dumps(breakdown)
     
     res.summary = generate_summary(res, signals, res.domain_age_days >= 0, weights=weights)
 
