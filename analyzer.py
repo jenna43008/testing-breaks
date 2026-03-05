@@ -581,6 +581,7 @@ class DomainApprovalResult:
     ct_days_since_last_cert: int = -1            # v7.5.1: Days since most recent cert was issued
     ct_cert_tls_dead: bool = False               # v7.5.1: Cert issued recently but TLS is dead/refusing
     ct_cert_tls_dead_detail: str = ""            # v7.5.1: Human-readable detail
+    analyzed_root_note: str = ""                 # v7.5.1: Note when subdomain didn't resolve and root was analyzed instead
     
     # === SUBDOMAIN DELEGATION ABUSE (v7.3.1) ===
     is_subdomain: bool = False                   # Submitted domain is a subdomain (not registrable root)
@@ -6678,16 +6679,36 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res = DomainApprovalResult(domain=domain)
     res.scan_timestamp = datetime.now(timezone.utc).isoformat()
     
-    # DNS Resolution
+    # DNS Resolution — with root domain fallback for subdomains
     try:
         res.ip_address = socket.gethostbyname(domain)
         res.resolved = True
     except:
-        res.recommendation = "DENY"
-        res.summary = "DENY: Domain does not resolve"
-        res.risk_level = "ERROR"
-        res.risk_score = 100
-        return asdict(res)
+        # v7.5.1: If a subdomain doesn't resolve, try the registrable root domain.
+        # e.g., mailing.aeins.de → aeins.de, newsletter.example.com → example.com
+        # This catches cases the app.py prefix stripper misses.
+        _root = get_registrable_domain(domain)
+        if _root and _root.lower() != domain.lower().rstrip('.'):
+            try:
+                _root_ip = socket.gethostbyname(_root)
+                # Root resolves — analyze that instead
+                _original_submitted = domain
+                res.domain = _root
+                res.ip_address = _root_ip
+                res.resolved = True
+                # Update the working domain variable for the rest of the function
+                domain = _root
+                # Note the fallback in summary so operators see what happened
+                res.analyzed_root_note = f"📌 ANALYZED ROOT: {_root} (submitted: {_original_submitted} does not resolve)"
+            except:
+                pass
+        
+        if not res.resolved:
+            res.recommendation = "DENY"
+            res.summary = "DENY: Domain does not resolve"
+            res.risk_level = "ERROR"
+            res.risk_score = 100
+            return asdict(res)
     
     # PTR
     res.ptr_exists, res.ptr_record, res.ptr_matches_forward = get_ptr_record(res.ip_address)
@@ -7412,5 +7433,9 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     
     # Score
     calculate_score(res, config)
+    
+    # v7.5.1: Prepend root domain fallback note to summary if applicable
+    if res.analyzed_root_note:
+        res.summary = f"{res.analyzed_root_note} | {res.summary}"
     
     return asdict(res)
