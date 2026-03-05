@@ -63,6 +63,11 @@ VERSION: 7.5.1 (Feb 2026)
 - ROOT DOMAIN FALLBACK: When a submitted subdomain doesn't resolve, the analyzer
   now tries the registrable root domain before returning "does not resolve."
   app.py prefix stripping expanded with mailing., newsletter., notify., etc.
+- SOCKET WHOIS FALLBACK: Tertiary registration lookup for TLDs not covered by
+  RDAP or python-whois. Queries the TLD's WHOIS server directly over TCP port 43.
+  Covers 22 ccTLDs (.ng, .ke, .gh, .pk, .za, .ua, etc.) with known WHOIS servers.
+  Compound TLD extraction (.com.ng, .co.za, .org.pk) now consistently includes
+  gov, edu, ac, mil indicators across all three lookup functions.
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
   Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
@@ -4388,7 +4393,7 @@ def rdap_lookup(domain: str, timeout: float) -> Tuple[str, int, bool, str]:
         return "", -1, False, ""
     try:
         parts = domain.split('.')
-        base = '.'.join(parts[-3:]) if len(parts) > 2 and parts[-2] in ['co', 'com', 'org', 'net'] else '.'.join(parts[-2:])
+        base = '.'.join(parts[-3:]) if len(parts) > 2 and parts[-2] in ['co', 'com', 'org', 'net', 'gov', 'edu', 'ac', 'mil'] else '.'.join(parts[-2:])
         tld = parts[-1].lower() if parts else ""
         
         # Direct registry endpoints for known TLDs — more reliable than rdap.org
@@ -4467,7 +4472,7 @@ def whois_lookup(domain: str) -> Tuple[str, int]:
         return "", -1
     try:
         parts = domain.split('.')
-        base = '.'.join(parts[-3:]) if len(parts) > 2 and parts[-2] in ['co', 'com', 'org', 'net'] else '.'.join(parts[-2:])
+        base = '.'.join(parts[-3:]) if len(parts) > 2 and parts[-2] in ['co', 'com', 'org', 'net', 'gov', 'edu', 'ac', 'mil'] else '.'.join(parts[-2:])
         w = python_whois.whois(base)
         created = w.creation_date
         if created is None:
@@ -4480,6 +4485,124 @@ def whois_lookup(domain: str) -> Tuple[str, int]:
                 created = created.replace(tzinfo=timezone.utc)
             age_days = (datetime.now(timezone.utc) - created).days
             return created.isoformat(), age_days
+        return "", -1
+    except Exception:
+        return "", -1
+
+
+# === DIRECT SOCKET WHOIS FALLBACK (v7.5.1) ===
+# For TLDs where RDAP and python-whois both fail, query the WHOIS server
+# directly over TCP port 43.  This handles ccTLDs with non-standard WHOIS
+# formats (e.g., .ng, .ke, .gh, .tz, .pk, .bd).
+WHOIS_SERVERS = {
+    'ng': 'whois.nic.ng',
+    'ke': 'whois.kenic.or.ke',
+    'gh': 'whois.nic.gh',
+    'tz': 'whois.tznic.or.tz',
+    'pk': 'whois.pknic.net.pk',
+    'bd': 'whois.btcl.net.bd',
+    'za': 'whois.registry.net.za',
+    'eg': 'whois.ripe.net',
+    'ug': 'whois.co.ug',
+    'rw': 'whois.ricta.org.rw',
+    'et': 'whois.ethiotelecom.et',
+    'lk': 'whois.nic.lk',
+    'mm': 'whois.registry.gov.mm',
+    'kh': 'whois.nic.kh',
+    'np': 'whois.mos.com.np',
+    'ua': 'whois.ua',
+    'by': 'whois.cctld.by',
+    'ge': 'whois.registration.ge',
+    'am': 'whois.amnic.net',
+    'az': 'whois.az',
+    'kz': 'whois.nic.kz',
+    'uz': 'whois.cctld.uz',
+}
+
+def whois_socket_lookup(domain: str, timeout: float = 8.0) -> Tuple[str, int]:
+    """
+    Direct socket WHOIS query for TLDs not covered by RDAP or python-whois.
+    Returns: (creation_date_iso, age_days)
+    """
+    import socket as _socket
+    
+    parts = domain.lower().split('.')
+    # Extract the TLD (last part) for server lookup
+    tld = parts[-1] if parts else ""
+    if tld not in WHOIS_SERVERS:
+        return "", -1
+    
+    # Build the registrable base domain
+    _sld_indicators = {'co', 'com', 'org', 'net', 'gov', 'edu', 'ac', 'mil'}
+    if len(parts) > 2 and parts[-2] in _sld_indicators:
+        base = '.'.join(parts[-3:])
+    else:
+        base = '.'.join(parts[-2:])
+    
+    server = WHOIS_SERVERS[tld]
+    
+    try:
+        sock = _socket.create_connection((server, 43), timeout=timeout)
+        sock.sendall((base + "\r\n").encode("utf-8"))
+        
+        response = b""
+        while True:
+            try:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                response += chunk
+            except _socket.timeout:
+                break
+        sock.close()
+        
+        if not response:
+            return "", -1
+        
+        text = response.decode("utf-8", errors="replace")
+        
+        # Parse creation date from various WHOIS formats
+        # Common patterns:
+        #   Creation Date: 2020-01-15T00:00:00Z
+        #   Registration Date: 15-Jan-2020
+        #   created: 2020-01-15
+        #   Registered: 15 Jan 2020
+        #   Created On: 2020-01-15
+        import re as _re_w
+        
+        _DATE_PATTERNS = [
+            _re_w.compile(r'(?:Creation Date|Registration Date|Created|Registered|Created On|created)\s*[:=]\s*(.+)', _re_w.IGNORECASE),
+        ]
+        
+        for pattern in _DATE_PATTERNS:
+            m = pattern.search(text)
+            if m:
+                date_str = m.group(1).strip().rstrip('.')
+                # Try parsing multiple date formats
+                for fmt in [
+                    "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z",
+                    "%Y-%m-%d", "%d-%b-%Y", "%d %b %Y", "%d/%m/%Y",
+                    "%Y.%m.%d", "%B %d, %Y", "%d-%m-%Y", "%Y-%m-%d %H:%M:%S",
+                ]:
+                    try:
+                        dt = datetime.strptime(date_str[:30], fmt)
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        age_days = (datetime.now(timezone.utc) - dt).days
+                        return dt.isoformat(), age_days
+                    except (ValueError, TypeError):
+                        continue
+                
+                # Last resort: try fromisoformat
+                try:
+                    dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    age_days = (datetime.now(timezone.utc) - dt).days
+                    return dt.isoformat(), age_days
+                except (ValueError, TypeError):
+                    pass
+        
         return "", -1
     except Exception:
         return "", -1
@@ -4529,7 +4652,7 @@ def whois_enrich(domain: str) -> dict:
         return result
     try:
         parts = domain.split('.')
-        base = '.'.join(parts[-3:]) if len(parts) > 2 and parts[-2] in ['co', 'com', 'org', 'net'] else '.'.join(parts[-2:])
+        base = '.'.join(parts[-3:]) if len(parts) > 2 and parts[-2] in ['co', 'com', 'org', 'net', 'gov', 'edu', 'ac', 'mil'] else '.'.join(parts[-2:])
         w = python_whois.whois(base)
         
         # Registrar
@@ -7407,6 +7530,15 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.whois_created, res.domain_age_days = whois_lookup(domain)
         if res.domain_age_days >= 0:
             res.domain_age_source = "whois"
+    
+    # v7.5.1: Direct socket WHOIS fallback for TLDs not covered by RDAP/python-whois
+    # (e.g., .ng, .ke, .gh, .pk — many African and Asian ccTLDs)
+    if check_rdap and res.domain_age_days < 0:
+        _sock_created, _sock_age = whois_socket_lookup(domain)
+        if _sock_age >= 0:
+            res.domain_age_days = _sock_age
+            res.whois_created = _sock_created
+            res.domain_age_source = "whois_socket"
     
     # Both RDAP and WHOIS failed — cannot determine domain age/registrar
     # Legitimate domains almost always have accessible registration data.
