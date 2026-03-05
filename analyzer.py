@@ -47,6 +47,11 @@ VERSION: 7.5.1 (Feb 2026)
   hCaptcha, Akamai Bot Manager, DataDome, and PerimeterX/HUMAN. Each gives
   -5 points (capped at -10 total). Detection was already in analyze_content()
   but was never wired to result fields or scoring.
+- CERT ISSUED BUT TLS DEAD: New signal detecting when a certificate was issued
+  within the last 90 days (via CT logs) but TLS is currently refusing connections
+  or failing handshake. On established domains (1yr+) scores 18pts, on younger
+  domains 8pts, suppressed on domains <30 days. CT function now also returns
+  last_cert_issuer and days_since_last_cert for precise issue text.
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
   Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
@@ -572,6 +577,10 @@ class DomainApprovalResult:
     ct_gap_months: int = -1                      # v7.3.1: Largest gap in cert history (months)
     ct_reactivated: bool = False                 # v7.3.1: Aged domain with long CT gap + recent cert (expired domain purchase)
     ct_gap_evidence: str = ""                    # v7.3.1: Evidence string for CT gap
+    ct_last_cert_issuer: str = ""                # v7.5.1: Issuer CN of the most recent certificate
+    ct_days_since_last_cert: int = -1            # v7.5.1: Days since most recent cert was issued
+    ct_cert_tls_dead: bool = False               # v7.5.1: Cert issued recently but TLS is dead/refusing
+    ct_cert_tls_dead_detail: str = ""            # v7.5.1: Human-readable detail
     
     # === SUBDOMAIN DELEGATION ABUSE (v7.3.1) ===
     is_subdomain: bool = False                   # Submitted domain is a subdomain (not registrable root)
@@ -4552,6 +4561,8 @@ def check_cert_transparency(domain: str, timeout: float = 8.0) -> dict:
         "first_seen": "",
         "last_seen": "",
         "dates": [],  # v7.3.1: sorted list of cert datetimes for gap analysis
+        "last_cert_issuer": "",    # v7.5.1: Issuer of the most recent certificate
+        "days_since_last_cert": -1,  # v7.5.1: Days since most recent cert issued
     }
     if not REQUESTS_AVAILABLE:
         return result
@@ -4639,11 +4650,32 @@ def check_cert_transparency(domain: str, timeout: float = 8.0) -> dict:
             
             # Check if most recent cert was issued within 7 days
             days_since_last = (now - dates[-1]).days
+            result["days_since_last_cert"] = days_since_last
             if days_since_last <= 7:
                 result["recent_issuance"] = True
         
         result["issuers"] = sorted(issuers)[:10]  # Cap at 10 unique issuers
         result["dates"] = dates  # v7.3.1: sorted dates for gap analysis
+        
+        # v7.5.1: Find the issuer of the most recent certificate specifically
+        # We need to match the most recent not_before to its issuer
+        if dates:
+            most_recent_dt = dates[-1]
+            for entry in entries[:200]:
+                not_before = entry.get("not_before", "")
+                if not_before:
+                    try:
+                        dt = datetime.fromisoformat(not_before.replace("Z", "+00:00"))
+                        if dt == most_recent_dt:
+                            issuer_dn = entry.get("issuer_name", "")
+                            for part in issuer_dn.split(","):
+                                part = part.strip()
+                                if part.startswith("CN=") or part.startswith("O="):
+                                    result["last_cert_issuer"] = part.split("=", 1)[1].strip()
+                                    break
+                            break
+                    except (ValueError, TypeError):
+                        pass
         
     except Exception:
         pass
@@ -4943,6 +4975,16 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         all_issues.append(f"🚨 CT REACTIVATION ({res.ct_gap_months}mo gap) → {res.ct_gap_evidence}")
     elif res.ct_gap_months >= 12:
         all_issues.append(f"⚠️ CT GAP ({res.ct_gap_months}mo) → {res.ct_gap_evidence}")
+    
+    # v7.5.1: Cert issued but TLS dead
+    if res.ct_cert_tls_dead:
+        _issuer = res.ct_last_cert_issuer or "unknown"
+        _days = res.ct_days_since_last_cert
+        all_issues.append(
+            f"🔒 CERT ISSUED BUT TLS DEAD → Certificate issued {_days}d ago by "
+            f"{_issuer} but port 443 now {'refuses connections' if res.tls_connection_failed else 'fails handshake'}; "
+            f"infrastructure disrupted since cert issuance"
+        )
     
     # v7.3.1: Subdomain delegation abuse
     if res.subdomain_infra_divergent:
@@ -6207,6 +6249,18 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     elif res.ct_gap_months >= 12:
         add("ct_gap_large", weights.get('ct_gap_large', 10))  # Large gap but not recent reactivation
     
+    # v7.5.1: Cert issued but TLS dead — infrastructure disruption signal
+    # A cert was issued within 90 days but TLS is now refusing/failing.
+    # Weight scales by domain age: on established domains this is very suspicious,
+    # on new domains it may just be setup in progress.
+    if res.ct_cert_tls_dead:
+        if res.domain_age_days >= 0 and res.domain_age_days < 30:
+            add("ct_cert_tls_dead", 0)  # New domain — setup in progress
+        elif res.domain_age_days >= 365:
+            add("ct_cert_tls_dead", weights.get('ct_cert_tls_dead', 18))
+        else:
+            add("ct_cert_tls_dead", weights.get('ct_cert_tls_dead_young', 8))
+    
     # v7.3.1: Subdomain delegation abuse
     if res.subdomain_infra_divergent:
         if res.subdomain_divergence_confidence == "HIGH":
@@ -7282,6 +7336,24 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.ct_issuers = ";".join(ct["issuers"])
         res.ct_first_seen = ct["first_seen"]
         res.ct_last_seen = ct["last_seen"]
+        res.ct_last_cert_issuer = ct.get("last_cert_issuer", "")
+        res.ct_days_since_last_cert = ct.get("days_since_last_cert", -1)
+        
+        # v7.5.1: CERT ISSUED BUT TLS DEAD
+        # A certificate was issued recently (within 90 days) but TLS is now
+        # refusing connections or failing handshake.  On established domains this
+        # strongly suggests infrastructure disruption: server compromise, hosting
+        # migration gone wrong, or domain being stripped post-takeover.
+        if res.ct_days_since_last_cert >= 0 and res.ct_days_since_last_cert <= 90:
+            if res.tls_connection_failed or res.tls_handshake_failed:
+                res.ct_cert_tls_dead = True
+                _issuer = res.ct_last_cert_issuer or "unknown issuer"
+                _days = res.ct_days_since_last_cert
+                _tls_reason = "connection refused" if res.tls_connection_failed else "handshake failed"
+                res.ct_cert_tls_dead_detail = (
+                    f"Certificate issued {_days}d ago by {_issuer} but TLS {_tls_reason} — "
+                    f"infrastructure disrupted since cert issuance"
+                )
         
         # v7.3.1: CT gap analysis — detect aged domain purchases
         ct_dates = ct.get("dates", [])
