@@ -6156,43 +6156,32 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("suspicious_iframe", weights.get('suspicious_iframe', 8))
     if res.is_parking_page:
         add("parking_page", weights.get('parking_page', 6))
-    if res.has_credential_form:
-        # v7.5.1 GENERALIZED: On established, well-authenticated domains, credential
-        # forms are customer/user logins, not phishing.
-        _is_trusted_auth_site = False
-        _age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
-        # Defensive: check both dkim_exists AND dkim_selectors_found (belt + suspenders)
-        _has_dkim = res.dkim_exists or bool(res.dkim_selectors_found)
-        if _age_ok:
-            if res.is_ecommerce_site:
-                _is_trusted_auth_site = True
-            elif res.mx_provider_type == "enterprise" and _has_dkim:
-                _is_trusted_auth_site = True
-            elif _has_dkim and res.dmarc_policy in ("reject", "quarantine"):
-                _is_trusted_auth_site = True
-            # v7.5.1: Also suppress when DMARC is quarantine/reject + enterprise MX
-            # (even without DKIM — enterprise MX + DMARC quarantine = serious auth investment)
-            elif res.mx_provider_type == "enterprise" and res.dmarc_policy in ("reject", "quarantine"):
-                _is_trusted_auth_site = True
-        if not _is_trusted_auth_site:
-            add("credential_form", weights.get('credential_form', 20))
+    
+    # === TRUSTED AUTHENTICATED SITE CHECK (v7.5.1) ===
+    # Calculate ONCE, use everywhere.  Covers e-commerce, financial, SaaS, and any
+    # established domain with strong email auth.  When True, credential_form,
+    # form_posts_external, and weak harvest_input_value are all suppressed.
+    _is_trusted_auth = False
+    _trust_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
+    _trust_has_dkim = res.dkim_exists or bool(res.dkim_selectors_found)
+    if _trust_age_ok:
+        if res.is_ecommerce_site:
+            _is_trusted_auth = True
+        elif res.mx_provider_type == "enterprise" and _trust_has_dkim:
+            _is_trusted_auth = True
+        elif _trust_has_dkim and res.dmarc_policy in ("reject", "quarantine"):
+            _is_trusted_auth = True
+        elif res.mx_provider_type == "enterprise" and res.dmarc_policy in ("reject", "quarantine"):
+            _is_trusted_auth = True
+        elif res.app_store_has_presence and res.app_store_confidence in ("high", "medium") and _trust_has_dkim:
+            _is_trusted_auth = True
+    
+    if res.has_credential_form and not _is_trusted_auth:
+        add("credential_form", weights.get('credential_form', 20))
     if res.has_sensitive_fields:
         add("sensitive_fields", weights.get('sensitive_fields', 10))
-    if res.form_posts_external:
-        _is_trusted_auth_site2 = False
-        _age_ok2 = res.domain_age_days < 0 or res.domain_age_days >= 90
-        _has_dkim2 = res.dkim_exists or bool(res.dkim_selectors_found)
-        if _age_ok2:
-            if res.is_ecommerce_site:
-                _is_trusted_auth_site2 = True
-            elif res.mx_provider_type == "enterprise" and _has_dkim2:
-                _is_trusted_auth_site2 = True
-            elif _has_dkim2 and res.dmarc_policy in ("reject", "quarantine"):
-                _is_trusted_auth_site2 = True
-            elif res.mx_provider_type == "enterprise" and res.dmarc_policy in ("reject", "quarantine"):
-                _is_trusted_auth_site2 = True
-        if not _is_trusted_auth_site2:
-            add("form_posts_external", weights.get('form_posts_external', 10))
+    if res.form_posts_external and not _is_trusted_auth:
+        add("form_posts_external", weights.get('form_posts_external', 10))
     if res.brands_detected:
         add("brand_impersonation", weights.get('brand_impersonation', 22))
     if res.phishing_paths_found:
@@ -6236,16 +6225,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         _harvest_sigs.discard("")
         _weak_harvest_only = _harvest_sigs.issubset({"harvest_input_value"})
         
-        if _weak_harvest_only:
-            _age_ok_h = res.domain_age_days < 0 or res.domain_age_days >= 90
-            _has_dkim_h = res.dkim_exists or bool(res.dkim_selectors_found)
-            if _age_ok_h:
-                if res.mx_provider_type == "enterprise" and _has_dkim_h:
-                    _suppress_harvest = True
-                elif _has_dkim_h and res.dmarc_policy in ("reject", "quarantine"):
-                    _suppress_harvest = True
-                elif res.mx_provider_type == "enterprise" and res.dmarc_policy in ("reject", "quarantine"):
-                    _suppress_harvest = True
+        # Use the SAME _is_trusted_auth flag calculated above
+        if _weak_harvest_only and _is_trusted_auth:
+            _suppress_harvest = True
         
         if not _suppress_harvest:
             add("client_side_harvest_combo", weights.get('client_side_harvest_combo', 25))
@@ -6338,7 +6320,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         if res.hacklink_malicious_script_confidence == "HIGH":
             add("malicious_script", weights.get('malicious_script', 100))
         elif res.hacklink_malicious_script_confidence == "MEDIUM":
-            add("malicious_script", weights.get('malicious_script_medium', 25))
+            # v7.5.1: Established domains with VT clean get reduced weight —
+            # MEDIUM confidence scripts on 19-year-old VT-clean sites are almost
+            # certainly legitimate third-party tracking/analytics, not SocGholish.
+            _ms_established = (
+                (res.domain_age_days < 0 or res.domain_age_days >= 365) and
+                res.vt_malicious_count == 0 and res.vt_total_vendors >= 50
+            )
+            if _ms_established:
+                add("malicious_script", weights.get('malicious_script_medium_established', 10))
+            else:
+                add("malicious_script", weights.get('malicious_script_medium', 25))
     
     # === HIDDEN CONTENT INJECTION (CSS cloaking: display:none, font-size:0) ===
     # HIGH = hidden content WITH embedded links (near-certain hacklink/SEO spam)
@@ -6781,20 +6773,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         #   - brand: ups/fedex/dhl/usps = shipping carriers (e-commerce only)
         #   - form_posts_external = payment/banking processor integration
         # Strip these as evidence; only fire if hard evidence remains.
+        # Uses the shared _is_trusted_auth flag calculated in the scoring section above.
         elif not res.has_exfil_drop_script:
-            _trusted_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
-            _is_trusted_auth = False
-            _has_dkim_t = res.dkim_exists or bool(res.dkim_selectors_found)
-            if _trusted_age_ok:
-                if res.is_ecommerce_site:
-                    _is_trusted_auth = True
-                elif res.mx_provider_type == "enterprise" and _has_dkim_t:
-                    _is_trusted_auth = True
-                elif _has_dkim_t and res.dmarc_policy in ("reject", "quarantine"):
-                    _is_trusted_auth = True
-                elif res.mx_provider_type == "enterprise" and res.dmarc_policy in ("reject", "quarantine"):
-                    _is_trusted_auth = True
-            
             if _is_trusted_auth:
                 def _is_shipping_brand(evidence_str):
                     """Check if a brand evidence item only contains shipping brands."""
