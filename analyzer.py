@@ -1350,9 +1350,13 @@ def classify_mx_provider(mx_records: List[Tuple[int, str]], domain: str, config:
         "mail.protection.outlook.com",   # Microsoft 365 / Exchange Online
         "google.com",                     # Google Workspace
         "googlemail.com",                 # Google Workspace (legacy)
-        "pphosted.com",                   # Proofpoint
+        "pphosted.com",                   # Proofpoint Protection
+        "ppe-hosted.com",                 # Proofpoint Protection Essentials (PPE)
         "mimecast.com",                   # Mimecast
         "barracudanetworks.com",          # Barracuda
+        "messagelabs.com",               # Broadcom/Symantec Email Security
+        "iphmx.com",                     # Cisco IronPort / Email Security
+        "fireeyecloud.com",             # Trellix / FireEye Email Security
     ]
     for mx_host in all_mx_hosts:
         for pattern in _ENTERPRISE_ALWAYS:
@@ -1436,6 +1440,7 @@ def detect_mx_provider_mismatch(
         ('outlook.com',                  'Microsoft 365',   'outlook.com'),
         # Proofpoint
         ('pphosted.com',                 'Proofpoint',      'pphosted.com'),
+        ('ppe-hosted.com',               'Proofpoint',      'ppe-hosted.com'),
         # Mimecast
         ('mimecast.com',                 'Mimecast',        'mimecast.com'),
     ]
