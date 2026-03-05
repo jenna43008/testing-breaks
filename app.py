@@ -400,11 +400,13 @@ def display_results(results: list):
             "has_harvest_combo": st.column_config.CheckboxColumn("🕸️ Harvest", width="small"),
             "vt_malicious_count": st.column_config.NumberColumn("🛡️ VT Mal", width="small"),
             "hacklink_detected": st.column_config.CheckboxColumn("🕷️ Hacklink", width="small"),
+            "hacklink_campaign_profile": st.column_config.CheckboxColumn("🕸️ Hacklink Profile", width="small"),
             "hacklink_malicious_script": st.column_config.CheckboxColumn("💀 Mal Script", width="small"),
             "hacklink_hidden_injection": st.column_config.CheckboxColumn("💀 Hidden Inj", width="small"),
             "domain_transfer_lock_recent": st.column_config.CheckboxColumn("🔓 Lock Recent", width="small"),
             "is_empty_page": st.column_config.CheckboxColumn("📄 Empty", width="small"),
             "ct_log_count": st.column_config.NumberColumn("📜 CT Certs", width="small"),
+            "ct_cert_tls_dead": st.column_config.CheckboxColumn("🔒 Cert Dead", width="small"),
             "mx_provider_mismatch": st.column_config.CheckboxColumn("🔓 MX Hijack", width="small"),
             "subdomain_infra_divergent": st.column_config.CheckboxColumn("🔀 Sub Diverge", width="small"),
             "ct_reactivated": st.column_config.CheckboxColumn("📜 CT React", width="small"),
@@ -1098,6 +1100,48 @@ def display_results(results: list):
                     st.warning(f"**⚠️ Suspicious Scripts ({len(scripts)}):** External JS from untrusted domains")
                     st.code('\n'.join(s[:120] for s in scripts[:5]), language=None)
         
+        # === HACKLINK CAMPAIGN PROFILE (v7.5.1) ===
+        if domain_data.get('hacklink_campaign_profile'):
+            _hcp_conf = domain_data.get('hacklink_campaign_profile_confidence', 'MODERATE')
+            _hcp_sigs = domain_data.get('hacklink_campaign_profile_signals', '')
+            _icon = "🔴" if _hcp_conf == "HIGH" else "🟠"
+            with st.expander(f"🕸️ Hacklink Campaign Profile ({_hcp_conf})", expanded=True):
+                st.warning(
+                    f"**{_icon} Hacklink Campaign Profile ({_hcp_conf})** — Domain matches known hacklink target "
+                    f"infrastructure fingerprint. Injected content may be cloaked or cleaned up."
+                )
+                if _hcp_sigs:
+                    sig_labels = {
+                        "empty_page": "Empty/gutted page content",
+                        "uk_variant_dark": ".co.uk TLD variant has no DNS",
+                        "weak_email_auth": "No DKIM + DMARC p=none + SPF softfail",
+                        "hidden_injection": "CSS-hidden content injection detected",
+                        "cpanel": "cPanel hosting (mass exploitation target)",
+                    }
+                    for sig in _hcp_sigs.split(";"):
+                        sig = sig.strip()
+                        label = sig_labels.get(sig, sig)
+                        st.markdown(f"- **{sig}**: {label}")
+                st.caption("This is a PROFILE match, not confirmed hacklink. Only fires on domains 90+ days old.")
+        
+        # === SECURITY TOOLING (v7.5.1) ===
+        _sec_signals = domain_data.get('content_security_signals', '')
+        if _sec_signals:
+            _sec_names = {
+                "recaptcha": "Google reCAPTCHA",
+                "cloudflare_bot_management": "Cloudflare Bot Management / Turnstile",
+                "hcaptcha": "hCaptcha",
+                "akamai_bot_manager": "Akamai Bot Manager",
+                "datadome": "DataDome",
+                "perimeterx": "PerimeterX / HUMAN Security",
+            }
+            _sec_list = [_sec_names.get(s.strip(), s.strip()) for s in _sec_signals.split(";") if s.strip()]
+            if _sec_list:
+                with st.expander(f"🛡️ Security Tooling ({len(_sec_list)} detected)", expanded=False):
+                    st.success("**Security tooling detected** — Legitimate sites invest in bot management and CAPTCHA; phishing kits almost never implement these.")
+                    for s in _sec_list:
+                        st.markdown(f"- {s}")
+        
         # === CONTENT IDENTITY VERIFICATION ===
         has_content_identity = (
             domain_data.get('content_title_body_mismatch') or
@@ -1351,7 +1395,7 @@ def display_results(results: list):
         # === CERTIFICATE TRANSPARENCY ===
         ct_count = domain_data.get('ct_log_count', -1)
         if ct_count >= 0:
-            with st.expander(f"📜 Certificate Transparency ({ct_count} certs)", expanded=ct_count == 0 or domain_data.get('ct_recent_issuance', False)):
+            with st.expander(f"📜 Certificate Transparency ({ct_count} certs)", expanded=ct_count == 0 or domain_data.get('ct_recent_issuance', False) or domain_data.get('ct_cert_tls_dead', False)):
                 ct_col1, ct_col2, ct_col3 = st.columns(3)
                 with ct_col1:
                     icon = "🔴" if ct_count == 0 else "🟢"
@@ -1366,13 +1410,25 @@ def display_results(results: list):
                 
                 first = domain_data.get('ct_first_seen', '')
                 last = domain_data.get('ct_last_seen', '')
+                last_issuer = domain_data.get('ct_last_cert_issuer', '')
+                days_since = domain_data.get('ct_days_since_last_cert', -1)
                 if first:
-                    st.caption(f"First cert: {first[:10]}  |  Most recent: {last[:10] if last else 'N/A'}")
+                    detail = f"First cert: {first[:10]}  |  Most recent: {last[:10] if last else 'N/A'}"
+                    if last_issuer:
+                        detail += f"  |  Last issuer: {last_issuer}"
+                    if days_since >= 0:
+                        detail += f"  |  {days_since}d ago"
+                    st.caption(detail)
                 
                 if ct_count == 0:
                     st.error("**No CT history** — Zero certificates found; domain may never have been used for HTTPS")
                 elif domain_data.get('ct_recent_issuance') and domain_data.get('domain_age_days', 0) > 365:
                     st.warning(f"**Recent cert on old domain** — New certificate issued on {domain_data.get('domain_age_days')}d-old domain; possible takeover/reactivation")
+                
+                # v7.5.1: Cert issued but TLS dead
+                if domain_data.get('ct_cert_tls_dead'):
+                    _detail = domain_data.get('ct_cert_tls_dead_detail', '')
+                    st.error(f"**🔒 CERT ISSUED BUT TLS DEAD** — {_detail or 'Certificate issued recently but TLS is now refusing connections'}")
                 
                 # v7.3.1: CT gap / aged domain purchase detection
                 ct_gap = domain_data.get('ct_gap_months', -1)
@@ -1492,11 +1548,12 @@ def admin_view():
             "Hosting Provider": ['hosting_budget_shared', 'hosting_free', 'hosting_suspect',
                                  'cdn_tunnel_suspect'],
             "Nameserver Risk": ['ns_dynamic_dns', 'ns_parking', 'ns_lame_delegation', 'ns_free_dns', 'ns_single_ns'],
-            "Bonuses (Reduce Score)": ['has_bimi', 'has_mta_sts'],
+            "Bonuses (Reduce Score)": ['has_bimi', 'has_mta_sts', 'security_tooling'],
             "VirusTotal": ['vt_malicious_high', 'vt_malicious_medium', 'vt_malicious_low',
                           'vt_suspicious', 'vt_suspicious_low', 'vt_negative_community', 'vt_clean'],
             "Hacklink / SEO Spam": ['hacklink_detected', 'hacklink_keywords', 'hacklink_wp_compromised',
-                                    'hacklink_vulnerable_plugins', 'hacklink_spam_links'],
+                                    'hacklink_vulnerable_plugins', 'hacklink_spam_links',
+                                    'hacklink_campaign_profile'],
             "Malicious Script / Hidden Injection": ['malicious_script', 'hidden_injection', 'cpanel_detected'],
             "Content Identity": ['content_title_mismatch', 'content_cross_domain_email',
                                 'content_broker_page', 'content_privacy_email', 'content_placeholder',
@@ -1507,7 +1564,8 @@ def admin_view():
                                                     'mx_hijack_high', 'mx_hijack_medium',
                                                     'subdomain_delegation_high', 'subdomain_delegation_medium'],
             "Empty Page / Cert Transparency": ['empty_page', 'ct_recent_issuance', 'ct_no_history',
-                                                'ct_reactivated', 'ct_gap_large', 'quishing_profile'],
+                                                'ct_reactivated', 'ct_gap_large', 'ct_cert_tls_dead',
+                                                'ct_cert_tls_dead_young', 'quishing_profile'],
         }
         
         new_weights = {}
@@ -1597,6 +1655,8 @@ def admin_view():
                 "ct_no_history": "Zero certificates found in CT logs — domain may never have been used for HTTPS",
                 "ct_reactivated": "Aged domain with long CT gap (6+ months) then recent cert — likely purchased from auction/expiry",
                 "ct_gap_large": "CT gap ≥12 months without reactivation — domain was inactive for extended period",
+                "ct_cert_tls_dead": "Certificate issued within 90 days (via CT logs) but TLS now refuses connections or fails handshake — infrastructure disrupted since cert issuance; strong compromise/disruption indicator on established domains",
+                "ct_cert_tls_dead_young": "Same as ct_cert_tls_dead but for domains 30–364 days old (lower weight)",
             },
             "OAuth / Consent Phishing": {
                 "oauth_phish": "Page contains outbound links to Microsoft/Google OAuth authorization endpoints with suspicious parameters (response_type=code, redirect_uri, excessive scopes). Attacker tricks users into granting malicious app permissions instead of harvesting passwords directly.",
@@ -1613,6 +1673,7 @@ def admin_view():
             "Trust & Authentication": {
                 "has_bimi": "BIMI record present — brand logo authentication (high trust)",
                 "has_mta_sts": "MTA-STS configured — enforces encrypted email transport",
+                "security_tooling": "Security tooling detected on page (reCAPTCHA, Cloudflare Bot Management, hCaptcha, Akamai, DataDome, PerimeterX) — legitimate sites invest in bot protection; phishing kits almost never implement these",
             },
             "App Store Presence": {
                 "app_store_high": "Found in major app store with high confidence — strong legitimacy signal",
@@ -1653,7 +1714,7 @@ def admin_view():
             },
             "TLD Variant": {
                 "tld_variant_spoofing": "Established business exists at a variant TLD — potential impersonation",
-                "tld_variant_uk_no_dns": "UK business TLD variant (.co.uk) generated but has no DNS — new domain operating on alternate TLD while primary UK extension is dark; scored only for domains under 1 year old",
+                "tld_variant_uk_no_dns": "UK business TLD variant (.co.uk) has no DNS — domain operating on alternate TLD while .co.uk is dark. Only scored on established domains (90+ days); suppressed on new domains where .co.uk simply hasn't been registered yet",
             },
             "Web / TLS": {
                 "no_https": "No valid HTTPS — may indicate abandoned or suspicious domain",
@@ -1738,6 +1799,7 @@ def admin_view():
                 "hacklink_wp_compromised": "WordPress compromise indicators (injected PHP, malicious plugins, backdoors)",
                 "hacklink_vulnerable_plugins": "Known-exploitable WordPress plugins detected on site",
                 "hacklink_spam_links": "5+ hidden outbound spam links injected into page content",
+                "hacklink_campaign_profile": "Composite: domain matches hacklink target infrastructure fingerprint (2+ of: empty_page, uk_variant_dark, weak_email_auth, hidden_injection, cpanel). Only fires on domains 90+ days old — new domains with empty pages are normal setup behavior",
             },
             "Malicious Script / Hidden Injection": {
                 "malicious_script": "SocGholish/FakeUpdates-style obfuscated script injection detected — domain is actively compromised and serving malware to visitors",
@@ -1829,9 +1891,11 @@ def admin_view():
             'General Risk': '⚠️',
             'VirusTotal': '🛡️',
             'Hacklink / SEO Spam': '🕷️',
+            'Hacklink Campaign Profile': '🕸️',
             'Malicious Script': '💀',
             'Domain Takeover': '🔓',
             'Content Identity': '🔍',
+            'Security Tooling': '🛡️',
         }
         
         # Show positive signals first, then phishing templates, then rest alphabetically
