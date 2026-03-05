@@ -7242,6 +7242,43 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             else:
                 res.brands_detected = ""
     
+    # === PARKING PAGE SIGNAL SUPPRESSION (v7.5.1) ===
+    # Parking pages (HugeDomains, Sedo, etc.) generate false signals from the parking
+    # provider's template.  The scoring suppression in calculate_score() prevents points,
+    # but the RAW BOOLEANS still leak into UI threat indicators and pattern displays.
+    # Clear them here so the entire pipeline sees clean data.
+    if res.is_parking_page:
+        # Malicious script: CookieYes/HugeDomains analytics scripts → SocGholish FP
+        if res.hacklink_malicious_script:
+            _ext = [d.strip().lower() for d in
+                    (res.content_external_script_domains or "").split(";") if d.strip()]
+            if _ext:
+                _unknown = [d for d in _ext if d not in KNOWN_PARKING_SCRIPT_DOMAINS]
+                if not _unknown:
+                    res.hacklink_malicious_script = False
+                    res.hacklink_malicious_script_confidence = ""
+                    res.hacklink_malicious_script_signals = ""
+                    res.hacklink_malicious_script_score = 0
+            else:
+                _ms_sigs = set((res.hacklink_malicious_script_signals or "").split(";"))
+                if _ms_sigs.issubset({"UNKNOWN_EXTERNAL_SCRIPT", "HIGH_ENTROPY_PATH",
+                                      "JQUERY_MASQUERADE", ""}):
+                    res.hacklink_malicious_script = False
+                    res.hacklink_malicious_script_confidence = ""
+                    res.hacklink_malicious_script_signals = ""
+                    res.hacklink_malicious_script_score = 0
+        
+        # UK variant dark: parking domain is for sale — .co.uk is irrelevant
+        if res.tld_variant_uk_no_dns:
+            res.tld_variant_uk_no_dns = False
+            res.tld_variant_uk_no_dns_domain = ""
+        
+        # Hidden injection: parking template CSS (display:none for menus/modals)
+        # Only suppress LOW confidence (no hidden links = just CSS patterns)
+        if res.hacklink_hidden_injection and res.hacklink_hidden_injection_confidence == "LOW":
+            res.hacklink_hidden_injection = False
+            res.hacklink_hidden_injection_confidence = ""
+    
     # === CONTENT IDENTITY VERIFICATION ===
     # Scans page content for identity mismatches, cloned content, cross-domain
     # email references, domain broker facades, and placeholder pages.
