@@ -299,9 +299,16 @@ SUSPICIOUS_SCRIPT_DOMAINS = [
 ]
 
 WP_COMPROMISE_PATTERNS = [
+    # Plugin JS with eval/document.write — legitimate plugins don't need these
     r'wp-content/plugins/[^/]+/[^"\']+\.js\?ver=\d+\.\d+\.\d+.*(?:eval|document\.write)',
+    # WP core files with eval/base64 — legit WP core never contains these
     r'wp-includes/.*(?:eval|base64_decode)',
-    r'/wp-admin/admin-ajax\.php.*action=(?!heartbeat)',
+    # Backdoor shell patterns in WP paths
+    r'wp-content/(?:uploads|plugins|themes)/[^"\']*(?:shell|c99|r57|wso|b374k|alfa)',
+    # PHP injection artifacts visible in HTML source
+    r'wp-(?:content|includes)/[^"\']*\.php\?(?:[a-z]{1,3}=)',
+    # Encoded PHP in WP directories (base64 payloads in URLs)
+    r'wp-content/[^"\']*(?:base64_decode|str_rot13|gzinflate|eval\s*\()',
 ]
 
 
@@ -614,6 +621,7 @@ class HacklinkKeywordScanner:
         # expected — it's their business name, not evidence of compromise.
         # We suppress these from page-content matching to avoid false positives.
         domain_name_kw_set = set(k.lower() for k in domain_name_keywords)
+        _specific_keyword_count = 0  # v7.5.1: Count of Turkish/specific (non-ambiguous) keywords
 
         if is_gambling_site:
             # --- GAMBLING SITE MODE ---
@@ -632,6 +640,7 @@ class HacklinkKeywordScanner:
                         continue
                     if kw_lower in hidden_text:
                         keywords_found.append(keyword)
+                _specific_keyword_count = len(keywords_found)  # v7.5.1: Turkish keywords in hidden blocks
                 for pattern in HACKLINK_EXACT_COMPILED:
                     m = pattern.search(hidden_text)
                     if m:
@@ -639,6 +648,8 @@ class HacklinkKeywordScanner:
                         if matched in domain_name_kw_set:
                             continue
                         keywords_found.append(matched)
+            else:
+                _specific_keyword_count = 0
             # If no hidden blocks or no keywords in hidden blocks → keywords_found stays empty
         else:
             # --- NORMAL MODE ---
@@ -650,6 +661,7 @@ class HacklinkKeywordScanner:
                     continue  # Skip — this is the business's own terminology
                 if kw_lower in content_lower:
                     keywords_found.append(keyword)
+            _specific_keyword_count = len(keywords_found)  # v7.5.1: Count before adding ambiguous
             # Word-boundary match for short/ambiguous keywords (high false-positive risk)
             for pattern in HACKLINK_EXACT_COMPILED:
                 m = pattern.search(page_content)
@@ -669,13 +681,31 @@ class HacklinkKeywordScanner:
                           f"{', '.join(keywords_found[:10])}{'...' if len(keywords_found) > 10 else ''}"
             })
         elif len(keywords_found) >= 2:
-            score += 20
-            hacklink_content_score += 20
-            findings.append({
-                "severity": "high",
-                "category": "hacklink_keywords",
-                "detail": f"Multiple hacklink keywords detected: {', '.join(keywords_found)}"
-            })
+            # v7.5.1: If ALL keywords are from the ambiguous/exact list (bet, slot,
+            # casino, betting, etc.), require 3+ for full score.  These words have
+            # legitimate uses on finance, gaming, sports, and entertainment sites.
+            # A trading signals site with "bet" + "betting" is NOT hacklink spam.
+            # Turkish hacklink keywords ("bahis siteleri", "canlı casino") are highly
+            # specific and remain at the 2-keyword threshold.
+            _all_ambiguous = (_specific_keyword_count == 0)
+            if _all_ambiguous and len(keywords_found) < 3:
+                # Only ambiguous keywords and fewer than 3 — low confidence
+                score += 8
+                hacklink_content_score += 8
+                findings.append({
+                    "severity": "medium",
+                    "category": "hacklink_keywords",
+                    "detail": f"Ambiguous hacklink keywords ({len(keywords_found)}): "
+                              f"{', '.join(keywords_found)}. May be legitimate site vocabulary."
+                })
+            else:
+                score += 20
+                hacklink_content_score += 20
+                findings.append({
+                    "severity": "high",
+                    "category": "hacklink_keywords",
+                    "detail": f"Multiple hacklink keywords detected: {', '.join(keywords_found)}"
+                })
         elif len(keywords_found) == 1:
             score += 8
             hacklink_content_score += 8
@@ -1122,7 +1152,13 @@ class HacklinkKeywordScanner:
         # injection with suspicious links, meta spam, spam outbound links).
         # Infrastructure signals (malicious scripts, CMS fingerprints, empty
         # pages) are separate threat classes and must NOT inflate this flag.
-        hacklink_detected = hacklink_content_score >= 15 or len(keywords_found) >= 2
+        #
+        # v7.5.1: Score-based only.  The old `len(keywords_found) >= 2` fallback
+        # caused false positives when 2 ambiguous keywords (bet + betting on a
+        # trading site) scored only 8 but still triggered hacklink_detected.
+        # Now: ambiguous-only 2-keyword matches score 8 (< 15, no detection),
+        # while specific Turkish keywords or 3+ ambiguous keywords score 20+ (detection).
+        hacklink_detected = hacklink_content_score >= 15
 
         # Determine hidden injection confidence
         if hidden_high_found:
