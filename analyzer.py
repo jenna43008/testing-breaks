@@ -40,7 +40,13 @@ VERSION: 7.5.1 (Feb 2026)
   FedEx, DHL, USPS), and form_posts_external (payment processors). These are normal
   e-commerce behavior. WooCommerce detected via plugin scanning now also sets
   is_ecommerce_site=True. Hard evidence (kit filenames, exfil scripts, phishing paths)
-  still fires the composite regardless.
+  still fires the composite regardless. Individual credential_form and
+  form_posts_external signals are also excluded from the signals set on
+  established e-commerce sites, preventing combo rule cascading.
+- SECURITY TOOLING TRUST BONUS: Detects reCAPTCHA, Cloudflare Bot Management,
+  hCaptcha, Akamai Bot Manager, DataDome, and PerimeterX/HUMAN. Each gives
+  -5 points (capped at -10 total). Detection was already in analyze_content()
+  but was never wired to result fields or scoring.
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
   Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
@@ -531,6 +537,7 @@ class DomainApprovalResult:
     content_external_link_domains: str = ""          # All external domains linked via <a href> (semicolon-sep, with paths)
     contact_reuse_results: str = ""                   # JSON: contact info found on other domains (OSINT cross-reference)
     content_visible_word_count: int = -1             # Number of visible words on page (-1 = not checked)
+    content_security_signals: str = ""               # v7.5.1: Security tooling detected (recaptcha, cloudflare_bot_management, etc.)
     registration_opaque: bool = False                # Both RDAP and WHOIS failed — cannot determine domain age/registrar
     domain_reregistered: bool = False                # RDAP shows a reregistration event (domain was dropped + re-bought)
     domain_reregistered_date: str = ""               # When the domain was re-registered
@@ -3565,6 +3572,8 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
         "harvest_combo": False, "harvest_combo_reason": "",
         # OAuth consent phishing (v7.3.1)
         "oauth_phish": False, "oauth_evidence": [],
+        # Security tooling detection (v7.5.1)
+        "security_signals": [],  # e.g., ["recaptcha", "cloudflare_turnstile", "hcaptcha"]
     }
     
     if not content:
@@ -3944,6 +3953,48 @@ def analyze_content(content: bytes, final_url: str, domain: str) -> Dict:
     if oauth_evidence:
         result["oauth_phish"] = True
         result["oauth_evidence"] = oauth_evidence
+    
+    # === SECURITY TOOLING DETECTION (v7.5.1) ===
+    # Legitimate sites invest in bot management, CAPTCHA, and security tooling.
+    # These are positive trust signals — phishing kits and spam operations almost
+    # never implement real security tooling (it costs money and blocks their targets).
+    _security_signals = []
+    
+    # Google reCAPTCHA (v2, v3, Enterprise)
+    if (b'google.com/recaptcha' in content_lower or
+        b'gstatic.com/recaptcha' in content_lower or
+        b'grecaptcha' in content_lower or
+        b'g-recaptcha' in content_lower or
+        b'recaptcha/api' in content_lower):
+        _security_signals.append("recaptcha")
+    
+    # Cloudflare Turnstile / Bot Management
+    if (b'challenges.cloudflare.com' in content_lower or
+        b'cf-turnstile' in content_lower or
+        b'cloudflare.com/turnstile' in content_lower or
+        b'cf_challenge' in content_lower or
+        b'__cf_bm' in content_lower or
+        b'cf-challenge-response' in content_lower):
+        _security_signals.append("cloudflare_bot_management")
+    
+    # hCaptcha
+    if (b'hcaptcha.com' in content_lower or
+        b'h-captcha' in content_lower):
+        _security_signals.append("hcaptcha")
+    
+    # Akamai Bot Manager
+    if b'akamai.com/akam' in content_lower or b'_abck' in content_lower:
+        _security_signals.append("akamai_bot_manager")
+    
+    # DataDome
+    if b'datadome.co' in content_lower:
+        _security_signals.append("datadome")
+    
+    # PerimeterX / HUMAN Security
+    if b'perimeterx.net' in content_lower or b'px-captcha' in content_lower:
+        _security_signals.append("perimeterx")
+    
+    result["security_signals"] = _security_signals
     
     return result
 
@@ -5150,6 +5201,21 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.mta_sts_exists:
         positives.append("MTA-STS enabled")
     
+    # v7.5.1: Security tooling positive
+    if res.content_security_signals:
+        _sec_names = {
+            "recaptcha": "reCAPTCHA",
+            "cloudflare_bot_management": "Cloudflare Bot Management",
+            "hcaptcha": "hCaptcha",
+            "akamai_bot_manager": "Akamai Bot Manager",
+            "datadome": "DataDome",
+            "perimeterx": "PerimeterX/HUMAN",
+        }
+        _sec_display = [_sec_names.get(s.strip(), s.strip())
+                        for s in res.content_security_signals.split(";") if s.strip()]
+        if _sec_display:
+            positives.append(f"Security: {', '.join(_sec_display)}")
+    
     if res.app_store_has_presence:
         is_platform_fp = res.hosting_provider_type == "platform"
         if res.app_store_confidence == "high":
@@ -5599,6 +5665,24 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.mta_sts_exists:
         add("has_mta_sts", weights.get('has_mta_sts', -5))
     
+    # === SECURITY TOOLING TRUST BONUS (v7.5.1) ===
+    # Legitimate sites invest in bot management, CAPTCHA, and security tooling.
+    # Phishing kits and spam operations almost never implement these (they cost
+    # money, add friction, and block their targets).  Each detected security
+    # service is a moderate trust signal; capped at -10 total to prevent gaming.
+    if res.content_security_signals:
+        _sec_sigs = res.content_security_signals.split(";")
+        _sec_bonus = 0
+        for _ss in _sec_sigs:
+            _ss = _ss.strip().lower()
+            if _ss in ("recaptcha", "cloudflare_bot_management", "hcaptcha",
+                       "akamai_bot_manager", "datadome", "perimeterx"):
+                _sec_bonus += weights.get(f'security_{_ss}', -5)
+        # Cap total security bonus at -10
+        _sec_bonus = max(_sec_bonus, -10)
+        if _sec_bonus < 0:
+            add("security_tooling", _sec_bonus)
+    
     # === APP STORE PRESENCE BONUS (Legitimacy Signal) ===
     # Tiered by confidence: high (verified deep links) > medium (page links/API) > low (keyword only)
     # IMPORTANT: Platform hosting providers (Render, Netlify, Vercel, etc.) serve their OWN
@@ -5845,11 +5929,20 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.is_parking_page:
         add("parking_page", weights.get('parking_page', 6))
     if res.has_credential_form:
-        add("credential_form", weights.get('credential_form', 20))
+        # v7.5.1: On established e-commerce sites, credential forms are customer
+        # account logins (WooCommerce, Shopify), not phishing.  Don't add to
+        # signals set at all — prevents combo rules (cred_form + no_https = +12)
+        # from cascading into false points.
+        _ecom_suppress = res.is_ecommerce_site and (res.domain_age_days < 0 or res.domain_age_days >= 90)
+        if not _ecom_suppress:
+            add("credential_form", weights.get('credential_form', 20))
     if res.has_sensitive_fields:
         add("sensitive_fields", weights.get('sensitive_fields', 10))
     if res.form_posts_external:
-        add("form_posts_external", weights.get('form_posts_external', 10))
+        # v7.5.1: On established e-commerce sites, external form posts are payment
+        # processor integrations (Stripe, PayPal, Square), not credential exfiltration.
+        if not (res.is_ecommerce_site and (res.domain_age_days < 0 or res.domain_age_days >= 90)):
+            add("form_posts_external", weights.get('form_posts_external', 10))
     if res.brands_detected:
         add("brand_impersonation", weights.get('brand_impersonation', 22))
     if res.phishing_paths_found:
@@ -6873,6 +6966,10 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         if ca.get("oauth_phish"):
             res.has_oauth_phish = True
             res.oauth_phish_evidence = ";".join(ca["oauth_evidence"])
+        
+        # v7.5.1: Security tooling detection (reCAPTCHA, Cloudflare, hCaptcha, etc.)
+        if ca.get("security_signals"):
+            res.content_security_signals = ";".join(ca["security_signals"])
     
     # Check for hijacked domain / stepping stone indicators
     redirect_chain_urls = res.redirect_chain.split(' → ') if res.redirect_chain else []
