@@ -1432,7 +1432,9 @@ def display_results(results: list):
                 if ct_count == 0:
                     st.error("**No CT history** — Zero certificates found; domain may never have been used for HTTPS")
                 elif domain_data.get('ct_recent_issuance') and domain_data.get('domain_age_days', 0) > 365:
-                    st.warning(f"**Recent cert on old domain** — New certificate issued on {domain_data.get('domain_age_days')}d-old domain; possible takeover/reactivation")
+                    # v7.5.1: Only warn if this isn't a routine renewal
+                    if ct_count < 5:
+                        st.warning(f"**Recent cert on old domain** — New certificate issued on {domain_data.get('domain_age_days')}d-old domain; possible takeover/reactivation")
                 
                 # v7.5.1: Cert issued but TLS dead
                 if domain_data.get('ct_cert_tls_dead'):
