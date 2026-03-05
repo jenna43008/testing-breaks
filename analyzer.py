@@ -34,6 +34,13 @@ VERSION: 7.5.1 (Feb 2026)
 - NEW UK VARIANT DARK SIGNAL: Detects when a .co.uk TLD variant has no DNS, indicating
   the domain operates on an alternate TLD while the UK variant is dead/unheld. Only
   scored on established domains (90+ days).
+- ECOMMERCE PHISHING KIT FALSE POSITIVE SUPPRESSION: WooCommerce/e-commerce sites
+  with established domains (90+ days) no longer trigger phishing kit autofail when the
+  only evidence is: credential_form (customer login), shipping brand mentions (UPS,
+  FedEx, DHL, USPS), and form_posts_external (payment processors). These are normal
+  e-commerce behavior. WooCommerce detected via plugin scanning now also sets
+  is_ecommerce_site=True. Hard evidence (kit filenames, exfil scripts, phishing paths)
+  still fires the composite regardless.
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
   Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
@@ -1070,6 +1077,11 @@ BRAND_KEYWORDS = [
 
 # Short keywords that need word boundary matching (to avoid false positives like "first" matching "irs")
 BRAND_KEYWORDS_SHORT = [b'irs', b'ups', b'dhl']
+
+# Shipping/logistics brands that are EXPECTED on e-commerce sites.
+# When detected on a confirmed WooCommerce/Shopify/e-commerce domain, these
+# should NOT count as brand impersonation evidence in the phishing kit composite.
+ECOMMERCE_SHIPPING_BRANDS = {'ups', 'fedex', 'usps', 'dhl', 'dpd', 'hermes', 'royal mail'}
 
 # === KNOWN PARKING / DOMAIN-SALE PROVIDERS (v7.5) ===
 # When the page is a parking page AND external resources/forms point to these
@@ -6314,6 +6326,39 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 res.phishing_kit_detected = True
                 res.phishing_kit_reason = " + ".join(kit_evidence)
             # else: suppress — only soft/parking-artifact evidence on a parking page
+        
+        # v7.5.1 defense-in-depth: On confirmed e-commerce sites (WooCommerce,
+        # Shopify, etc.) with established domains, three signals are EXPECTED
+        # business behavior, not phishing:
+        #   - credential_form = customer account login
+        #   - brand: ups/fedex/dhl/usps = shipping carrier mentions
+        #   - form_posts_external = payment processor integration (Stripe, PayPal)
+        # Strip these as evidence; only fire if hard evidence remains.
+        elif res.is_ecommerce_site and not res.has_exfil_drop_script:
+            _ecom_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
+            if _ecom_age_ok:
+                def _is_shipping_brand(evidence_str):
+                    """Check if a brand evidence item only contains shipping brands."""
+                    if not evidence_str.startswith("brand:"):
+                        return False
+                    # Extract brand names: "brand: ups;fedex" → ["ups", "fedex"]
+                    brand_part = evidence_str.split(":", 1)[1].strip()
+                    detected = [b.strip().lower() for b in brand_part.split(";")]
+                    return all(b in ECOMMERCE_SHIPPING_BRANDS for b in detected if b)
+                
+                _ecom_evidence = [e for e in kit_evidence if not (
+                    e == "credential form" or
+                    e == "form posts to external domain" or
+                    _is_shipping_brand(e)
+                )]
+                if len(_ecom_evidence) >= 2 or res.has_exfil_drop_script:
+                    res.phishing_kit_detected = True
+                    res.phishing_kit_reason = " + ".join(kit_evidence)
+                # else: suppress — only e-commerce-normal evidence on a real store
+            else:
+                # New e-commerce site (< 90 days) — don't suppress
+                res.phishing_kit_detected = True
+                res.phishing_kit_reason = " + ".join(kit_evidence)
         else:
             res.phishing_kit_detected = True
             res.phishing_kit_reason = " + ".join(kit_evidence)
@@ -6794,6 +6839,25 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                 if _all_parking:
                     res.form_posts_external = False
         
+        # === ECOMMERCE SHIPPING BRAND SUPPRESSION (v7.5.1) ===
+        # On confirmed e-commerce sites with established domains (90+ days),
+        # shipping/logistics brand mentions (UPS, FedEx, DHL, USPS) are expected
+        # business content, not brand impersonation.  Strip shipping-only brands
+        # from brands_detected to prevent combo rules from cascading
+        # (brand_imp + cred_form = 20pts, brand_imp + no_https = 20pts).
+        # If non-shipping brands are also present (e.g., "paypal"), keep those.
+        if res.is_ecommerce_site and res.brands_detected:
+            _ecom_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
+            if _ecom_age_ok:
+                _detected_brands = [b.strip().lower() for b in res.brands_detected.split(";") if b.strip()]
+                _non_shipping = [b for b in _detected_brands if b not in ECOMMERCE_SHIPPING_BRANDS]
+                if _non_shipping:
+                    # Keep only non-shipping brands
+                    res.brands_detected = ";".join(_non_shipping)
+                else:
+                    # All detected brands are shipping — suppress entirely
+                    res.brands_detected = ""
+        
         # Phishing kit detection (v7.3)
         if ca["kit_filename"]:
             res.has_phishing_kit_filename = True
@@ -6847,6 +6911,14 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     if content:
         ecom = analyze_ecommerce_indicators(content, domain)
         res.is_ecommerce_site = ecom["is_ecommerce"]
+        
+        # v7.5.1: WooCommerce plugin detection also confirms e-commerce
+        # The hacklink scanner detects WP plugins before this point, so check
+        # if WooCommerce was found in vulnerable plugins (it's detected regardless
+        # of vulnerability status — it appears in the plugin list).
+        if not res.is_ecommerce_site and res.hacklink_vulnerable_plugins:
+            if "woocommerce" in res.hacklink_vulnerable_plugins.lower():
+                res.is_ecommerce_site = True
         res.has_cross_domain_brand_link = len(ecom["cross_domain_brand_links"]) > 0
         res.cross_domain_brand_links = ";".join(ecom["cross_domain_brand_links"])
         
