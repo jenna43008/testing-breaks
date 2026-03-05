@@ -1404,8 +1404,14 @@ def display_results(results: list):
                     icon = "🔴" if ct_count == 0 else "🟢"
                     st.metric(f"{icon} CT Certs Found", ct_count)
                 with ct_col2:
-                    recent = domain_data.get('ct_recent_issuance', False)
-                    st.metric("Recent Issuance", "⚠️ Yes (7d)" if recent else "No")
+                    days_since = domain_data.get('ct_days_since_last_cert', -1)
+                    if days_since >= 0 and days_since <= 7:
+                        st.metric("Last Cert", f"⚠️ {days_since}d ago")
+                    elif days_since >= 0:
+                        st.metric("Last Cert", f"{days_since}d ago")
+                    else:
+                        recent = domain_data.get('ct_recent_issuance', False)
+                        st.metric("Last Cert", "⚠️ <7d" if recent else "Unknown")
                 with ct_col3:
                     issuers = domain_data.get('ct_issuers', '')
                     if issuers:
