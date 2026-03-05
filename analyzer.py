@@ -93,6 +93,10 @@ VERSION: 7.5.1 (Feb 2026)
   /account, /doc/, /share/).  Standard auth paths only count as phishing kit
   evidence when brand impersonation is also detected — a /signin page on
   nextphoto.app is normal; a /signin page impersonating Chase is phishing.
+- CT RECENT ISSUANCE ROUTINE RENEWAL SUPPRESSION: ct_recent_issuance no longer
+  fires on domains with 5+ certs in CT logs and 180+ days of age — that's just
+  Let's Encrypt auto-renewing every 60-90 days, not a new deployment. Still fires
+  on young domains, domains with few certs, and reactivated domains.
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
   Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
@@ -5303,9 +5307,14 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.ct_log_count == 0:
         all_issues.append("NO CT HISTORY → Zero certificates found in CT logs; domain may never have been used for HTTPS")
     elif res.ct_recent_issuance and res.domain_age_days > 365:
-        all_issues.append(f"CT RECENT ISSUANCE ON OLD DOMAIN → New cert issued in last 7d on {res.domain_age_days}d-old domain; possible takeover/reactivation")
+        # v7.5.1: Only flag if this isn't a routine renewal (few certs = unusual)
+        if res.ct_log_count < 5:
+            all_issues.append(f"CT RECENT ISSUANCE ON OLD DOMAIN → New cert issued in last 7d on {res.domain_age_days}d-old domain; possible takeover/reactivation")
     elif res.ct_recent_issuance:
-        all_issues.append("CT RECENT CERT ISSUANCE → Certificate issued within last 7 days")
+        # v7.5.1: Suppress issue text for routine renewals (5+ certs, established domain)
+        _is_routine = res.ct_log_count >= 5 and (res.domain_age_days < 0 or res.domain_age_days >= 180)
+        if not _is_routine:
+            all_issues.append("CT RECENT CERT ISSUANCE → Certificate issued within last 7 days")
     
     if res.ct_issuers:
         issuers = res.ct_issuers.replace(";", ", ")
@@ -6628,8 +6637,21 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         # else: young domain — don't score or track (prevents combo cascade)
     
     # === CERTIFICATE TRANSPARENCY ===
+    # v7.5.1: Suppress ct_recent_issuance on routine LE/ACME renewals.
+    # A domain with 5+ certs in CT logs and 180+ days of age is just auto-renewing
+    # its Let's Encrypt cert every 60-90 days — that's not a risk signal.
+    # Only score when it's a NEW cert on a domain that shouldn't need one:
+    #   - Young domain (<180d) getting early certs
+    #   - Domain with few certs (< 5) — limited history, could be reactivation
+    #   - ct_reactivated already handles the gap-then-new-cert pattern separately
     if res.ct_recent_issuance:
-        add("ct_recent_issuance", weights.get('ct_recent_issuance', 10))
+        _routine_renewal = (
+            res.ct_log_count >= 5 and
+            (res.domain_age_days < 0 or res.domain_age_days >= 180) and
+            not res.ct_reactivated
+        )
+        if not _routine_renewal:
+            add("ct_recent_issuance", weights.get('ct_recent_issuance', 10))
     
     if res.ct_log_count == 0:
         add("ct_no_history", weights.get('ct_no_history', 15))
