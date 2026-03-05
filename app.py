@@ -162,8 +162,8 @@ def user_view():
         ---
         
         **Scoring:**
-        - Score ≤ {threshold}: ✅ APPROVE
-        - Score > {threshold}: 🚫 DENY
+        - Score < {threshold}: ✅ APPROVE
+        - Score ≥ {threshold}: 🚫 DENY
         """.format(threshold=st.session_state.config.get('approve_threshold', 50)))
         
         st.markdown("---")
@@ -363,7 +363,7 @@ def display_results(results: list):
         def color_score(val):
             if val <= 30:
                 return 'background-color: #d4edda'
-            elif val <= 50:
+            elif val < 50:
                 return 'background-color: #fff3cd'
             else:
                 return 'background-color: #f8d7da'
