@@ -6839,25 +6839,6 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                 if _all_parking:
                     res.form_posts_external = False
         
-        # === ECOMMERCE SHIPPING BRAND SUPPRESSION (v7.5.1) ===
-        # On confirmed e-commerce sites with established domains (90+ days),
-        # shipping/logistics brand mentions (UPS, FedEx, DHL, USPS) are expected
-        # business content, not brand impersonation.  Strip shipping-only brands
-        # from brands_detected to prevent combo rules from cascading
-        # (brand_imp + cred_form = 20pts, brand_imp + no_https = 20pts).
-        # If non-shipping brands are also present (e.g., "paypal"), keep those.
-        if res.is_ecommerce_site and res.brands_detected:
-            _ecom_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
-            if _ecom_age_ok:
-                _detected_brands = [b.strip().lower() for b in res.brands_detected.split(";") if b.strip()]
-                _non_shipping = [b for b in _detected_brands if b not in ECOMMERCE_SHIPPING_BRANDS]
-                if _non_shipping:
-                    # Keep only non-shipping brands
-                    res.brands_detected = ";".join(_non_shipping)
-                else:
-                    # All detected brands are shipping — suppress entirely
-                    res.brands_detected = ""
-        
         # Phishing kit detection (v7.3)
         if ca["kit_filename"]:
             res.has_phishing_kit_filename = True
@@ -6912,13 +6893,6 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         ecom = analyze_ecommerce_indicators(content, domain)
         res.is_ecommerce_site = ecom["is_ecommerce"]
         
-        # v7.5.1: WooCommerce plugin detection also confirms e-commerce
-        # The hacklink scanner detects WP plugins before this point, so check
-        # if WooCommerce was found in vulnerable plugins (it's detected regardless
-        # of vulnerability status — it appears in the plugin list).
-        if not res.is_ecommerce_site and res.hacklink_vulnerable_plugins:
-            if "woocommerce" in res.hacklink_vulnerable_plugins.lower():
-                res.is_ecommerce_site = True
         res.has_cross_domain_brand_link = len(ecom["cross_domain_brand_links"]) > 0
         res.cross_domain_brand_links = ";".join(ecom["cross_domain_brand_links"])
         
@@ -7064,6 +7038,32 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                 res.hacklink_suspicious_scripts = ";".join(sus_scripts[:10])
         except Exception:
             pass  # Non-critical — don't break analysis if hacklink check fails
+    
+    # === ECOMMERCE DETECTION VIA WOOCOMMERCE PLUGIN (v7.5.1) ===
+    # The hacklink scanner detects WP plugins (including WooCommerce) during its
+    # scan.  If content-based ecommerce detection missed it (e.g., TLS failure
+    # preventing full page render), WooCommerce in the plugin list confirms it.
+    if not res.is_ecommerce_site and res.hacklink_vulnerable_plugins:
+        if "woocommerce" in res.hacklink_vulnerable_plugins.lower():
+            res.is_ecommerce_site = True
+    
+    # === ECOMMERCE SHIPPING BRAND SUPPRESSION (v7.5.1) ===
+    # On confirmed e-commerce sites with established domains (90+ days),
+    # shipping/logistics brand mentions (UPS, FedEx, DHL, USPS) are expected
+    # business content, not brand impersonation.  Strip shipping-only brands
+    # from brands_detected to prevent combo rules from cascading
+    # (brand_imp + cred_form = 20pts, brand_imp + no_https = 20pts).
+    # If non-shipping brands are also present (e.g., "paypal"), keep those.
+    # MUST run after both ecommerce detection AND hacklink scanner (for WooCommerce).
+    if res.is_ecommerce_site and res.brands_detected:
+        _ecom_age_ok = res.domain_age_days < 0 or res.domain_age_days >= 90
+        if _ecom_age_ok:
+            _detected_brands = [b.strip().lower() for b in res.brands_detected.split(";") if b.strip()]
+            _non_shipping = [b for b in _detected_brands if b not in ECOMMERCE_SHIPPING_BRANDS]
+            if _non_shipping:
+                res.brands_detected = ";".join(_non_shipping)
+            else:
+                res.brands_detected = ""
     
     # === CONTENT IDENTITY VERIFICATION ===
     # Scans page content for identity mismatches, cloned content, cross-domain
