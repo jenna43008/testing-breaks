@@ -82,7 +82,10 @@ def parse_domains(text: str) -> list:
             d = urlparse(d).netloc or urlparse(d).path
         d = d.strip('/').strip('.')
         # Strip common mail subdomains — we want to analyze the root domain
-        _MAIL_PREFIXES = ("mail.", "webmail.", "smtp.", "imap.", "pop.", "mx.", "email.")
+        _MAIL_PREFIXES = ("mail.", "mailing.", "webmail.", "smtp.", "imap.", "pop.", "mx.", "email.",
+                          "mailer.", "newsletter.", "news.", "notify.", "notifications.",
+                          "bounce.", "sender.", "send.", "em.", "mg.",  # Mailgun, SendGrid
+                          "return.", "reply.")
         for pfx in _MAIL_PREFIXES:
             if d.startswith(pfx):
                 d = d[len(pfx):]
