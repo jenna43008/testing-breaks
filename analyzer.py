@@ -52,6 +52,17 @@ VERSION: 7.5.1 (Feb 2026)
   or failing handshake. On established domains (1yr+) scores 18pts, on younger
   domains 8pts, suppressed on domains <30 days. CT function now also returns
   last_cert_issuer and days_since_last_cert for precise issue text.
+- GDPR ccTLD REGISTRATION OPAQUE SUPPRESSION: registration_opaque no longer fires
+  on European ccTLDs (.de, .eu, .fr, .nl, .be, .at, .ch, .it, .es, .se, .no, .dk,
+  .fi, .pl, .cz, .ie, and 16 more) where WHOIS/RDAP data is restricted by GDPR
+  or registry policy. These registries suppress creation dates by default.
+- TYPOSQUAT CONTEXT CHECK: When a typosquat match is detected but the page title
+  contains the domain's own brand name and does NOT contain the matched brand,
+  the typosquat is suppressed. Example: vetfo.us matches "venmo" (0.85 similarity)
+  but page title "VetFo - Your Pet's Health" clearly indicates a pet health brand.
+- ROOT DOMAIN FALLBACK: When a submitted subdomain doesn't resolve, the analyzer
+  now tries the registrable root domain before returning "does not resolve."
+  app.py prefix stripping expanded with mailing., newsletter., notify., etc.
 - CT APEX DOMAIN FIX: Certificate transparency lookup now queries both %.domain
   (subdomain wildcard) AND exact domain on crt.sh, then deduplicates by entry ID.
   Previously apex-only certs (e.g., E8 cert for gthrr.com) were invisible because
@@ -930,6 +941,41 @@ RETAIL_SCAM_TLDS = [
     '.buy', '.shopping', '.market', '.boutique', '.fashion', '.shoes',
     '.jewelry', '.watch', '.gifts', '.flowers', '.furniture', '.toys',
 ]
+
+# European ccTLDs where WHOIS/RDAP data is restricted by GDPR or registry policy.
+# registration_opaque should NOT be penalized on these TLDs — the registries
+# suppress creation dates and registrant info by default, not because the
+# domain owner is hiding anything.
+GDPR_RESTRICTED_TLDS = {
+    '.de',    # DENIC — no WHOIS creation date, minimal RDAP
+    '.eu',    # EURid — GDPR redacted
+    '.fr',    # AFNIC — GDPR redacted
+    '.nl',    # SIDN — GDPR redacted
+    '.be',    # DNS Belgium — GDPR redacted
+    '.at',    # nic.at — GDPR redacted
+    '.ch',    # SWITCH — Swiss privacy law
+    '.it',    # NIC.it — GDPR redacted
+    '.es',    # Red.es — GDPR redacted
+    '.pt',    # .PT — GDPR redacted
+    '.se',    # IIS — GDPR redacted
+    '.no',    # Norid — GDPR redacted
+    '.dk',    # Punktum dk — GDPR redacted
+    '.fi',    # FICORA — GDPR redacted
+    '.pl',    # NASK — GDPR redacted
+    '.cz',    # CZ.NIC — GDPR redacted
+    '.ie',    # IEDR — GDPR redacted
+    '.lu',    # RESTENA — GDPR redacted
+    '.sk',    # SK-NIC — GDPR redacted
+    '.hr',    # CARNet — GDPR redacted
+    '.ro',    # ROTLD — GDPR redacted
+    '.bg',    # REGISTER.BG — GDPR redacted
+    '.hu',    # ISZT — GDPR redacted
+    '.si',    # ARNES — GDPR redacted
+    '.lt',    # DOMREG — GDPR redacted
+    '.lv',    # NIC.LV — GDPR redacted
+    '.ee',    # EIS — GDPR redacted
+    '.li',    # SWITCH — Swiss/Liechtenstein privacy
+}
 
 # E-commerce indicators in page content
 ECOMMERCE_INDICATORS = [
@@ -7364,8 +7410,13 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     
     # Both RDAP and WHOIS failed — cannot determine domain age/registrar
     # Legitimate domains almost always have accessible registration data.
+    # EXCEPTION: European ccTLDs (.de, .eu, .fr, .nl, etc.) suppress registration
+    # data by default under GDPR — this is registry policy, not owner obfuscation.
     if check_rdap and res.domain_age_days < 0 and not res.domain_age_source:
-        res.registration_opaque = True
+        _domain_tld = '.' + domain.lower().rsplit('.', 1)[-1] if '.' in domain else ''
+        if _domain_tld not in GDPR_RESTRICTED_TLDS:
+            res.registration_opaque = True
+        # else: GDPR ccTLD — expected behavior, don't flag
     
     # === WHOIS ENRICHMENT (transfer lock, registrar, update recency) ===
     if check_rdap:
@@ -7467,6 +7518,28 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     if quishing["profile"]:
         res.quishing_profile = True
         res.quishing_evidence = ";".join(quishing["evidence"])
+    
+    # === TYPOSQUAT CONTEXT CHECK (v7.5.1) ===
+    # Suppress typosquat when page title/content clearly indicates the domain is
+    # a real brand UNRELATED to the matched typosquat target.
+    # e.g., vetfo.us matches "venmo" (0.85 similarity) but page title says
+    # "VetFo - Your Pet's Health, Simplified" — clearly not a Venmo phishing site.
+    #
+    # Logic: If the domain's main name appears in the page title AND the matched
+    # brand does NOT appear in the page title, suppress the typosquat.
+    if res.typosquat_target and res.page_title:
+        _domain_main = domain.lower().split('.')[0] if '.' in domain else domain.lower()
+        _title_lower = res.page_title.lower()
+        _brand_lower = res.typosquat_target.lower()
+        
+        # Domain's own brand name appears in the title (it's THEIR brand)
+        _own_brand_in_title = _domain_main in _title_lower
+        # Matched typosquat brand does NOT appear in title
+        _target_brand_absent = _brand_lower not in _title_lower
+        
+        if _own_brand_in_title and _target_brand_absent:
+            res.typosquat_target = ""
+            res.typosquat_similarity = 0.0
     
     # Score
     calculate_score(res, config)
