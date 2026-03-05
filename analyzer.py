@@ -160,7 +160,7 @@ VERSION: 4.4 (Feb 2026)
 - Added access restriction detection (401/403)
 """
 
-ANALYZER_VERSION = "7.5"
+ANALYZER_VERSION = "7.5.1"
 
 import re
 import json
@@ -4639,6 +4639,9 @@ def check_cert_transparency(domain: str, timeout: float = 8.0) -> dict:
             if not_before:
                 try:
                     dt = datetime.fromisoformat(not_before.replace("Z", "+00:00"))
+                    # Ensure timezone-aware (crt.sh may omit timezone)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
                     dates.append(dt)
                 except (ValueError, TypeError):
                     pass
@@ -4666,6 +4669,8 @@ def check_cert_transparency(domain: str, timeout: float = 8.0) -> dict:
                 if not_before:
                     try:
                         dt = datetime.fromisoformat(not_before.replace("Z", "+00:00"))
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
                         if dt == most_recent_dt:
                             issuer_dn = entry.get("issuer_name", "")
                             for part in issuer_dn.split(","):
