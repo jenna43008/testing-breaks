@@ -268,7 +268,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_brand_keyword_free_host", "score": 15, "label": "brand spoofing keyword + hosting free", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "hosting_free"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_new_30d", "score": 0, "label": "brand spoofing keyword + domain <30d", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_new_7d", "score": 25, "label": "brand spoofing keyword + domain <7d", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "domain_lt_7d"], "if_any": [], "if_not": []},
-        {"name": "combo_brand_keyword_no_dkim", "score": 10, "label": "brand spoofing keyword + no dkim", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_brand_keyword_no_dkim", "score": 0, "label": "brand spoofing keyword + no dkim", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_dkim"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_no_dmarc", "score": 8, "label": "brand spoofing keyword + no dmarc", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_dmarc"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_no_https", "score": 15, "label": "brand spoofing keyword + no https", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "no_https"], "if_any": [], "if_not": []},
         {"name": "combo_brand_keyword_no_trust", "score": 12, "label": "brand spoofing keyword + missing trust signals", "category": "Brand Impersonation", "enabled": True, "if_all": ["brand_spoofing_keyword", "missing_trust_signals"], "if_any": [], "if_not": []},
@@ -283,14 +283,14 @@ DEFAULT_CONFIG = {
 
         # --- Email Auth Weakness (14 rules) ---
         {"name": "combo_disposable_no_spf", "score": 8, "label": "disposable email + no spf", "category": "Email Auth Weakness", "enabled": True, "if_all": ["disposable_email", "no_spf"], "if_any": [], "if_not": []},
-        {"name": "combo_no_dkim_new_30d", "score": 8, "label": "no dkim + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_new_30d", "score": 0, "label": "no dkim + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_no_dkim_no_dmarc", "score": 0, "label": "no dkim + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "no_dmarc"], "if_any": [], "if_not": []},
         {"name": "combo_no_dkim_weak_dmarc", "score": 0, "label": "no dkim + dmarc p none", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
-        {"name": "combo_no_dkim_weak_dmarc_spf_soft", "score": 5, "label": "no dkim + dmarc p none + spf softfail all", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none", "spf_softfail_all"], "if_any": [], "if_not": ["domain_gt_1yr"]},
-        {"name": "combo_no_dmarc_new_30d", "score": 6, "label": "no dmarc + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_30d"], "if_any": [], "if_not": []},
-        {"name": "combo_no_dmarc_new_7d", "score": 10, "label": "no dmarc + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_7d"], "if_any": [], "if_not": []},
-        {"name": "combo_no_spf_new_30d", "score": 6, "label": "no spf + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_30d"], "if_any": [], "if_not": []},
-        {"name": "combo_no_spf_new_7d", "score": 10, "label": "no spf + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dkim_weak_dmarc_spf_soft", "score": 0, "label": "no dkim + dmarc p none + spf softfail all", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dkim", "dmarc_p_none", "spf_softfail_all"], "if_any": [], "if_not": ["domain_gt_1yr"]},
+        {"name": "combo_no_dmarc_new_30d", "score": 0, "label": "no dmarc + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_dmarc_new_7d", "score": 0, "label": "no dmarc + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_dmarc", "domain_lt_7d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_spf_new_30d", "score": 0, "label": "no spf + domain <30d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_30d"], "if_any": [], "if_not": []},
+        {"name": "combo_no_spf_new_7d", "score": 0, "label": "no spf + domain <7d", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "domain_lt_7d"], "if_any": [], "if_not": []},
         {"name": "combo_no_spf_no_dkim", "score": 0, "label": "no spf + no dkim", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "no_dkim"], "if_any": [], "if_not": []},
         {"name": "combo_no_spf_no_dmarc", "score": 0, "label": "no spf + no dmarc", "category": "Email Auth Weakness", "enabled": True, "if_all": ["no_spf", "no_dmarc"], "if_any": [], "if_not": []},
         {"name": "combo_spf_no_ext_mail_prefix_mx", "score": 0, "label": "spf no external includes + mx mail prefix", "category": "Email Auth Weakness", "enabled": True, "if_all": ["spf_no_external_includes", "mx_mail_prefix"], "if_any": [], "if_not": []},
@@ -305,7 +305,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_typosquat_redir_chain", "score": 25, "label": "typosquat detected + redirect chain 2plus", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["typosquat_detected", "redirect_chain_2plus"], "if_any": [], "if_not": []},
         # v6.2: Inconclusive blacklist combos — amplify penalty when combined with other red flags
         {"name": "combo_bl_inconclusive_new_30d", "score": 10, "label": "blacklist inconclusive + domain <30d", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["blacklist_inconclusive", "domain_lt_30d"], "if_any": [], "if_not": []},
-        {"name": "combo_bl_inconclusive_no_dkim", "score": 8, "label": "blacklist inconclusive + no dkim", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["blacklist_inconclusive", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_bl_inconclusive_no_dkim", "score": 0, "label": "blacklist inconclusive + no dkim", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["blacklist_inconclusive", "no_dkim"], "if_any": [], "if_not": []},
         {"name": "combo_bl_inconclusive_weak_auth", "score": 12, "label": "blacklist inconclusive + no dkim + dmarc p=none", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["blacklist_inconclusive", "no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
         {"name": "combo_bl_inconclusive_self_mx", "score": 8, "label": "blacklist inconclusive + self-hosted MX", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["blacklist_inconclusive", "mx_selfhosted"], "if_any": [], "if_not": []},
         {"name": "combo_bl_inconclusive_shell", "score": 10, "label": "blacklist inconclusive + minimal shell site", "category": "Fraud / Blacklist", "enabled": True, "if_all": ["blacklist_inconclusive", "minimal_shell"], "if_any": [], "if_not": []},
@@ -380,15 +380,15 @@ DEFAULT_CONFIG = {
         {"name": "combo_budget_host_cred_form", "score": 15, "label": "hosting budget shared + credential form", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_budget_host_new_30d", "score": 12, "label": "hosting budget shared + domain <30d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_budget_host_new_7d", "score": 18, "label": "hosting budget shared + domain <7d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "domain_lt_7d"], "if_any": [], "if_not": []},
-        {"name": "combo_budget_host_no_dkim", "score": 5, "label": "hosting budget shared + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_dkim"], "if_any": [], "if_not": ["domain_gt_1yr"]},
+        {"name": "combo_budget_host_no_dkim", "score": 0, "label": "hosting budget shared + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_dkim"], "if_any": [], "if_not": ["domain_gt_1yr"]},
         {"name": "combo_budget_host_no_dmarc", "score": 6, "label": "hosting budget shared + no dmarc", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_dmarc"], "if_any": [], "if_not": []},
         {"name": "combo_budget_host_no_spf", "score": 6, "label": "hosting budget shared + no spf", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_budget_shared", "no_spf"], "if_any": [], "if_not": []},
         {"name": "combo_free_host_cred_form", "score": 18, "label": "hosting free + credential form", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_free", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_free_host_new_30d", "score": 15, "label": "hosting free + domain <30d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_free", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_platform_host_mail_prefix_mx", "score": 8, "label": "hosting platform + mx mail prefix", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_platform", "mx_mail_prefix"], "if_any": [], "if_not": []},
-        {"name": "combo_platform_host_no_dkim", "score": 5, "label": "hosting platform + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_platform", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_platform_host_no_dkim", "score": 0, "label": "hosting platform + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_platform", "no_dkim"], "if_any": [], "if_not": []},
         {"name": "combo_platform_host_self_mx", "score": 6, "label": "hosting platform + mx selfhosted", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_platform", "mx_selfhosted"], "if_any": [], "if_not": []},
-        {"name": "combo_platform_host_self_mx_no_dkim", "score": 10, "label": "hosting platform + mx selfhosted + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_platform", "mx_selfhosted", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_platform_host_self_mx_no_dkim", "score": 0, "label": "hosting platform + mx selfhosted + no dkim", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_platform", "mx_selfhosted", "no_dkim"], "if_any": [], "if_not": []},
         {"name": "combo_suspect_host_cred_form", "score": 25, "label": "hosting suspect + credential form", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "credential_form"], "if_any": [], "if_not": []},
         {"name": "combo_suspect_host_new_30d", "score": 22, "label": "hosting suspect + domain <30d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "domain_lt_30d"], "if_any": [], "if_not": []},
         {"name": "combo_suspect_host_new_7d", "score": 28, "label": "hosting suspect + domain <7d", "category": "Hosting Risk", "enabled": True, "if_all": ["hosting_suspect", "domain_lt_7d"], "if_any": [], "if_not": []},
@@ -399,14 +399,14 @@ DEFAULT_CONFIG = {
         # These target the "cheap disposable sender" fingerprint: domains that stack
         # every low-cost/low-effort infra choice simultaneously. Enterprise MX excluded
         # because Google Workspace / M365 indicates legitimate investment.
-        {"name": "combo_sus_tld_budget_host_no_dkim", "score": 8, "label": "suspicious tld + budget shared host + no dkim", "category": "Infrastructure Risk", "enabled": True, "if_all": ["suspicious_tld", "hosting_budget_shared", "no_dkim"], "if_any": [], "if_not": []},
-        {"name": "combo_sus_tld_no_dkim_weak_dmarc", "score": 5, "label": "suspicious tld + no dkim + dmarc p none", "category": "Infrastructure Risk", "enabled": True, "if_all": ["suspicious_tld", "no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
-        {"name": "combo_sus_tld_no_dkim", "score": 8, "label": "suspicious tld + no dkim — high-abuse TLD without signing", "category": "Infrastructure Risk", "enabled": True, "if_all": ["suspicious_tld", "no_dkim"], "if_any": [], "if_not": []},
-        {"name": "combo_sus_tld_no_dmarc", "score": 6, "label": "suspicious tld + no dmarc — high-abuse TLD without policy", "category": "Infrastructure Risk", "enabled": True, "if_all": ["suspicious_tld", "no_dmarc"], "if_any": [], "if_not": []},
-        {"name": "combo_vt_suspicious_no_dkim", "score": 8, "label": "VT suspicious + no dkim — vendor suspicion without email auth", "category": "Infrastructure Risk", "enabled": True, "if_all": ["no_dkim"], "if_any": ["vt_suspicious", "vt_suspicious_low"], "if_not": []},
-        {"name": "combo_vt_suspicious_weak_dmarc", "score": 6, "label": "VT suspicious + dmarc p=none — vendor suspicion with unenforced policy", "category": "Infrastructure Risk", "enabled": True, "if_all": ["dmarc_p_none"], "if_any": ["vt_suspicious", "vt_suspicious_low"], "if_not": []},
-        {"name": "combo_domain_90d_no_dkim", "score": 5, "label": "domain <90d + no dkim — young domain without signing", "category": "Infrastructure Risk", "enabled": True, "if_all": ["domain_lt_90d", "no_dkim"], "if_any": [], "if_not": []},
-        {"name": "combo_domain_90d_no_dmarc", "score": 4, "label": "domain <90d + no dmarc — young domain without policy", "category": "Infrastructure Risk", "enabled": True, "if_all": ["domain_lt_90d", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_tld_budget_host_no_dkim", "score": 0, "label": "suspicious tld + budget shared host + no dkim", "category": "Infrastructure Risk", "enabled": True, "if_all": ["suspicious_tld", "hosting_budget_shared", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_tld_no_dkim_weak_dmarc", "score": 0, "label": "suspicious tld + no dkim + dmarc p none", "category": "Infrastructure Risk", "enabled": True, "if_all": ["suspicious_tld", "no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_tld_no_dkim", "score": 0, "label": "suspicious tld + no dkim — high-abuse TLD without signing", "category": "Infrastructure Risk", "enabled": True, "if_all": ["suspicious_tld", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_sus_tld_no_dmarc", "score": 0, "label": "suspicious tld + no dmarc — high-abuse TLD without policy", "category": "Infrastructure Risk", "enabled": True, "if_all": ["suspicious_tld", "no_dmarc"], "if_any": [], "if_not": []},
+        {"name": "combo_vt_suspicious_no_dkim", "score": 0, "label": "VT suspicious + no dkim — vendor suspicion without email auth", "category": "Infrastructure Risk", "enabled": True, "if_all": ["no_dkim"], "if_any": ["vt_suspicious", "vt_suspicious_low"], "if_not": []},
+        {"name": "combo_vt_suspicious_weak_dmarc", "score": 0, "label": "VT suspicious + dmarc p=none — vendor suspicion with unenforced policy", "category": "Infrastructure Risk", "enabled": True, "if_all": ["dmarc_p_none"], "if_any": ["vt_suspicious", "vt_suspicious_low"], "if_not": []},
+        {"name": "combo_domain_90d_no_dkim", "score": 0, "label": "domain <90d + no dkim — young domain without signing", "category": "Infrastructure Risk", "enabled": True, "if_all": ["domain_lt_90d", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_domain_90d_no_dmarc", "score": 0, "label": "domain <90d + no dmarc — young domain without policy", "category": "Infrastructure Risk", "enabled": True, "if_all": ["domain_lt_90d", "no_dmarc"], "if_any": [], "if_not": []},
 
         # --- Nameserver Risk (8 rules) ---
         {"name": "combo_ns_dynamic_new_30d", "score": 20, "label": "dynamic DNS NS + domain <30d", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_dynamic_dns", "domain_lt_30d"], "if_any": [], "if_not": []},
@@ -415,7 +415,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_ns_parking_new_90d", "score": 12, "label": "parking NS + domain <90d", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_parking", "domain_lt_90d"], "if_any": [], "if_not": []},
         {"name": "combo_ns_parking_no_trust", "score": 10, "label": "parking NS + missing trust signals", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_parking", "missing_trust_signals"], "if_any": [], "if_not": []},
         {"name": "combo_ns_lame_no_mx", "score": 15, "label": "lame delegation + no MX", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_lame_delegation", "no_mx"], "if_any": [], "if_not": []},
-        {"name": "combo_ns_free_no_dkim", "score": 6, "label": "free DNS NS + no DKIM", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_free_dns", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_ns_free_no_dkim", "score": 0, "label": "free DNS NS + no DKIM", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_free_dns", "no_dkim"], "if_any": [], "if_not": []},
         {"name": "combo_ns_single_new_30d", "score": 8, "label": "single NS + domain <30d", "category": "Nameserver Risk", "enabled": True, "if_all": ["ns_single_ns", "domain_lt_30d"], "if_any": [], "if_not": []},
 
         # --- Phishing Kit Detection (8 rules) ---
@@ -464,14 +464,14 @@ DEFAULT_CONFIG = {
 
         # --- MX Provider Risk (9 rules) ---
         {"name": "combo_disposable_mx_budget_host", "score": 8, "label": "mx disposable + hosting budget shared", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_disposable", "hosting_budget_shared"], "if_any": [], "if_not": []},
-        {"name": "combo_disposable_mx_no_dkim", "score": 8, "label": "mx disposable + no dkim", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_disposable", "no_dkim"], "if_any": [], "if_not": []},
-        {"name": "combo_disposable_mx_weak_dmarc", "score": 6, "label": "mx disposable + dmarc p none", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_disposable", "dmarc_p_none"], "if_any": [], "if_not": []},
-        {"name": "combo_mail_prefix_mx_no_dkim", "score": 5, "label": "mx mail prefix + no dkim", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_dkim"], "if_any": [], "if_not": []},
-        {"name": "combo_mail_prefix_mx_no_dkim_weak_dmarc", "score": 8, "label": "mx mail prefix + no dkim + dmarc p none", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
-        {"name": "combo_mail_prefix_mx_no_dkim_weak_dmarc_no_ptr", "score": 10, "label": "mx mail prefix + no dkim + dmarc p none + no ptr", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none", "no_ptr"], "if_any": [], "if_not": []},
+        {"name": "combo_disposable_mx_no_dkim", "score": 0, "label": "mx disposable + no dkim", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_disposable", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_disposable_mx_weak_dmarc", "score": 0, "label": "mx disposable + dmarc p none", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_disposable", "dmarc_p_none"], "if_any": [], "if_not": []},
+        {"name": "combo_mail_prefix_mx_no_dkim", "score": 0, "label": "mx mail prefix + no dkim", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_mail_prefix_mx_no_dkim_weak_dmarc", "score": 0, "label": "mx mail prefix + no dkim + dmarc p none", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none"], "if_any": [], "if_not": []},
+        {"name": "combo_mail_prefix_mx_no_dkim_weak_dmarc_no_ptr", "score": 0, "label": "mx mail prefix + no dkim + dmarc p none + no ptr", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_dkim", "dmarc_p_none", "no_ptr"], "if_any": [], "if_not": []},
         {"name": "combo_mail_prefix_mx_no_ptr", "score": 4, "label": "mx mail prefix + no ptr", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_ptr"], "if_any": [], "if_not": []},
         {"name": "combo_self_mx_budget_host", "score": 6, "label": "mx selfhosted + hosting budget shared", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_selfhosted", "hosting_budget_shared"], "if_any": [], "if_not": []},
-        {"name": "combo_self_mx_no_dkim", "score": 6, "label": "mx selfhosted + no dkim", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_selfhosted", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_self_mx_no_dkim", "score": 0, "label": "mx selfhosted + no dkim", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_selfhosted", "no_dkim"], "if_any": [], "if_not": []},
 
         # --- Opaque Entity (5 rules) ---
         {"name": "combo_no_trust_new_30d", "score": 12, "label": "missing trust signals + domain <30d", "category": "Opaque Entity", "enabled": True, "if_all": ["missing_trust_signals", "domain_lt_30d"], "if_any": [], "if_not": []},
@@ -544,7 +544,7 @@ DEFAULT_CONFIG = {
         # --- Content Facade Combos ---
         # SPA shell (content_facade) combined with weak email auth = classic scam domain setup.
         # These combo scores STACK on top of the individual signal scores.
-        {"name": "combo_facade_no_dkim", "score": 10, "label": "content facade + no DKIM", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "no_dkim"], "if_any": [], "if_not": ["domain_gt_1yr"]},
+        {"name": "combo_facade_no_dkim", "score": 0, "label": "content facade + no DKIM", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "no_dkim"], "if_any": [], "if_not": ["domain_gt_1yr"]},
         {"name": "combo_facade_external_js", "score": 5, "label": "content facade + external JS loader", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "external_js"], "if_any": [], "if_not": []},
         {"name": "combo_facade_missing_trust", "score": 8, "label": "content facade + no corporate footprint", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "missing_trust_signals"], "if_any": [], "if_not": []},
         {"name": "combo_facade_opaque_reg", "score": 10, "label": "content facade + registration opaque", "category": "Content Identity", "enabled": True, "if_all": ["content_facade", "registration_opaque"], "if_any": [], "if_not": []},
