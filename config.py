@@ -92,7 +92,7 @@ DEFAULT_CONFIG = {
         "suspicious_suffix": 15,           # account, setup, cancellation, etc.
         "tech_support_tld": 20,            # .support, .tech, .help, etc.
         "tech_support_tld_mitigated": 8,   # v7.6: Reduced when VT clean + real content (≥100 words)
-        "hyphenated_sld_with_risk": 8,     # v7.9: Hyphen in SLD when corroborated by youth/opaque/facade signals
+        "hyphenated_sld_with_risk": 25,     # v7.9: Hyphen in SLD when corroborated by youth/opaque/facade signals
         "domain_brand_impersonation": 0,  # Brand name IN domain (app-spectrum.com)
         "brand_spoofing_keyword": 20,      # Brand + phishing keyword (easyjetconnect, amazonverify)
         
