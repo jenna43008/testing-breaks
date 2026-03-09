@@ -161,45 +161,57 @@ def _detect_spa_framework(html: str) -> tuple:
     if re.search(r'self\.__next_f\s*=\s*\[|self\.__next_f\.push', html, re.I):
         return True, "Next.js (App Router)"
 
-    # Nuxt.js: window.__NUXT__ hydration payload
+    # Nuxt.js: window.__NUXT__ hydration payload or <div id="__nuxt"> mount point
     if re.search(r'window\.__NUXT__\s*=', html, re.I):
         return True, "Nuxt.js"
-
-    # Nuxt.js: <div id="__nuxt"> mount point
     if re.search(r'<div[^>]+id=["\']__nuxt["\']', html, re.I):
         return True, "Nuxt.js"
 
-    # Angular Universal (SSR): ng-version attribute on app root
+    # Angular Universal (SSR): ng-version attribute or TransferState blob
     if re.search(r'ng-version=["\'][\d.]+["\']', html, re.I):
         return True, "Angular"
-
-    # Angular: TransferState hydration blob
     if re.search(r'<script[^>]*id=["\']ng-state["\']', html, re.I):
         return True, "Angular"
 
-    # Gatsby: __gatsby initial hydration frame
-    if re.search(r'window\.___gatsby\s*=\|window\.___gatsby', html, re.I):
-        return True, "Gatsby"
-    if re.search(r'<script[^>]*id=["\']gatsby-chunk-mapping["\']', html, re.I):
+    # Gatsby
+    if re.search(r'window\.___gatsby|<script[^>]*id=["\']gatsby-chunk-mapping["\']', html, re.I):
         return True, "Gatsby"
 
-    # Remix: __remixContext hydration
+    # Remix
     if re.search(r'window\.__remixContext\s*=', html, re.I):
         return True, "Remix"
 
-    # Vite + React: typical vite dev/prod module pattern with @react-refresh or
-    # React-specific hydration comment injected by react-dom/server
+    # React 18 SSR streaming markers
     if re.search(r'<!--\$-->|<!--\$\?-->|<!--\$!-->', html):
-        # React 18 SSR streaming markers — very distinctive
         return True, "React (SSR)"
 
-    # SvelteKit: __sveltekit hydration
+    # SvelteKit
     if re.search(r'__sveltekit_[a-z0-9]+\s*=', html, re.I):
         return True, "SvelteKit"
 
-    # Astro: astro-island or data-astro-cid attributes
+    # Astro
     if re.search(r'<astro-island|data-astro-cid-', html, re.I):
         return True, "Astro"
+
+    # Vite production build (client-side React/Vue/Svelte):
+    # type="module" script loading from a local /assets/index-HASH.js path.
+    # The hashed filename under /assets/ is Vite's content-hashing output.
+    # Phishing shells load from external domains, not local /assets/.
+    _vite_srcs = re.findall(
+        r'<script[^>]+type=["\']module["\'][^>]+src=["\']([^"\']+)["\']',
+        html, re.I
+    )
+    if any(re.search(r'^/assets/[^/]+-[A-Za-z0-9_-]{6,}\.js$', s) for s in _vite_srcs):
+        return True, "Vite (React/Vue/Svelte)"
+
+    # Schema.org Organization/LocalBusiness structured data.
+    # Legitimate sites add JSON-LD for SEO; phishing shells essentially never do.
+    if re.search(r'<script[^>]+type=["\']application/ld\+json["\']', html, re.I):
+        if re.search(
+            r'"@type"\s*:\s*"(Organization|LocalBusiness|Corporation|WebSite|SoftwareApplication)"',
+            html, re.I
+        ):
+            return True, "Schema.org structured data (Organization)"
 
     return False, ""
 
