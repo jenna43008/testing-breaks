@@ -30,7 +30,7 @@ DEFAULT_CONFIG = {
         "malware_links": 100,
         "disposable_email": 40,
         "spf_pass_all": 0,           # +all allows anyone to spoof - security risk
-        "domain_lt_7d": 25,           # Brand new domain - high risk
+        "domain_lt_7d": 0,           # Brand new domain - high risk
         "credential_form": 8,         # Building block — real risk comes from combo rules (20+ rules amplify this)
         "sensitive_fields": 10,
         
@@ -92,6 +92,7 @@ DEFAULT_CONFIG = {
         "suspicious_suffix": 15,           # account, setup, cancellation, etc.
         "tech_support_tld": 20,            # .support, .tech, .help, etc.
         "tech_support_tld_mitigated": 8,   # v7.6: Reduced when VT clean + real content (≥100 words)
+        "hyphenated_sld_with_risk": 8,     # v7.9: Hyphen in SLD when corroborated by youth/opaque/facade signals
         "domain_brand_impersonation": 0,  # Brand name IN domain (app-spectrum.com)
         "brand_spoofing_keyword": 20,      # Brand + phishing keyword (easyjetconnect, amazonverify)
         
@@ -146,6 +147,12 @@ DEFAULT_CONFIG = {
         # === DOMAIN AGE (Moderate for very new, low otherwise) ===
         "domain_lt_30d": 0,          # 7-30 days old - moderate concern
         "domain_lt_90d": 0,           # 30-90 days old - minor concern
+        
+        # Day-0/1 standalone score — a domain registered today carries inherent risk
+        # for email sending approval regardless of surface signals.  Phishing infra
+        # is often stood up hours before use.  Does NOT stack with new_domain_with_risk
+        # (the amplifier adds on top when content risk is also present).
+        "domain_created_today_standalone": 15,
         
         # Domain age WITH content risk (only fires when age + risky content co-occur)
         "new_domain_with_risk": 40,              # Created today/yesterday + content risk signals
@@ -472,6 +479,7 @@ DEFAULT_CONFIG = {
         {"name": "combo_mail_prefix_mx_no_ptr", "score": 4, "label": "mx mail prefix + no ptr", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_mail_prefix", "no_ptr"], "if_any": [], "if_not": []},
         {"name": "combo_self_mx_budget_host", "score": 6, "label": "mx selfhosted + hosting budget shared", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_selfhosted", "hosting_budget_shared"], "if_any": [], "if_not": []},
         {"name": "combo_self_mx_no_dkim", "score": 0, "label": "mx selfhosted + no dkim", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_selfhosted", "no_dkim"], "if_any": [], "if_not": []},
+        {"name": "combo_self_mx_facade", "score": 15, "label": "self-hosted MX + content facade — phishing infra pattern (own mail server, opaque SPA shell)", "category": "MX Provider Risk", "enabled": True, "if_all": ["mx_selfhosted", "content_facade"], "if_any": [], "if_not": []},
 
         # --- Opaque Entity (5 rules) ---
         {"name": "combo_no_trust_new_30d", "score": 12, "label": "missing trust signals + domain <30d", "category": "Opaque Entity", "enabled": True, "if_all": ["missing_trust_signals", "domain_lt_30d"], "if_any": [], "if_not": []},
