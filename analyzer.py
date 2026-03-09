@@ -6049,7 +6049,10 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("ns_dynamic_dns", weights.get('ns_dynamic_dns', 25))
     if res.ns_is_parking:
         add("ns_parking", weights.get('ns_parking', 15))
-    if res.ns_is_lame_delegation:
+    # Subdomains never have their own NS records — they inherit from the parent zone.
+    # Flagging a subdomain as "lame delegation" because it has 0 NS records of its own
+    # is a structural FP (e.g. ntuacounseling.ntu.edu.tw, stg.example.com).
+    if res.ns_is_lame_delegation and not res.is_subdomain:
         add("ns_lame_delegation", weights.get('ns_lame_delegation', 20))
     if res.ns_is_free_dns:
         add("ns_free_dns", weights.get('ns_free_dns', 8))
@@ -6414,7 +6417,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # Legitimate domains almost always have accessible registration data.
     # Scored conditionally: standalone is mild, but combined with content
     # risk signals (facade, mismatch, broker) it becomes much more significant.
-    if res.registration_opaque:
+    #
+    # EXCEPTION: Academic and government ccTLDs (.edu.*, .ac.*, .gov.*, .mil.*)
+    # routinely restrict WHOIS/RDAP by policy — a subdomain of ntu.edu.tw or
+    # ox.ac.uk will always return opaque registration data.  Scoring that as
+    # a risk signal is a guaranteed FP for any institutional subdomain.
+    _is_academic_subdomain = False
+    if res.is_subdomain and res.parent_domain:
+        _ACADEMIC_TLD_PATTERNS = (".edu.", ".ac.", ".gov.", ".mil.", ".gouv.", ".gob.")
+        _parent_lower = res.parent_domain.lower()
+        _is_academic_subdomain = any(_pat in _parent_lower for _pat in _ACADEMIC_TLD_PATTERNS)
+    if res.registration_opaque and not _is_academic_subdomain:
         _content_risk_present = (
             res.content_is_facade or res.content_title_body_mismatch or
             res.content_cross_domain_emails or res.content_is_broker_page or
@@ -6889,6 +6902,21 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         # Any add() calls in this section (HCP, MX reversal) update the local
         # `score` variable but do NOT automatically propagate to res.risk_score.
         # We must re-sync explicitly here so the displayed score reflects HCP points.
+        
+        # SPA TRUST / HCP MUTUAL AWARENESS:
+        # The SPA trust calculation (lines ~6364-6410) may have fully suppressed the
+        # facade score because the domain had enterprise MX + DKIM + VT clean.
+        # But if HCP fires with `hidden_injection` as one of its signals, we have
+        # direct evidence of malicious content — a "clean SPA" argument is undermined.
+        # Retroactively add back half the facade weight to prevent full suppression
+        # from masking confirmed injection activity.  Half-weight preserves the SPA
+        # trust credit partially; it just prevents a total zero-out.
+        if ("hidden_injection" in _hcp_signals
+                and res.content_is_facade
+                and "content_facade" not in signals):
+            _facade_half = weights.get('content_facade', 25) // 2
+            add("content_facade", _facade_half)
+        
         res.risk_score = max(0, min(score, 100))
         _hcp_bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
         res.risk_level = next((l for lo, hi, l in _hcp_bands if lo <= res.risk_score <= hi), "UNKNOWN")
@@ -6994,7 +7022,26 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # never send email — they inherit auth from the parent domain or have none by
     # design.  Denying stg.example.com because it lacks SPF/DKIM/DMARC is a
     # guaranteed FP.  The floor is bypassed for confirmed staging prefixes.
-    if not res.spf_exists and not res.dkim_exists and not res.dmarc_exists and not res.is_staging_subdomain:
+    #
+    # EXCEPTION: If NO other content or infrastructure risk signals fired at all,
+    # the floor is also suppressed.  A clean domain that simply hasn't configured
+    # email auth yet (e.g. a new consulting landing page) should not auto-DENY
+    # on auth absence alone — the zero_email_auth rule already added 10pts to the
+    # score.  The floor is reserved for domains where auth absence sits alongside
+    # real risk signals, compounding the danger.
+    _zero_auth_content_risk = bool(signals & {
+        "content_facade", "content_title_mismatch", "content_cross_domain_email",
+        "content_broker_page", "content_placeholder", "hacklink_keywords",
+        "hidden_injection", "malicious_script", "js_redirect", "minimal_shell",
+        "empty_page", "hosting_suspect", "hosting_free", "hosting_budget_shared",
+        "typosquat_detected", "domain_brand_impersonation", "opaque_entity",
+        "vt_malicious", "vt_suspicious", "blocked_asn", "redirect_cross_domain",
+        "cpanel_detected", "registration_opaque", "domain_reregistered_recent",
+        "suspicious_tld", "disposable_email",
+    })
+    if (not res.spf_exists and not res.dkim_exists and not res.dmarc_exists
+            and not res.is_staging_subdomain
+            and _zero_auth_content_risk):
         _zero_auth_floor = threshold + 5  # Minimum score = threshold + 5
         if res.risk_score < _zero_auth_floor:
             res.risk_score = _zero_auth_floor
@@ -7007,6 +7054,35 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             res.signals_triggered = ";".join(sorted(signals))
             res.score_breakdown = json.dumps(breakdown)
     
+    # === NEW DOMAIN + WHOIS PRIVACY FLOOR (v7.9) ===
+    # A domain under 30 days old with WHOIS privacy enabled should never score 0.
+    # Strong email auth is a legitimate trust signal, but it shouldn't completely
+    # erase all concern about an unknown operator on a brand-new private domain.
+    # This floor is intentionally modest (10pts) — it signals "we noticed this is
+    # new and private" without overriding a genuinely strong trust stack.
+    # The floor does NOT force a DENY (threshold is 50); it just prevents a 0.
+    #
+    # Exemptions:
+    # - Domain age unknown (domain_age_days < 0) — can't confirm youth
+    # - App store verified (high/medium) — operator identity confirmed via store
+    # - VT clean with 50+ vendors — strong external vetting
+    _new_private_floor = 10
+    if (res.domain_age_days >= 0
+            and res.domain_age_days < 30
+            and res.whois_privacy
+            and res.risk_score < _new_private_floor
+            and not res.app_store_match_high
+            and not res.app_store_match_medium):
+        res.risk_score = _new_private_floor
+        # Don't change recommendation — 10pts is well below DENY threshold.
+        # Re-derive risk_level in case it changed.
+        bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
+        res.risk_level = next((l for lo, hi, l in bands if lo <= res.risk_score <= hi), "UNKNOWN")
+        breakdown["new_domain_whois_privacy_floor"] = 0  # Policy marker
+        signals.add("new_domain_whois_privacy_floor")
+        res.signals_triggered = ";".join(sorted(signals))
+        res.score_breakdown = json.dumps(breakdown)
+
     res.summary = generate_summary(res, signals, res.domain_age_days >= 0, weights=weights)
 
 
