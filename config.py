@@ -152,7 +152,7 @@ DEFAULT_CONFIG = {
         # for email sending approval regardless of surface signals.  Phishing infra
         # is often stood up hours before use.  Does NOT stack with new_domain_with_risk
         # (the amplifier adds on top when content risk is also present).
-        "domain_created_today_standalone": 15,
+        "domain_created_today_standalone": 25,
         
         # Domain age WITH content risk (only fires when age + risky content co-occur)
         "new_domain_with_risk": 40,              # Created today/yesterday + content risk signals
