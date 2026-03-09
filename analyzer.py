@@ -174,6 +174,7 @@ class DomainApprovalResult:
     has_suspicious_suffix: bool = False
     suspicious_suffix_found: str = ""
     is_tech_support_tld: bool = False
+    is_hyphenated_sld: bool = False            # SLD contains a hyphen (pay-pal.com, hive-flow.com) — overrepresented in phishing
     domain_impersonates_brand: str = ""  # Brand found in domain name
     domain_pattern_risk: str = ""  # Summary of suspicious patterns
     brand_spoofing_keyword: str = ""     # Spoofing keyword found with brand (e.g., "connect" in easyjetconnect)
@@ -5973,10 +5974,15 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # Domain age — tracked as zero-point signals for rule engine only.
     # Age alone is not a risk — it only matters when combined with actual
     # content/infrastructure risk indicators (NOT email auth, which is weak).
+    #
+    # EXCEPTION: Day-0/1 domains get a small standalone score regardless of
+    # content risk.  A domain registered today has zero track record.  For email
+    # sending approval, that is itself a meaningful signal even if the surface
+    # looks clean — phishing infrastructure is often stood up hours before use.
     if res.domain_age_days >= 0:
         if res.domain_age_days <= 1:
             res.domain_created_today = True
-            add("domain_created_today", 0)
+            add("domain_created_today", weights.get('domain_created_today_standalone', 15))
         elif res.domain_age_days < 7:
             add("domain_lt_7d", 0)
         elif res.domain_age_days < 30:
@@ -6068,6 +6074,24 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         add("tech_support_tld", weights.get('tech_support_tld', 18))
     if res.domain_impersonates_brand:
         add("domain_brand_impersonation", weights.get('domain_brand_impersonation', 25))
+    
+    # v7.9: Hyphenated SLD — conditional scoring.
+    # A hyphen in the registrable SLD is a low-confidence signal on its own
+    # (many legitimate domains like co-op.com, e-bay.com use hyphens), but it
+    # combines well with newness, youth, or opaque content.  Score only when at
+    # least one other risk signal is present to avoid penalising established
+    # legitimate hyphenated brands.
+    if res.is_hyphenated_sld:
+        add("hyphenated_sld", 0)  # Zero-point marker so combo rules can fire
+        _hyphen_corroborated = bool(signals & {
+            "domain_created_today", "domain_lt_7d", "domain_lt_30d",
+            "content_facade", "content_placeholder", "minimal_shell",
+            "registration_opaque", "hosting_suspect", "hosting_free",
+            "typosquat_detected", "domain_brand_impersonation",
+            "suspicious_prefix", "suspicious_suffix",
+        })
+        if _hyphen_corroborated:
+            add("hyphenated_sld", weights.get('hyphenated_sld_with_risk', 8))
     
     # Brand + spoofing keyword: easyjetconnect, amazonverify, chaselogin, etc.
     # This is a much stronger signal than brand name alone — it specifically
@@ -6399,6 +6423,14 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             _spa_trust += 1  # VT clean across 50+ vendors
         if res.domain_age_days >= 180:
             _spa_trust += 1  # Established domain (6+ months)
+        
+        # v7.9: ANTI-TRUST PENALTY — self-hosted MX on a facade site is an active
+        # negative signal, not just the absence of enterprise MX.  A real SPA from
+        # a legitimate company uses Google/Microsoft/Proofpoint for mail.  Running
+        # your own mail server while hiding site content behind JS is a phishing
+        # infrastructure pattern: you control delivery, the site stays opaque.
+        if res.mx_provider_type == "selfhosted":
+            _spa_trust -= 2
         
         # 4+ trust signals = almost certainly a real SPA → reduce facade to informational
         # 3 trust signals = probably a real SPA → halve the facade weight
@@ -7182,6 +7214,18 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.brand_spoofing_keyword = domain_patterns["brand_spoofing_keyword"]
     res.brand_plus_keyword_domain = domain_patterns["brand_plus_keyword"]
     res.domain_pattern_risk = ";".join(domain_patterns["patterns_found"])
+    
+    # v7.9: Hyphenated SLD detection
+    # Extract the second-level domain (e.g., "hive-flow" from "hive-flow.com") and
+    # check for a hyphen.  Hyphens in the SLD are heavily overrepresented in phishing
+    # and brand-split domains (pay-pal.com, apple-id-verify.com, hive-flow.com).
+    # Subdomains are excluded — "mail.my-company.com" is normal; the check is on the
+    # registrable SLD only.
+    _registrable = get_registrable_domain(domain)
+    if _registrable:
+        _sld = _registrable.split('.')[0]  # leftmost label of the registrable domain
+        if '-' in _sld:
+            res.is_hyphenated_sld = True
     
     # Spoofing allowlist: suppress typosquat, brand impersonation, prefix/suffix
     # signals for domains explicitly cleared by admin review
