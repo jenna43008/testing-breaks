@@ -1388,10 +1388,20 @@ def load_config() -> dict:
                     # v7.8 migration: hacklink campaign profile detection.
                     # New composite signal (hacklink_campaign_profile) detects the
                     # infrastructure fingerprint of hacklink-compromised domains even
-                    # when injected content is cloaked or cleaned up.  Two new weights
-                    # and 3 new combo rules are added automatically via DEFAULT_CONFIG
-                    # merge; this migration just bumps the version marker.
+                    # when injected content is cloaked or cleaned up.
+                    #
+                    # BUG FIX: The DEFAULT_CONFIG merge ({**defaults, **loaded}) only
+                    # adds MISSING keys — if a saved config was written during an early
+                    # v7.8 deploy when these weights happened to be 0, the merge would
+                    # preserve that 0 rather than using the correct default of 25/40.
+                    # Explicitly force the correct values here if they're still at 0.
                     if saved_version < '7.8':
+                        for _hcp_key, _hcp_default in [
+                            ('hacklink_campaign_profile', 25),
+                            ('hacklink_campaign_profile_strong', 40),
+                        ]:
+                            if merged['weights'].get(_hcp_key, 0) == 0:
+                                merged['weights'][_hcp_key] = _hcp_default
                         merged['config_version'] = '7.8'
                 # Legacy: if old config has combos, ignore them (now in rules)
                 loaded.pop('combos', None)
