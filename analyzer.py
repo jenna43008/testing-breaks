@@ -443,6 +443,7 @@ class DomainApprovalResult:
     
     # === SUBDOMAIN DELEGATION ABUSE (v7.3.1) ===
     is_subdomain: bool = False                   # Submitted domain is a subdomain (not registrable root)
+    is_staging_subdomain: bool = False           # Subdomain prefix indicates SDLC env (stg, staging, dev, test, uat, qa, sandbox)
     parent_domain: str = ""                      # The registrable parent domain
     parent_ip: str = ""                          # Parent domain's resolved IP
     parent_asn: str = ""                         # Parent domain's ASN
@@ -5171,7 +5172,10 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
                 f"SUBDOMAIN INFRA DIVERGENCE ({res.parent_domain} → {res.domain}, LOW) → {evidence_str}"
             )
     elif res.is_subdomain and res.parent_domain:
-        positives.append(f"Subdomain of {res.parent_domain} — infrastructure matches parent")
+        if res.is_staging_subdomain:
+            positives.append(f"Subdomain of {res.parent_domain} — SDLC/staging environment (email auth not expected)")
+        else:
+            positives.append(f"Subdomain of {res.parent_domain} — infrastructure matches parent")
     
     # v7.3.1: OAuth consent phishing
     if res.has_oauth_phish:
@@ -6570,7 +6574,16 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         elif res.subdomain_divergence_confidence == "MEDIUM":
             add("subdomain_delegation_medium", weights.get('subdomain_delegation_medium', 12))
         else:
-            add("subdomain_delegation_low", weights.get('subdomain_delegation_low', 0))  # informational
+            # LOW divergence: only score if NOT a known SDLC subdomain prefix.
+            # Staging/dev/uat/qa subdomains on different infra than parent are
+            # completely normal — expected, in fact.  Scoring LOW divergence on
+            # stg.example.com is a guaranteed FP.
+            if not res.is_staging_subdomain:
+                add("subdomain_delegation_low", weights.get('subdomain_delegation_low', 0))  # informational
+    
+    # Track staging subdomain as a zero-point signal so rules can gate on it
+    if res.is_staging_subdomain:
+        add("is_staging_subdomain", 0)
     
     # v7.3.1: OAuth consent phishing
     if res.has_oauth_phish:
@@ -6976,7 +6989,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     # by Gmail and Yahoo regardless of what we do.  There is no business value in
     # approving a domain that can't deliver email.  Set a minimum score that
     # ensures denial, with a clear reason for the operator.
-    if not res.spf_exists and not res.dkim_exists and not res.dmarc_exists:
+    #
+    # EXCEPTION: Staging / SDLC subdomains (stg., dev., uat., qa., sandbox., etc.)
+    # never send email — they inherit auth from the parent domain or have none by
+    # design.  Denying stg.example.com because it lacks SPF/DKIM/DMARC is a
+    # guaranteed FP.  The floor is bypassed for confirmed staging prefixes.
+    if not res.spf_exists and not res.dkim_exists and not res.dmarc_exists and not res.is_staging_subdomain:
         _zero_auth_floor = threshold + 5  # Minimum score = threshold + 5
         if res.risk_score < _zero_auth_floor:
             res.risk_score = _zero_auth_floor
@@ -7228,6 +7246,31 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.subdomain_infra_divergent = True
         res.subdomain_divergence_evidence = ";".join(sub_result["evidence"])
         res.subdomain_divergence_confidence = sub_result["confidence"]
+    
+    # === STAGING / SDLC SUBDOMAIN DETECTION ===
+    # Prefixes that unambiguously indicate a non-production environment:
+    # stg/staging, dev/development, test/testing, uat, qa, sandbox, preview, demo, preprod.
+    # These subdomains are expected to diverge from parent IP/ASN (different hosting),
+    # have no email authentication (staging envs don't send email), and may have
+    # placeholder content.  Scoring those signals as risk on a staging domain creates
+    # FPs for every legitimate SaaS/enterprise that uses environment-specific subdomains.
+    _STAGING_PREFIXES = {
+        "stg", "staging", "stage",
+        "dev", "develop", "development",
+        "test", "testing",
+        "uat", "qa",
+        "sandbox",
+        "preview",
+        "demo",
+        "preprod", "pre-prod", "pre-production",
+        "local",
+    }
+    if res.is_subdomain and res.parent_domain:
+        _subdomain_label = domain.lower().rstrip('.')
+        # Remove parent suffix to get the leftmost label(s): stg.emersonhealth.com.br → stg
+        _sub_prefix = _subdomain_label[:_subdomain_label.rfind('.' + res.parent_domain)].split('.')[0]
+        if _sub_prefix in _STAGING_PREFIXES:
+            res.is_staging_subdomain = True
     
     # Nameserver Risk Detection
     ns_risk_config = config.get("ns_risk_patterns", {})
