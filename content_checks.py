@@ -138,6 +138,71 @@ def _extract_title(html: str) -> str:
     match = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.DOTALL)
     return match.group(1).strip() if match else ""
 
+
+def _detect_spa_framework(html: str) -> tuple:
+    """Detect known SPA framework fingerprints in raw (pre-JS) HTML.
+
+    Legitimate React/Next.js/Vue/Angular/Nuxt apps leave characteristic markers
+    in their server-sent HTML that phishing shells almost never replicate:
+    mount points, hydration data blobs, framework version attributes, etc.
+
+    Returns (detected: bool, framework_name: str).
+
+    IMPORTANT: Only include patterns that are (a) specific to the framework and
+    (b) extremely unlikely to appear in a phishing shell.  Generic patterns like
+    a bare <div id="root"> are NOT included because they can be trivially copied.
+    We require at least one *structural* or *data* fingerprint.
+    """
+    # Next.js: server-side __NEXT_DATA__ JSON blob injected into every page
+    if re.search(r'<script[^>]*id=["\']__NEXT_DATA__["\']', html, re.I):
+        return True, "Next.js"
+
+    # Next.js: __next_f or self.__next_f push pattern (app router streaming)
+    if re.search(r'self\.__next_f\s*=\s*\[|self\.__next_f\.push', html, re.I):
+        return True, "Next.js (App Router)"
+
+    # Nuxt.js: window.__NUXT__ hydration payload
+    if re.search(r'window\.__NUXT__\s*=', html, re.I):
+        return True, "Nuxt.js"
+
+    # Nuxt.js: <div id="__nuxt"> mount point
+    if re.search(r'<div[^>]+id=["\']__nuxt["\']', html, re.I):
+        return True, "Nuxt.js"
+
+    # Angular Universal (SSR): ng-version attribute on app root
+    if re.search(r'ng-version=["\'][\d.]+["\']', html, re.I):
+        return True, "Angular"
+
+    # Angular: TransferState hydration blob
+    if re.search(r'<script[^>]*id=["\']ng-state["\']', html, re.I):
+        return True, "Angular"
+
+    # Gatsby: __gatsby initial hydration frame
+    if re.search(r'window\.___gatsby\s*=\|window\.___gatsby', html, re.I):
+        return True, "Gatsby"
+    if re.search(r'<script[^>]*id=["\']gatsby-chunk-mapping["\']', html, re.I):
+        return True, "Gatsby"
+
+    # Remix: __remixContext hydration
+    if re.search(r'window\.__remixContext\s*=', html, re.I):
+        return True, "Remix"
+
+    # Vite + React: typical vite dev/prod module pattern with @react-refresh or
+    # React-specific hydration comment injected by react-dom/server
+    if re.search(r'<!--\$-->|<!--\$\?-->|<!--\$!-->', html):
+        # React 18 SSR streaming markers — very distinctive
+        return True, "React (SSR)"
+
+    # SvelteKit: __sveltekit hydration
+    if re.search(r'__sveltekit_[a-z0-9]+\s*=', html, re.I):
+        return True, "SvelteKit"
+
+    # Astro: astro-island or data-astro-cid attributes
+    if re.search(r'<astro-island|data-astro-cid-', html, re.I):
+        return True, "Astro"
+
+    return False, ""
+
 def _visible_text(html: str) -> str:
     text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.I)
     text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.I)
@@ -301,6 +366,8 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
         # SPA shell / content facade
         "is_content_facade": False,
         "facade_detail": "",
+        "spa_framework_detected": False,     # True when HTML contains known React/Vue/Next/Angular fingerprints
+        "spa_framework_name": "",            # e.g. "Next.js", "React", "Vue", "Angular"
         "external_script_domains": [],
         "all_script_domains": [],
         "external_link_domains": [],       # All external domains linked via <a href>
@@ -333,16 +400,31 @@ def check_content_identity(domain: str, content: str = "") -> Dict:
     domain_lower = domain.lower()
     domain_base = domain_lower.split(".")[0]
 
+    # ── SPA FRAMEWORK FINGERPRINTING ──
+    # Detect known React/Next.js/Vue/Angular/Nuxt patterns BEFORE facade check.
+    # A confirmed framework fingerprint means the low visible word count is
+    # explained by client-side rendering, not content hiding.
+    _spa_fw_detected, _spa_fw_name = _detect_spa_framework(html)
+    result["spa_framework_detected"] = _spa_fw_detected
+    result["spa_framework_name"] = _spa_fw_name
+
     # ── CHECK 1: SPA Shell / Content Facade ──
     # Page has a title but virtually no visible body text.
     # Combined with external script loading, this is suspicious:
     # the domain claims to be something (via title) but serves
     # no actual content — everything is loaded via JS from elsewhere.
+    #
+    # SUPPRESSION: If a known SPA framework fingerprint is present, the low
+    # word count is explained by legitimate client-side rendering.  Don't flag
+    # as a facade — it's a real app that requires JS to display content.
+    # The framework_detected flag is returned so the caller can still apply
+    # reduced trust (it's still an opaque surface), but it won't be treated
+    # as a phishing shell.
     has_title = bool(title and len(title.strip()) > 3)
     has_scripts = bool(re.search(r'<script', html, re.I))
     has_external_scripts = bool(re.search(r'<script[^>]+src=', html, re.I))
 
-    if has_title and word_count < 30:
+    if has_title and word_count < 30 and not _spa_fw_detected:
         # Very few visible words — this is a shell page
         if has_external_scripts:
             result["is_content_facade"] = True
