@@ -5493,6 +5493,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             ('CSS HIDING PATTERNS', weights.get('hidden_injection_css_only', 5)),
             ('BLACKLISTED DOMAIN', weights.get('domain_blacklisted', 50)),
             ('HACKLINK SEO SPAM DETECTED', weights.get('hacklink_detected', 50)),
+            ('HACKLINK CAMPAIGN PROFILE', weights.get('hacklink_campaign_profile_strong', 40)),
             ('WORDPRESS COMPROMISED', weights.get('hacklink_wp_compromised', 45)),
             ('BLACKLISTED IP', weights.get('ip_blacklisted', 40)),
             ('SPF +all', weights.get('spf_pass_all', 40)),
@@ -5724,6 +5725,7 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
         ('VULNERABLE WP PLUGINS', ['hacklink_vulnerable_plugins', 'vuln_plugins_no_compromise_mitigated']),
         ('HIDDEN CONTENT INJECTION', ['hidden_injection']),
         ('HACKLINK', ['hacklink_keywords']),
+        ('HACKLINK CAMPAIGN PROFILE', ['hacklink_campaign_profile']),
         ('COMPROMISED WP', ['hacklink_wp_compromised']),
         ('SPAM LINKS', ['hacklink_spam_links']),
         ('MALICIOUS SCRIPT', ['malicious_script']),
@@ -5771,9 +5773,17 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
             all_with_pts.append(f"[0] {t}")
     res.all_issues_text = ";".join(all_with_pts)
     
-    # For summary, only show scored issues (by approximate weight)
-    scored_issues = [(w, t) for w, t in scored_issues if w > 0]
-    scored_issues.sort(key=lambda x: x[0], reverse=True)
+    # For summary, re-sort and filter by ACTUAL scored points from the breakdown.
+    # Config weights (_issue_weight above) are approximations for initial ordering;
+    # actual points reflect suppression, de-escalation, and combo adjustments.
+    # This prevents suppressed signals (e.g. a fully de-escalated facade) from
+    # appearing as top issues when they contributed 0 points to the score.
+    scored_issues_actual = []
+    for _w, _t in scored_issues:
+        actual = _lookup_pts(_t)
+        if actual > 0:
+            scored_issues_actual.append((actual, _t))
+    scored_issues = sorted(scored_issues_actual, key=lambda x: x[0], reverse=True)
     
     parts = []
     
@@ -6840,8 +6850,38 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         res.hacklink_campaign_profile = True
         res.hacklink_campaign_profile_confidence = _hcp_conf
         res.hacklink_campaign_profile_signals = ";".join(_hcp_signals)
-        _hcp_weight = weights.get('hacklink_campaign_profile', 25)
+        # v7.8 FIX: Use the strong weight for HIGH confidence (3+ signals).
+        # Previously both HIGH and MODERATE used the same base weight.
+        if _hcp_conf == "HIGH":
+            _hcp_weight = weights.get('hacklink_campaign_profile_strong', 40)
+        else:
+            _hcp_weight = weights.get('hacklink_campaign_profile', 25)
         add("hacklink_campaign_profile", _hcp_weight)
+        
+        # Retroactively cancel the enterprise MX bonus when HCP fires.
+        # Enterprise MX is a legitimacy signal, but a confirmed hacklink campaign
+        # fingerprint overrides that credit — the attacker may have simply kept
+        # the existing MX records after compromising the domain.
+        # HCP detection runs after the MX bonus is awarded (line 5860), so we
+        # must reverse it here to prevent it from offsetting the HCP risk score.
+        if "mx_enterprise" in breakdown and breakdown["mx_enterprise"] < 0:
+            _mx_hcp_reversal = -breakdown["mx_enterprise"]
+            score += _mx_hcp_reversal
+            del breakdown["mx_enterprise"]
+            signals.discard("mx_enterprise")
+        
+        # Re-sync res.risk_score to include the HCP contribution.
+        # ARCHITECTURE NOTE: The main scoring block computed res.risk_score at the
+        # end of the rules loop (line 6668), BEFORE this post-scoring section runs.
+        # Any add() calls in this section (HCP, MX reversal) update the local
+        # `score` variable but do NOT automatically propagate to res.risk_score.
+        # We must re-sync explicitly here so the displayed score reflects HCP points.
+        res.risk_score = max(0, min(score, 100))
+        _hcp_bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
+        res.risk_level = next((l for lo, hi, l in _hcp_bands if lo <= res.risk_score <= hi), "UNKNOWN")
+        res.recommendation = "APPROVE" if res.risk_score < threshold else "DENY"
+        res.signals_triggered = ";".join(sorted(signals))
+        res.score_breakdown = json.dumps(breakdown)
     
     # === BUILD PATTERN MATCH INDICATOR ===
     # Identifies known attack patterns for specialist visibility.
