@@ -397,6 +397,8 @@ class DomainApprovalResult:
     content_structure_hash: str = ""                 # DOM structure hash (for layout clone detection)
     content_is_facade: bool = False                  # SPA shell: title present but <30 visible words + external JS
     content_facade_detail: str = ""                  # Explanation of why facade was flagged
+    content_spa_framework_detected: bool = False     # Known SPA framework fingerprint found (Next.js/Vue/Angular/etc.) — facade suppressed
+    content_spa_framework_name: str = ""             # Framework name (e.g. "Next.js", "Angular")
     content_external_script_domains: str = ""        # Non-CDN external script domains (semicolon-sep)
     content_external_link_domains: str = ""          # All external domains linked via <a href> (semicolon-sep, with paths)
     contact_reuse_results: str = ""                   # JSON: contact info found on other domains (OSINT cross-reference)
@@ -5410,6 +5412,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.https_valid:
         positives.append("Valid HTTPS")
     
+    if res.content_spa_framework_detected and res.content_spa_framework_name:
+        positives.append(f"SPA framework detected ({res.content_spa_framework_name}) — facade suppressed")
+    
     if res.bimi_exists:
         positives.append("BIMI verified")
     
@@ -6423,6 +6428,12 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             _spa_trust += 1  # VT clean across 50+ vendors
         if res.domain_age_days >= 180:
             _spa_trust += 1  # Established domain (6+ months)
+        
+        # v7.9: SPA framework fingerprint — Next.js/__NEXT_DATA__, Angular ng-version,
+        # Nuxt window.__NUXT__, etc. are structural markers that phishing shells
+        # almost never replicate.  A confirmed framework adds meaningful trust.
+        if res.content_spa_framework_detected:
+            _spa_trust += 2
         
         # v7.9: ANTI-TRUST PENALTY — self-hosted MX on a facade site is an active
         # negative signal, not just the absence of enterprise MX.  A real SPA from
@@ -7827,6 +7838,8 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
             res.content_structure_hash = cc.get("structure_hash", "")
             res.content_is_facade = cc.get("is_content_facade", False)
             res.content_facade_detail = cc.get("facade_detail", "")
+            res.content_spa_framework_detected = cc.get("spa_framework_detected", False)
+            res.content_spa_framework_name = cc.get("spa_framework_name", "")
             ext_scripts = cc.get("external_script_domains", [])
             if ext_scripts:
                 res.content_external_script_domains = ";".join(ext_scripts[:10])
