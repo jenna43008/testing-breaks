@@ -30,7 +30,7 @@ DEFAULT_CONFIG = {
         "malware_links": 100,
         "disposable_email": 40,
         "spf_pass_all": 0,           # +all allows anyone to spoof - security risk
-        "domain_lt_7d": 0,           # Brand new domain - high risk
+        "domain_lt_7d": 25,           # Brand new domain - high risk
         "credential_form": 8,         # Building block — real risk comes from combo rules (20+ rules amplify this)
         "sensitive_fields": 10,
         
