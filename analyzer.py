@@ -7113,8 +7113,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             and res.domain_age_days < 30
             and res.whois_privacy
             and res.risk_score < _new_private_floor
-            and not res.app_store_match_high
-            and not res.app_store_match_medium):
+            and not (res.app_store_has_presence and res.app_store_confidence == "high")
+            and not (res.app_store_has_presence and res.app_store_confidence == "medium")):
         res.risk_score = _new_private_floor
         # Don't change recommendation — 10pts is well below DENY threshold.
         # Re-derive risk_level in case it changed.
