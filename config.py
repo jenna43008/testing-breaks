@@ -67,9 +67,9 @@ DEFAULT_CONFIG = {
         "content_broker_page": 20,             # Domain broker / parking / for-sale page (3+ phrases)
         "content_privacy_email": 12,           # Privacy email (proton/tutanota) as business contact on page
         "content_placeholder": 20,             # Placeholder content (lorem ipsum, coming soon)
-        "content_facade": 35,                  # SPA shell: title present but <30 visible words + external JS
+        "content_facade": 25,                  # SPA shell: title present but <30 visible words + external JS
         "content_facade_established": 10,      # v7.6: Reduced weight for SPAs on established domains (age>1yr + enterprise MX/DKIM + VT clean)
-        "registration_opaque": 25,              # Both RDAP+WHOIS failed — cannot determine age/registrar (standalone)
+        "registration_opaque": 20,              # Both RDAP+WHOIS failed — cannot determine age/registrar (standalone)
         "registration_opaque_with_risk": 20,   # Registration opaque + content risk signals present (facade/mismatch/broker)
         "domain_reregistered_recent_with_risk": 18,  # Dropped & re-registered ≤90d + content risk
         "domain_reregistered_recent": 6,             # Dropped & re-registered ≤90d, no content risk
