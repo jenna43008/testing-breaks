@@ -268,7 +268,7 @@ class DomainApprovalResult:
     
     # === ACCESS ANOMALY DETECTION ===
     has_401: bool = False                    # 401 Unauthorized seen
-    is_access_restricted: bool = False       # 401/403 on public-facing domain
+    is_access_restricted: bool = False       # 401 on public-facing domain (403 excluded — WAF FP)
     access_restriction_note: str = ""        # Details about access restriction
     
     # === CORPORATE TRUST SIGNALS ===
@@ -5350,9 +5350,9 @@ def generate_summary(res: DomainApprovalResult, signals: Set[str], rdap_enabled:
     if res.has_401:
         all_issues.append("401 UNAUTHORIZED → Public domain requires authentication - unusual")
     
-    if res.has_403:
-        all_issues.append("403 FORBIDDEN → May be blocking scanners (cloaking)")
-    
+    # 403 intentionally omitted — Cloudflare/WAF bot protection causes too many FPs
+    # status_403_cloaking weight is already 0 in config.py
+
     if res.has_429:
         all_issues.append("429 RATE LIMITED → Throttling automated checks")
     
@@ -6157,10 +6157,9 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     if res.has_401:
         add("status_401_unauthorized", weights.get('status_401_unauthorized', 12))
     
-    # 403 = cloaking/scanner blocking - VERY strong signal
-    if res.has_403:
-        add("status_403_cloaking", weights.get('status_403_cloaking', 15))
-    
+    # NOTE: 403 (status_403_cloaking) intentionally not scored — see config.py comment.
+    # Cloudflare/WAF bot protection returns 403 on too many legitimate domains.
+
     # 429 = throttling scanners - medium signal
     if res.has_429:
         add("status_429_throttling", weights.get('status_429_throttling', 8))
@@ -7456,15 +7455,13 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.has_503 = 503 in all_statuses
     res.has_5xx = bool(all_statuses & {500, 502, 504})
     
-    # Access restriction detection - 401/403 on what should be a public site is suspicious
-    if res.has_401 or res.has_403:
+    # Access restriction detection - 401 on what should be a public site is suspicious
+    # NOTE: 403 is intentionally excluded — too many FPs from Cloudflare/WAF bot protection.
+    # A legitimate domain like bahcemarket.com (21yr, VT clean, App Store) gets 403 from
+    # Cloudflare when our scanner hits it; that's not a fraud signal.
+    if res.has_401:
         res.is_access_restricted = True
-        if res.has_401 and res.has_403:
-            res.access_restriction_note = "Both 401 Unauthorized and 403 Forbidden responses"
-        elif res.has_401:
-            res.access_restriction_note = "401 Unauthorized - requires authentication for public site"
-        else:
-            res.access_restriction_note = "403 Forbidden - access blocked"
+        res.access_restriction_note = "401 Unauthorized - requires authentication for public site"
     
     # Content analysis
     content = https_result["content"]
