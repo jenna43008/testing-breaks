@@ -5924,7 +5924,7 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             _ss = _ss.strip().lower()
             if _ss in ("recaptcha", "cloudflare_bot_management", "hcaptcha",
                        "akamai_bot_manager", "datadome", "perimeterx"):
-                _sec_bonus += weights.get(f'security_{_ss}', -5)
+                _sec_bonus += weights.get(f'security_{_ss}', -15)
         # Cap total security bonus at -10
         _sec_bonus = max(_sec_bonus, -10)
         if _sec_bonus < 0:
