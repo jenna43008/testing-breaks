@@ -304,7 +304,7 @@ DEFAULT_CONFIG = {
         # These are evaluated via calculate_no_resolve_score() using DNS-only signals.
         # Base penalty of 25 for having neither web nor email presence, but not an
         # automatic deny — remaining signals determine the final score.
-        "no_resolve_no_mx": 25,                    # Base penalty: no A record AND no MX
+        "no_resolve_no_a_record": 25,              # Base penalty: no A record (no web presence)
         "no_resolve_cannot_receive_mail": 10,      # No MX = cannot receive email (additional risk)
         "no_resolve_no_email_auth": 15,            # No SPF + no DKIM + no DMARC (complete auth vacuum)
         "no_resolve_no_spf": 5,                    # Missing SPF (partial auth gap)

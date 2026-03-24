@@ -6147,18 +6147,15 @@ def calculate_mail_only_score(res: DomainApprovalResult, config: dict) -> dict:
 
 def calculate_no_resolve_score(res, config: dict) -> dict:
     """
-    Calculate a DNS-only composite score for no-resolve domains (v8.1).
+    Calculate a DNS-only composite score for domains with no web presence (v8.2).
 
-    No-resolve domains have no A record AND no valid MX records. Instead of
-    hard-denying with score 100, we evaluate what we CAN see from DNS, WHOIS,
-    and API lookups to produce a fair score.
+    Used for BOTH mail-only domains (no A, has MX) and no-resolve domains
+    (no A, no MX). Both lack a website, so they receive the same scrutiny.
+    The only difference is which missing-record flags fire:
+      - No A record: always fires (both paths)
+      - No MX / cannot receive mail: only fires for no-resolve domains
 
-    The no_resolve_no_mx signal adds a base penalty (25 pts) since the absence
-    of both web presence and email infrastructure is inherently higher risk,
-    but not an automatic deny. The remaining signals can push the score up
-    (risky domain) or down (established, clean domain).
-
-    Runnable checks:
+    Runnable checks (all DNS-based, no HTTP needed):
       - WHOIS/RDAP registration age
       - VirusTotal domain lookup
       - Typosquatting / homoglyph detection
@@ -6172,6 +6169,8 @@ def calculate_no_resolve_score(res, config: dict) -> dict:
       - CT log presence (historical web presence signal)
       - Free TLD registration cost (zero-investment signal)
       - Domain name entropy (DGA detection)
+      - Email auth posture (SPF/DKIM/DMARC)
+      - Registration opacity
     """
     nr_score = 0
     nr_signals = []
@@ -6185,14 +6184,12 @@ def calculate_no_resolve_score(res, config: dict) -> dict:
             nr_breakdown[signal] = points
             nr_score += points
 
-    # --- BASE PENALTY: No A record AND no MX ---
-    _add("no_resolve_no_mx", weights.get('no_resolve_no_mx', 25))
+    # --- BASE PENALTY: No A record (no web presence) ---
+    _add("no_resolve_no_a_record", weights.get('no_resolve_no_a_record', 25))
 
-    # --- CANNOT RECEIVE MAIL (v8.1.1) ---
-    # Domains with no MX cannot receive email at all. This is an additional
-    # risk signal because legitimate senders typically set up MX first.
-    # Stacks with the base penalty — a domain with no web AND no mail
-    # infrastructure represents near-zero operational investment.
+    # --- NO MX / CANNOT RECEIVE MAIL (v8.2) ---
+    # Only fires for no-resolve domains (no MX). Mail-only domains have MX
+    # so this doesn't apply to them.
     if res.cannot_receive_mail:
         _add("no_resolve_cannot_receive_mail", weights.get('no_resolve_cannot_receive_mail', 10))
 
@@ -6361,58 +6358,25 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
             breakdown[signal] = breakdown.get(signal, 0) + points
             score += points
     
-    # === MAIL-ONLY DOMAIN: DNS-ONLY SCORING PATH ===
-    # Mail-only domains have no website — use the specialized DNS-only scorer
-    # instead of the full web+content scoring pipeline.
-    if res.is_mail_only_domain:
-        mo = calculate_mail_only_score(res, config)
-        res.mail_only_dns_score = mo["score"]
-        res.mail_only_dns_signals = ";".join(mo["signals"])
-        res.mail_only_dns_breakdown = json.dumps(mo["breakdown"])
-
-        # Use the mail-only score as the risk score
-        res.risk_score = mo["score"]
-        bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
-        res.risk_level = next((l for lo, hi, l in bands if lo <= res.risk_score <= hi), "UNKNOWN")
-        res.recommendation = "APPROVE" if res.risk_score < threshold else "DENY"
-        res.signals_triggered = ";".join(sorted(mo["signals"]))
-        res.score_breakdown = json.dumps(mo["breakdown"])
-
-        # Build summary
-        _mo_summary_parts = [f"📧 MAIL-ONLY DOMAIN (score: {mo['score']})"]
-        mx_type = res.mail_only_mx_provider_type or res.mx_provider_type
-        if mx_type:
-            _mo_summary_parts.append(f"MX: {mx_type}")
-        _auth_parts = []
-        if res.spf_exists:
-            _auth_parts.append("SPF")
-        if res.dkim_exists:
-            _auth_parts.append("DKIM")
-        if res.dmarc_exists:
-            _auth_parts.append(f"DMARC({res.dmarc_policy})")
-        if res.bimi_exists:
-            _auth_parts.append("BIMI")
-        if res.mta_sts_exists:
-            _auth_parts.append("MTA-STS")
-        if _auth_parts:
-            _mo_summary_parts.append("Auth: " + "+".join(_auth_parts))
-        else:
-            _mo_summary_parts.append("Auth: NONE")
-        if res.domain_age_days >= 0:
-            _mo_summary_parts.append(f"Age: {res.domain_age_days}d")
-        res.summary = f"{res.recommendation}: {' | '.join(_mo_summary_parts)}"
-        return
-
-    # === NO-RESOLVE DOMAIN: DNS-ONLY SCORING PATH (v8.1) ===
-    # No-resolve domains have no A record and no valid MX — score using whatever
-    # DNS signals are available instead of auto-denying with score 100.
-    if res.is_no_resolve_domain:
+    # === NO WEB PRESENCE: UNIFIED DNS-ONLY SCORING PATH (v8.2) ===
+    # Both mail-only (no A, has MX) and no-resolve (no A, no MX) domains
+    # go through the same scoring function. Neither has a website, so they
+    # get identical scrutiny. The only difference is which missing-record
+    # indicators fire.
+    if res.is_mail_only_domain or res.is_no_resolve_domain:
         nr = calculate_no_resolve_score(res, config)
-        res.no_resolve_dns_score = nr["score"]
-        res.no_resolve_dns_signals = ";".join(nr["signals"])
-        res.no_resolve_dns_breakdown = json.dumps(nr["breakdown"])
 
-        # Use the no-resolve score as the risk score
+        # Store in the appropriate result fields
+        if res.is_mail_only_domain:
+            res.mail_only_dns_score = nr["score"]
+            res.mail_only_dns_signals = ";".join(nr["signals"])
+            res.mail_only_dns_breakdown = json.dumps(nr["breakdown"])
+        if res.is_no_resolve_domain:
+            res.no_resolve_dns_score = nr["score"]
+            res.no_resolve_dns_signals = ";".join(nr["signals"])
+            res.no_resolve_dns_breakdown = json.dumps(nr["breakdown"])
+
+        # Use the unified score as the risk score
         res.risk_score = nr["score"]
         bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
         res.risk_level = next((l for lo, hi, l in bands if lo <= res.risk_score <= hi), "UNKNOWN")
@@ -6420,50 +6384,56 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         res.signals_triggered = ";".join(sorted(nr["signals"]))
         res.score_breakdown = json.dumps(nr["breakdown"])
 
-        # Build summary
-        _nr_summary_parts = [f"🔇 NO-RESOLVE DOMAIN (score: {nr['score']})"]
+        # Build summary — label differs based on which path
+        if res.is_no_resolve_domain:
+            _label = f"🔇 NO-RESOLVE DOMAIN — no A, no MX (score: {nr['score']})"
+        else:
+            _mx_type = res.mail_only_mx_provider_type or res.mx_provider_type or ""
+            _label = f"📧 MAIL-ONLY DOMAIN — no A, has MX{f' ({_mx_type})' if _mx_type else ''} (score: {nr['score']})"
+
+        _summary_parts = [_label]
         if res.cannot_receive_mail:
-            _nr_summary_parts.append("📭 Cannot receive mail")
+            _summary_parts.append("📭 Cannot receive mail")
         if res.domain_age_days >= 0:
-            _nr_summary_parts.append(f"Age: {res.domain_age_days}d")
+            _summary_parts.append(f"Age: {res.domain_age_days}d")
         if res.vt_available:
             if res.vt_malicious_count > 0:
-                _nr_summary_parts.append(f"VT: {res.vt_malicious_count} malicious")
+                _summary_parts.append(f"VT: {res.vt_malicious_count} malicious")
             else:
-                _nr_summary_parts.append("VT: clean")
+                _summary_parts.append("VT: clean")
         if res.domain_blacklist_count > 0:
-            _nr_summary_parts.append(f"DNSBL: {res.domain_blacklist_count} hits")
+            _summary_parts.append(f"DNSBL: {res.domain_blacklist_count} hits")
         if res.ns_is_enterprise:
-            _nr_summary_parts.append(f"NS: enterprise")
+            _summary_parts.append("NS: enterprise")
         elif res.ns_is_parking:
-            _nr_summary_parts.append("NS: parking")
+            _summary_parts.append("NS: parking")
         elif res.ns_is_lame_delegation:
-            _nr_summary_parts.append("NS: lame")
+            _summary_parts.append("NS: lame")
         if res.dnssec_enabled:
-            _nr_summary_parts.append("DNSSEC")
+            _summary_parts.append("DNSSEC")
         if res.ct_log_count > 0:
-            _nr_summary_parts.append(f"CT: {res.ct_log_count} certs")
+            _summary_parts.append(f"CT: {res.ct_log_count} certs")
         elif res.ct_log_count == 0:
-            _nr_summary_parts.append("CT: none")
+            _summary_parts.append("CT: none")
         if res.soa_serial_is_date and res.soa_days_since_serial >= 0:
             if res.soa_days_since_serial <= 90:
-                _nr_summary_parts.append("SOA: fresh")
+                _summary_parts.append("SOA: fresh")
             elif res.soa_days_since_serial > 365:
-                _nr_summary_parts.append("SOA: stale")
+                _summary_parts.append("SOA: stale")
         if res.sld_entropy > 3.8:
-            _nr_summary_parts.append(f"Entropy: {res.sld_entropy}")
+            _summary_parts.append(f"Entropy: {res.sld_entropy}")
         # Email auth summary
         if not res.spf_exists and not res.dkim_exists and not res.dmarc_exists:
-            _nr_summary_parts.append("Auth: none")
+            _summary_parts.append("Auth: none")
         else:
             _auth_parts = []
             if res.spf_exists: _auth_parts.append("SPF")
             if res.dkim_exists: _auth_parts.append("DKIM")
             if res.dmarc_exists: _auth_parts.append(f"DMARC:{res.dmarc_policy or '?'}")
-            _nr_summary_parts.append(f"Auth: {'+'.join(_auth_parts)}")
+            _summary_parts.append(f"Auth: {'+'.join(_auth_parts)}")
         if res.registration_opaque:
-            _nr_summary_parts.append("WHOIS: opaque")
-        res.summary = f"{res.recommendation}: {' | '.join(_nr_summary_parts)}"
+            _summary_parts.append("WHOIS: opaque")
+        res.summary = f"{res.recommendation}: {' | '.join(_summary_parts)}"
         return
 
     # Email Auth - these are DELIVERABILITY concerns only, NOT fraud signals
