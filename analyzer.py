@@ -6215,6 +6215,46 @@ def calculate_no_resolve_score(res, config: dict) -> dict:
     if res.domain_reregistered:
         _add("no_resolve_domain_reregistered", weights.get('no_resolve_domain_reregistered', 10))
 
+    # --- EMAIL AUTH POSTURE (v8.1.1) ---
+    # For normal domains, missing email auth is a deliverability issue (score 0).
+    # For no-resolve domains, it's a risk signal: no website + no MX + no email
+    # auth = zero operational investment. Legitimate pre-launch domains typically
+    # set up SPF/DMARC before going live. Their absence here compounds the risk.
+    _no_spf = not res.spf_exists
+    _no_dkim = not res.dkim_exists
+    _no_dmarc = not res.dmarc_exists
+
+    if _no_spf and _no_dkim and _no_dmarc:
+        # Complete email auth vacuum — strongest signal
+        _add("no_resolve_no_email_auth", weights.get('no_resolve_no_email_auth', 15))
+    else:
+        if _no_spf:
+            _add("no_resolve_no_spf", weights.get('no_resolve_no_spf', 5))
+        if _no_dkim:
+            _add("no_resolve_no_dkim", weights.get('no_resolve_no_dkim', 5))
+        if _no_dmarc:
+            _add("no_resolve_no_dmarc", weights.get('no_resolve_no_dmarc', 5))
+
+    # SPF +all (pass everyone) on a no-resolve domain = likely spoofing setup
+    if res.spf_exists and res.spf_mechanism == "+all":
+        _add("no_resolve_spf_pass_all", weights.get('no_resolve_spf_pass_all', 10))
+
+    # DMARC p=none on a no-resolve domain = no enforcement intent
+    if res.dmarc_exists and res.dmarc_policy == "none":
+        _add("no_resolve_dmarc_p_none", weights.get('no_resolve_dmarc_p_none', 5))
+
+    # Bonus: Full email auth stack on a no-resolve domain = strong legitimacy signal
+    if res.spf_exists and res.dkim_exists and res.dmarc_exists:
+        if res.dmarc_policy in ("reject", "quarantine"):
+            _add("no_resolve_full_email_auth", weights.get('no_resolve_full_email_auth', -10))
+
+    # --- REGISTRATION OPAQUE (v8.1.1) ---
+    # Both RDAP and WHOIS failed to return any data. On a normal domain this
+    # could be GDPR (European ccTLDs). On a no-resolve domain with nothing
+    # else to go on, it's an additional opacity signal.
+    if res.registration_opaque:
+        _add("no_resolve_registration_opaque", weights.get('no_resolve_registration_opaque', 10))
+
     # --- VIRUSTOTAL ---
     if res.vt_available:
         if res.vt_malicious_count >= 5:
@@ -6412,6 +6452,17 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 _nr_summary_parts.append("SOA: stale")
         if res.sld_entropy > 3.8:
             _nr_summary_parts.append(f"Entropy: {res.sld_entropy}")
+        # Email auth summary
+        if not res.spf_exists and not res.dkim_exists and not res.dmarc_exists:
+            _nr_summary_parts.append("Auth: none")
+        else:
+            _auth_parts = []
+            if res.spf_exists: _auth_parts.append("SPF")
+            if res.dkim_exists: _auth_parts.append("DKIM")
+            if res.dmarc_exists: _auth_parts.append(f"DMARC:{res.dmarc_policy or '?'}")
+            _nr_summary_parts.append(f"Auth: {'+'.join(_auth_parts)}")
+        if res.registration_opaque:
+            _nr_summary_parts.append("WHOIS: opaque")
         res.summary = f"{res.recommendation}: {' | '.join(_nr_summary_parts)}"
         return
 

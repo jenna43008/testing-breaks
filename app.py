@@ -358,6 +358,15 @@ def display_results(results: list):
             # v8.1.1: Cannot receive mail indicator
             if row.get('cannot_receive_mail'):
                 parts.insert(1 if row.get('is_no_resolve_domain') else 0, "📭 Cannot receive mail")
+            # v8.1.1: No email auth indicator (only for no-resolve domains)
+            if row.get('is_no_resolve_domain'):
+                _has_spf = row.get('spf_exists', False)
+                _has_dkim = row.get('dkim_exists', False)
+                _has_dmarc = row.get('dmarc_exists', False)
+                if not _has_spf and not _has_dkim and not _has_dmarc:
+                    parts.append("🚫 No email auth")
+                elif row.get('registration_opaque'):
+                    parts.append("🔒 WHOIS opaque")
             return ' · '.join(parts) if parts else ''
         
         # Build from full df (has all fields), then attach to summary_df

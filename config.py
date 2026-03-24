@@ -306,6 +306,14 @@ DEFAULT_CONFIG = {
         # automatic deny — remaining signals determine the final score.
         "no_resolve_no_mx": 25,                    # Base penalty: no A record AND no MX
         "no_resolve_cannot_receive_mail": 10,      # No MX = cannot receive email (additional risk)
+        "no_resolve_no_email_auth": 15,            # No SPF + no DKIM + no DMARC (complete auth vacuum)
+        "no_resolve_no_spf": 5,                    # Missing SPF (partial auth gap)
+        "no_resolve_no_dkim": 5,                   # Missing DKIM (partial auth gap)
+        "no_resolve_no_dmarc": 5,                  # Missing DMARC (partial auth gap)
+        "no_resolve_spf_pass_all": 10,             # SPF +all = allows anyone to spoof
+        "no_resolve_dmarc_p_none": 5,              # DMARC p=none = no enforcement
+        "no_resolve_full_email_auth": -10,          # Full auth stack with enforcing DMARC (legitimacy bonus)
+        "no_resolve_registration_opaque": 10,      # RDAP + WHOIS both failed (hidden registration)
         "no_resolve_domain_created_today": 35,     # Domain registered today/yesterday
         "no_resolve_domain_lt_7d": 20,             # Domain 2-7 days old
         "no_resolve_domain_lt_30d": 10,            # Domain 8-30 days old
