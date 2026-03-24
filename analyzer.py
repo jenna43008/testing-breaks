@@ -455,6 +455,7 @@ class DomainApprovalResult:
 
     # === NO-RESOLVE DOMAIN (v8.1) ===
     is_no_resolve_domain: bool = False             # Domain has no A record AND no valid MX records
+    cannot_receive_mail: bool = False              # Domain has no valid MX — cannot receive email
     no_resolve_note: str = ""                      # Human-readable note about no-resolve detection
     no_resolve_dns_score: int = -1                 # Composite DNS-based score for no-resolve domains (-1 = not evaluated)
     no_resolve_dns_signals: str = ""               # Semicolon-separated DNS signals evaluated
@@ -6187,6 +6188,14 @@ def calculate_no_resolve_score(res, config: dict) -> dict:
     # --- BASE PENALTY: No A record AND no MX ---
     _add("no_resolve_no_mx", weights.get('no_resolve_no_mx', 25))
 
+    # --- CANNOT RECEIVE MAIL (v8.1.1) ---
+    # Domains with no MX cannot receive email at all. This is an additional
+    # risk signal because legitimate senders typically set up MX first.
+    # Stacks with the base penalty — a domain with no web AND no mail
+    # infrastructure represents near-zero operational investment.
+    if res.cannot_receive_mail:
+        _add("no_resolve_cannot_receive_mail", weights.get('no_resolve_cannot_receive_mail', 10))
+
     # --- WHOIS / REGISTRATION AGE ---
     if res.domain_age_days >= 0:
         if res.domain_age_days <= 1:
@@ -6373,6 +6382,8 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
 
         # Build summary
         _nr_summary_parts = [f"🔇 NO-RESOLVE DOMAIN (score: {nr['score']})"]
+        if res.cannot_receive_mail:
+            _nr_summary_parts.append("📭 Cannot receive mail")
         if res.domain_age_days >= 0:
             _nr_summary_parts.append(f"Age: {res.domain_age_days}d")
         if res.vt_available:
@@ -7767,9 +7778,10 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                 # typosquatting, DNSBL, NS risk, domain patterns). This lets established,
                 # clean domains pass while still catching suspicious ones.
                 res.is_no_resolve_domain = True
+                res.cannot_receive_mail = True
                 res.no_resolve_note = (
                     f"🔇 NO-RESOLVE DOMAIN: {domain} has no A record and no valid MX. "
-                    f"Running DNS-based evaluation."
+                    f"Cannot receive mail. Running DNS-based evaluation."
                 )
     
     # PTR (requires IP — skip for mail-only and no-resolve domains)

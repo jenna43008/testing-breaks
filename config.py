@@ -305,6 +305,7 @@ DEFAULT_CONFIG = {
         # Base penalty of 25 for having neither web nor email presence, but not an
         # automatic deny — remaining signals determine the final score.
         "no_resolve_no_mx": 25,                    # Base penalty: no A record AND no MX
+        "no_resolve_cannot_receive_mail": 10,      # No MX = cannot receive email (additional risk)
         "no_resolve_domain_created_today": 35,     # Domain registered today/yesterday
         "no_resolve_domain_lt_7d": 20,             # Domain 2-7 days old
         "no_resolve_domain_lt_30d": 10,            # Domain 8-30 days old

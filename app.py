@@ -355,6 +355,9 @@ def display_results(results: list):
             # v8.1: No-resolve domain indicator
             if row.get('is_no_resolve_domain'):
                 parts.insert(0, "🔇 No-resolve (no A, no MX)")
+            # v8.1.1: Cannot receive mail indicator
+            if row.get('cannot_receive_mail'):
+                parts.insert(1 if row.get('is_no_resolve_domain') else 0, "📭 Cannot receive mail")
             return ' · '.join(parts) if parts else ''
         
         # Build from full df (has all fields), then attach to summary_df
