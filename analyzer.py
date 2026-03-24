@@ -459,7 +459,27 @@ class DomainApprovalResult:
     no_resolve_dns_score: int = -1                 # Composite DNS-based score for no-resolve domains (-1 = not evaluated)
     no_resolve_dns_signals: str = ""               # Semicolon-separated DNS signals evaluated
     no_resolve_dns_breakdown: str = ""             # JSON breakdown of no-resolve DNS scoring
-    
+
+    # === NS PROVIDER QUALITY (v8.1) ===
+    ns_is_enterprise: bool = False               # NS uses enterprise/premium DNS provider
+    ns_enterprise_match: str = ""                # Which enterprise NS pattern matched
+
+    # === SOA FRESHNESS (v8.1) ===
+    soa_exists: bool = False                     # SOA record found
+    soa_serial: int = 0                          # SOA serial number
+    soa_serial_is_date: bool = False             # Serial follows YYYYMMDDNN convention
+    soa_serial_date: str = ""                    # Parsed date from serial (ISO format)
+    soa_days_since_serial: int = -1              # Days since serial date (-1 = unknown)
+
+    # === DNSSEC (v8.1) ===
+    dnssec_enabled: bool = False                 # DNSKEY or DS record found
+
+    # === TLD REGISTRATION COST (v8.1) ===
+    is_free_registration_tld: bool = False       # TLD has free registration (.tk, .ml, .ga, .cf, .gq)
+
+    # === DOMAIN NAME ENTROPY (v8.1) ===
+    sld_entropy: float = 0.0                     # Shannon entropy of second-level domain label
+
     # === SUBDOMAIN DELEGATION ABUSE (v7.3.1) ===
     is_subdomain: bool = False                   # Submitted domain is a subdomain (not registrable root)
     is_staging_subdomain: bool = False           # Subdomain prefix indicates SDLC env (stg, staging, dev, test, uat, qa, sandbox)
@@ -1244,6 +1264,97 @@ def dns_query(domain: str, record_type: str) -> List[str]:
         return [str(rdata) for rdata in resolver.resolve(domain, record_type)]
     except Exception:
         return []
+
+
+def check_soa_freshness(domain: str) -> dict:
+    """
+    Query SOA record and assess freshness from serial number.
+    SOA serials often use YYYYMMDDNN format (10 digits, leading 20XX).
+    """
+    result = {
+        "soa_exists": False,
+        "soa_serial": 0,
+        "soa_serial_is_date": False,
+        "soa_serial_date": "",
+        "soa_days_since_serial": -1,
+    }
+    if not DNS_AVAILABLE:
+        return result
+    try:
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = DNS_TIMEOUT
+        resolver.lifetime = DNS_TIMEOUT
+        answers = resolver.resolve(domain, 'SOA')
+        if not answers:
+            return result
+        soa = answers[0]
+        result["soa_exists"] = True
+        serial = soa.serial
+        result["soa_serial"] = serial
+        serial_str = str(serial)
+        if len(serial_str) == 10 and serial_str[:2] == '20':
+            try:
+                year = int(serial_str[0:4])
+                month = int(serial_str[4:6])
+                day = int(serial_str[6:8])
+                from datetime import date
+                serial_date = date(year, month, day)
+                result["soa_serial_is_date"] = True
+                result["soa_serial_date"] = serial_date.isoformat()
+                result["soa_days_since_serial"] = (date.today() - serial_date).days
+            except (ValueError, OverflowError):
+                pass
+    except Exception:
+        pass
+    return result
+
+
+def check_dnssec(domain: str) -> bool:
+    """Check if domain has DNSSEC enabled by querying for DNSKEY, fallback to DS."""
+    if not DNS_AVAILABLE:
+        return False
+    try:
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = DNS_TIMEOUT
+        resolver.lifetime = DNS_TIMEOUT
+        answers = resolver.resolve(domain, 'DNSKEY')
+        if answers:
+            return True
+    except Exception:
+        pass
+    try:
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = DNS_TIMEOUT
+        resolver.lifetime = DNS_TIMEOUT
+        answers = resolver.resolve(domain, 'DS')
+        if answers:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def calculate_domain_entropy(domain: str) -> float:
+    """
+    Calculate Shannon entropy of the second-level domain label.
+    Legitimate SLDs: ~2.0-3.2 bits/char (dictionary words, brand names)
+    DGA-generated:   ~3.5-5.0+ bits/char (random character sequences)
+    """
+    import math
+    parts = domain.lower().split('.')
+    sld = parts[-2] if len(parts) >= 2 else parts[0]
+    if not sld or len(sld) < 3:
+        return 0.0
+    freq = {}
+    for c in sld:
+        freq[c] = freq.get(c, 0) + 1
+    length = len(sld)
+    entropy = 0.0
+    for count in freq.values():
+        p = count / length
+        if p > 0:
+            entropy -= p * math.log2(p)
+    return round(entropy, 2)
 
 
 def get_ptr_record(ip: str) -> Tuple[bool, str, bool]:
@@ -2255,6 +2366,8 @@ def check_ns_risk(ns_records: List[str], ns_risk_config: dict) -> Dict:
         "dynamic_dns_match": "",
         "is_free_dns": False,
         "free_dns_match": "",
+        "is_enterprise_ns": False,
+        "enterprise_ns_match": "",
         "is_lame_delegation": False,
         "is_single_ns": False,
     }
@@ -2316,7 +2429,20 @@ def check_ns_risk(ns_records: List[str], ns_risk_config: dict) -> Dict:
                     break
             if result["is_free_dns"]:
                 break
-    
+
+    # Check enterprise NS patterns (skip if already flagged as risk)
+    if not result["is_parking"] and not result["is_dynamic_dns"] and not result["is_free_dns"]:
+        enterprise_patterns = ns_risk_config.get("enterprise_ns", [])
+        for pattern in enterprise_patterns:
+            pattern_lower = pattern.lower()
+            for ns in ns_lower:
+                if pattern_lower in ns:
+                    result["is_enterprise_ns"] = True
+                    result["enterprise_ns_match"] = pattern
+                    break
+            if result["is_enterprise_ns"]:
+                break
+
     return result
 
 
@@ -6039,6 +6165,12 @@ def calculate_no_resolve_score(res, config: dict) -> dict:
       - DNSBL checks
       - Suspicious TLD checks
       - NS risk detection (parking, dynamic DNS, lame delegation)
+      - NS provider quality (enterprise DNS bonus)
+      - SOA record freshness (active management signal)
+      - DNSSEC enabled (operational maturity signal)
+      - CT log presence (historical web presence signal)
+      - Free TLD registration cost (zero-investment signal)
+      - Domain name entropy (DGA detection)
     """
     nr_score = 0
     nr_signals = []
@@ -6120,6 +6252,40 @@ def calculate_no_resolve_score(res, config: dict) -> dict:
         _add("no_resolve_ns_dynamic_dns", weights.get('no_resolve_ns_dynamic_dns', 25))
     if res.ns_is_lame_delegation:
         _add("no_resolve_ns_lame", weights.get('no_resolve_ns_lame', 20))
+
+    # --- NS PROVIDER QUALITY (v8.1) ---
+    if res.ns_is_enterprise:
+        _add("no_resolve_ns_enterprise", weights.get('no_resolve_ns_enterprise', -8))
+
+    # --- SOA FRESHNESS (v8.1) ---
+    if not res.soa_exists:
+        _add("no_resolve_soa_missing", weights.get('no_resolve_soa_missing', 5))
+    elif res.soa_serial_is_date and res.soa_days_since_serial >= 0:
+        if res.soa_days_since_serial <= 90:
+            _add("no_resolve_soa_fresh", weights.get('no_resolve_soa_fresh', -5))
+        elif res.soa_days_since_serial > 365:
+            _add("no_resolve_soa_stale", weights.get('no_resolve_soa_stale', 10))
+
+    # --- DNSSEC (v8.1) ---
+    if res.dnssec_enabled:
+        _add("no_resolve_dnssec_enabled", weights.get('no_resolve_dnssec_enabled', -5))
+
+    # --- CT LOG PRESENCE (v8.1) ---
+    if res.ct_log_count >= 0:
+        if res.ct_log_count > 0:
+            _add("no_resolve_ct_has_history", weights.get('no_resolve_ct_has_history', -8))
+        elif res.ct_log_count == 0:
+            _add("no_resolve_ct_no_history", weights.get('no_resolve_ct_no_history', 5))
+
+    # --- FREE TLD (v8.1) ---
+    if res.is_free_registration_tld:
+        _add("no_resolve_free_tld", weights.get('no_resolve_free_tld', 10))
+
+    # --- DOMAIN NAME ENTROPY (v8.1) ---
+    if res.sld_entropy > 4.2:
+        _add("no_resolve_very_high_entropy_sld", weights.get('no_resolve_very_high_entropy_sld', 15))
+    elif res.sld_entropy > 3.8:
+        _add("no_resolve_high_entropy_sld", weights.get('no_resolve_high_entropy_sld', 10))
 
     # Clamp score
     nr_score = max(0, min(nr_score, 100))
@@ -6216,10 +6382,25 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
                 _nr_summary_parts.append("VT: clean")
         if res.domain_blacklist_count > 0:
             _nr_summary_parts.append(f"DNSBL: {res.domain_blacklist_count} hits")
-        if res.ns_is_parking:
+        if res.ns_is_enterprise:
+            _nr_summary_parts.append(f"NS: enterprise")
+        elif res.ns_is_parking:
             _nr_summary_parts.append("NS: parking")
-        if res.ns_is_lame_delegation:
+        elif res.ns_is_lame_delegation:
             _nr_summary_parts.append("NS: lame")
+        if res.dnssec_enabled:
+            _nr_summary_parts.append("DNSSEC")
+        if res.ct_log_count > 0:
+            _nr_summary_parts.append(f"CT: {res.ct_log_count} certs")
+        elif res.ct_log_count == 0:
+            _nr_summary_parts.append("CT: none")
+        if res.soa_serial_is_date and res.soa_days_since_serial >= 0:
+            if res.soa_days_since_serial <= 90:
+                _nr_summary_parts.append("SOA: fresh")
+            elif res.soa_days_since_serial > 365:
+                _nr_summary_parts.append("SOA: stale")
+        if res.sld_entropy > 3.8:
+            _nr_summary_parts.append(f"Entropy: {res.sld_entropy}")
         res.summary = f"{res.recommendation}: {' | '.join(_nr_summary_parts)}"
         return
 
@@ -7599,11 +7780,13 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     domain_lower = domain.lower()
     res.is_suspicious_tld = any(domain_lower.endswith(t) for t in config['suspicious_tlds'])
     res.is_retail_scam_tld = any(domain_lower.endswith(t) for t in RETAIL_SCAM_TLDS)
+    res.is_free_registration_tld = any(domain_lower.endswith(t) for t in config.get('free_registration_tlds', []))
     res.is_free_email_domain = domain_lower in FREE_EMAIL_PROVIDERS
     res.is_free_hosting = any(p in domain_lower for p in FREE_HOSTING_PATTERNS)
     res.is_url_shortener = domain_lower in URL_SHORTENERS
     res.is_disposable_email = is_disposable_email(domain_lower, config['disposable_domains'])
     res.typosquat_target, res.typosquat_similarity = check_typosquatting(domain, config['protected_brands'])
+    res.sld_entropy = calculate_domain_entropy(domain)
     
     # v7.3.1: Homoglyph / IDN spoofing detection
     homoglyph = check_homoglyph_domain(domain, config['protected_brands'])
@@ -7818,7 +8001,20 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.ns_free_dns_match = ns_risk["free_dns_match"]
     res.ns_is_lame_delegation = ns_risk["is_lame_delegation"]
     res.ns_is_single_ns = ns_risk["is_single_ns"]
-    
+    res.ns_is_enterprise = ns_risk["is_enterprise_ns"]
+    res.ns_enterprise_match = ns_risk.get("enterprise_ns_match", "")
+
+    # v8.1: SOA freshness check (DNS-only, runs for all domains)
+    soa = check_soa_freshness(domain)
+    res.soa_exists = soa["soa_exists"]
+    res.soa_serial = soa["soa_serial"]
+    res.soa_serial_is_date = soa["soa_serial_is_date"]
+    res.soa_serial_date = soa["soa_serial_date"]
+    res.soa_days_since_serial = soa["soa_days_since_serial"]
+
+    # v8.1: DNSSEC check (DNS-only, runs for all domains)
+    res.dnssec_enabled = check_dnssec(domain)
+
     # === WEB CHECKS (TLS, HTTP, content, hacklink, etc.) ===
     # Mail-only and no-resolve domains have no A record / website — skip all web-dependent checks.
     # DNS-only checks (VT, RDAP/WHOIS) run separately after this block.

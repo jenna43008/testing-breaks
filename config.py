@@ -329,6 +329,16 @@ DEFAULT_CONFIG = {
         "no_resolve_ns_parking": 15,               # NS delegated to parking service
         "no_resolve_ns_dynamic_dns": 25,           # NS delegated to dynamic DNS
         "no_resolve_ns_lame": 20,                  # Zero NS records (broken/abandoned)
+        "no_resolve_ns_enterprise": -8,            # NS uses enterprise/premium DNS provider
+        "no_resolve_soa_fresh": -5,                # SOA serial updated in last 90 days — actively managed
+        "no_resolve_soa_stale": 10,                # SOA serial > 1 year old — possibly abandoned
+        "no_resolve_soa_missing": 5,               # No SOA record at all
+        "no_resolve_dnssec_enabled": -5,           # DNSSEC deployed — operational maturity signal
+        "no_resolve_ct_has_history": -8,           # CT logs show past certificate issuance
+        "no_resolve_ct_no_history": 5,             # Zero CT log entries — never had web presence
+        "no_resolve_free_tld": 10,                 # Free-registration TLD — zero investment
+        "no_resolve_high_entropy_sld": 10,         # SLD entropy > 3.8 — likely DGA-generated
+        "no_resolve_very_high_entropy_sld": 15,    # SLD entropy > 4.2 — almost certainly DGA
     },
     
     # ==========================================================================
@@ -707,7 +717,11 @@ DEFAULT_CONFIG = {
         '.shop', '.store', '.sale', '.deals', '.bargains', '.discount', '.cheap',
         '.buy', '.shopping', '.market', '.boutique', '.fashion', '.shoes',
     ],
-    
+
+    "free_registration_tlds": [
+        '.tk', '.ml', '.ga', '.cf', '.gq',
+    ],
+
     "protected_brands": [
         'paypal', 'amazon', 'microsoft', 'apple', 'google', 'facebook',
         'instagram', 'netflix', 'bankofamerica', 'chase', 'wellsfargo',
@@ -1248,6 +1262,25 @@ DEFAULT_CONFIG = {
             "zilore.com",            # Free tier DNS
             "rage4.com",             # Free tier
             "1984hosting.com",       # Icelandic free DNS
+        ],
+        "enterprise_ns": [
+            "cloudflare.com",        # Cloudflare DNS
+            "awsdns",                # AWS Route 53 (ns-XXX.awsdns-XX.{tld})
+            "route53",               # AWS Route 53 alternate
+            "azure-dns.com",         # Azure DNS
+            "azure-dns.net",         # Azure DNS
+            "azure-dns.org",         # Azure DNS
+            "azure-dns.info",        # Azure DNS
+            "googledomains.com",     # Google Domains
+            "google.com",            # Google Cloud DNS
+            "nsone.net",             # NS1
+            "ultradns.com",          # UltraDNS (Neustar/Vercara)
+            "ultradns.net",          # UltraDNS
+            "ultradns.org",          # UltraDNS
+            "akam.net",              # Akamai Edge DNS
+            "dynect.net",            # Dyn (Oracle)
+            "dnsmadeeasy.com",       # DNS Made Easy
+            "domaincontrol.com",     # GoDaddy (massive registrar, standard NS)
         ],
     },
     
