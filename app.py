@@ -348,6 +348,10 @@ def display_results(results: list):
             # v7.5: Client-side harvest combo
             if row.get('has_harvest_combo'):
                 parts.append("🕸️ Harvest combo")
+            # v8.0: Mail-only domain indicator
+            if row.get('is_mail_only_domain'):
+                mx_type = _safe_str(row.get('mail_only_mx_provider_type') or row.get('mx_provider_type'))
+                parts.insert(0, f"📧 Mail-only ({mx_type})" if mx_type else "📧 Mail-only")
             return ' · '.join(parts) if parts else ''
         
         # Build from full df (has all fields), then attach to summary_df

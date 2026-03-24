@@ -251,6 +251,53 @@ DEFAULT_CONFIG = {
         # === SUSPICIOUS CONTACT EMAIL (v7.7.1) ===
         "contact_email_spam_infra": 25,     # Email on page from spam infrastructure domain (mailtrap, mailinator, etc.)
         "contact_email_template": 15,       # Template placeholder email on page (info@company.com, info@example.com)
+
+        # === MAIL-ONLY DOMAIN SCORING (v8.0) ===
+        # Weights for domains with no A record but valid MX (email-only domains).
+        # These are evaluated via calculate_mail_only_score() using DNS-only signals.
+        # Positive = risk, negative = legitimacy bonus.
+        "mail_only_no_spf": 8,                  # Missing SPF on mail-only domain
+        "mail_only_no_dkim": 8,                 # Missing DKIM on mail-only domain
+        "mail_only_no_dmarc": 8,                # Missing DMARC on mail-only domain
+        "mail_only_spf_permissive": 10,         # +all or ?all — allows spoofing
+        "mail_only_spf_syntax_error": 5,        # SPF record has syntax issues
+        "mail_only_spf_has_provider": -5,       # SPF includes real provider (Google, M365, etc.)
+        "mail_only_dkim_present": -5,           # DKIM configured — legitimacy signal
+        "mail_only_dmarc_reject": -10,          # DMARC p=reject — strongest policy
+        "mail_only_dmarc_quarantine": -5,       # DMARC p=quarantine — moderate policy
+        "mail_only_dmarc_none": 3,              # DMARC p=none — tells receivers to do nothing
+        "mail_only_dmarc_syntax_error": 5,      # DMARC record has syntax issues
+        "mail_only_has_bimi": -15,              # BIMI present — advanced email auth
+        "mail_only_has_mta_sts": -10,           # MTA-STS present — transport security
+        "mail_only_mx_enterprise": -10,         # Google Workspace / M365 / Proofpoint MX
+        "mail_only_mx_disposable": 20,          # Disposable MX provider (Titan, ImprovMX, etc.)
+        "mail_only_mx_selfhosted": 15,          # Self-hosted MX on same domain
+        "mail_only_mx_mail_prefix": 4,          # MX is mail.{domain} — phishing template
+        "mail_only_domain_created_today": 35,   # Domain registered today/yesterday
+        "mail_only_domain_lt_7d": 20,           # Domain 2-7 days old
+        "mail_only_domain_lt_30d": 10,          # Domain 8-30 days old
+        "mail_only_domain_lt_90d": 5,           # Domain 31-90 days old
+        "mail_only_domain_established": -8,     # Domain 1yr+ old — established
+        "mail_only_whois_privacy": 5,           # WHOIS privacy/proxy service
+        "mail_only_domain_reregistered": 10,    # Domain was dropped and re-bought
+        "mail_only_vt_malicious_high": 100,     # 5+ VT vendors flag as malicious
+        "mail_only_vt_malicious_medium": 40,    # 3-4 VT vendors flag as malicious
+        "mail_only_vt_malicious_low": 20,       # 1-2 VT vendors flag as malicious
+        "mail_only_vt_clean": -5,               # VT clean — no vendors flag as malicious
+        "mail_only_typosquat": 15,              # Typosquatting detected
+        "mail_only_homoglyph": 20,              # Homoglyph/IDN spoofing detected
+        "mail_only_suspicious_prefix": 10,      # Suspicious prefix (support-, help-, etc.)
+        "mail_only_suspicious_suffix": 10,      # Suspicious suffix (-verify, -secure, etc.)
+        "mail_only_brand_keyword": 15,          # Brand + spoofing keyword in domain
+        "mail_only_hyphenated_sld": 5,          # Hyphenated SLD (common in phishing)
+        "mail_only_domain_blacklisted": 45,     # Domain on DNSBL
+        "mail_only_suspicious_tld": 15,         # High-abuse TLD
+        "mail_only_free_email_domain": 15,      # Sending from gmail.com etc
+        "mail_only_disposable_email": 40,       # Disposable email domain
+        "mail_only_ns_parking": 15,             # NS delegated to parking service
+        "mail_only_ns_dynamic_dns": 25,         # NS delegated to dynamic DNS
+        "mail_only_ns_lame": 20,                # Zero NS records (broken/abandoned)
+        "mail_only_full_email_auth": -10,       # SPF + DKIM + DMARC reject/quarantine
     },
     
     # ==========================================================================
