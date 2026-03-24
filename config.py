@@ -298,6 +298,37 @@ DEFAULT_CONFIG = {
         "mail_only_ns_dynamic_dns": 25,         # NS delegated to dynamic DNS
         "mail_only_ns_lame": 20,                # Zero NS records (broken/abandoned)
         "mail_only_full_email_auth": -10,       # SPF + DKIM + DMARC reject/quarantine
+
+        # === NO-RESOLVE DOMAIN SCORING (v8.1) ===
+        # Weights for domains with no A record AND no valid MX (no web, no email).
+        # These are evaluated via calculate_no_resolve_score() using DNS-only signals.
+        # Base penalty of 25 for having neither web nor email presence, but not an
+        # automatic deny — remaining signals determine the final score.
+        "no_resolve_no_mx": 25,                    # Base penalty: no A record AND no MX
+        "no_resolve_domain_created_today": 35,     # Domain registered today/yesterday
+        "no_resolve_domain_lt_7d": 20,             # Domain 2-7 days old
+        "no_resolve_domain_lt_30d": 10,            # Domain 8-30 days old
+        "no_resolve_domain_lt_90d": 5,             # Domain 31-90 days old
+        "no_resolve_domain_established": -10,      # Domain 1yr+ old — established
+        "no_resolve_whois_privacy": 5,             # WHOIS privacy/proxy service
+        "no_resolve_domain_reregistered": 10,      # Domain was dropped and re-bought
+        "no_resolve_vt_malicious_high": 100,       # 5+ VT vendors flag as malicious
+        "no_resolve_vt_malicious_medium": 40,      # 3-4 VT vendors flag as malicious
+        "no_resolve_vt_malicious_low": 20,         # 1-2 VT vendors flag as malicious
+        "no_resolve_vt_clean": -5,                 # VT clean — no vendors flag as malicious
+        "no_resolve_typosquat": 15,                # Typosquatting detected
+        "no_resolve_homoglyph": 20,                # Homoglyph/IDN spoofing detected
+        "no_resolve_suspicious_prefix": 10,        # Suspicious prefix (support-, help-, etc.)
+        "no_resolve_suspicious_suffix": 10,        # Suspicious suffix (-verify, -secure, etc.)
+        "no_resolve_brand_keyword": 15,            # Brand + spoofing keyword in domain
+        "no_resolve_hyphenated_sld": 5,            # Hyphenated SLD (common in phishing)
+        "no_resolve_domain_blacklisted": 45,       # Domain on DNSBL
+        "no_resolve_suspicious_tld": 15,           # High-abuse TLD
+        "no_resolve_free_email_domain": 15,        # Sending from gmail.com etc
+        "no_resolve_disposable_email": 40,         # Disposable email domain
+        "no_resolve_ns_parking": 15,               # NS delegated to parking service
+        "no_resolve_ns_dynamic_dns": 25,           # NS delegated to dynamic DNS
+        "no_resolve_ns_lame": 20,                  # Zero NS records (broken/abandoned)
     },
     
     # ==========================================================================

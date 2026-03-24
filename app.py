@@ -352,6 +352,9 @@ def display_results(results: list):
             if row.get('is_mail_only_domain'):
                 mx_type = _safe_str(row.get('mail_only_mx_provider_type') or row.get('mx_provider_type'))
                 parts.insert(0, f"📧 Mail-only ({mx_type})" if mx_type else "📧 Mail-only")
+            # v8.1: No-resolve domain indicator
+            if row.get('is_no_resolve_domain'):
+                parts.insert(0, "🔇 No-resolve (no A, no MX)")
             return ' · '.join(parts) if parts else ''
         
         # Build from full df (has all fields), then attach to summary_df

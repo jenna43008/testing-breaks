@@ -452,6 +452,13 @@ class DomainApprovalResult:
     mail_only_dns_score: int = -1                  # Composite DNS-based score for mail-only domains (-1 = not evaluated)
     mail_only_dns_signals: str = ""                # Semicolon-separated DNS signals evaluated
     mail_only_dns_breakdown: str = ""              # JSON breakdown of mail-only DNS scoring
+
+    # === NO-RESOLVE DOMAIN (v8.1) ===
+    is_no_resolve_domain: bool = False             # Domain has no A record AND no valid MX records
+    no_resolve_note: str = ""                      # Human-readable note about no-resolve detection
+    no_resolve_dns_score: int = -1                 # Composite DNS-based score for no-resolve domains (-1 = not evaluated)
+    no_resolve_dns_signals: str = ""               # Semicolon-separated DNS signals evaluated
+    no_resolve_dns_breakdown: str = ""             # JSON breakdown of no-resolve DNS scoring
     
     # === SUBDOMAIN DELEGATION ABUSE (v7.3.1) ===
     is_subdomain: bool = False                   # Submitted domain is a subdomain (not registrable root)
@@ -6011,6 +6018,119 @@ def calculate_mail_only_score(res: DomainApprovalResult, config: dict) -> dict:
     }
 
 
+def calculate_no_resolve_score(res, config: dict) -> dict:
+    """
+    Calculate a DNS-only composite score for no-resolve domains (v8.1).
+
+    No-resolve domains have no A record AND no valid MX records. Instead of
+    hard-denying with score 100, we evaluate what we CAN see from DNS, WHOIS,
+    and API lookups to produce a fair score.
+
+    The no_resolve_no_mx signal adds a base penalty (25 pts) since the absence
+    of both web presence and email infrastructure is inherently higher risk,
+    but not an automatic deny. The remaining signals can push the score up
+    (risky domain) or down (established, clean domain).
+
+    Runnable checks:
+      - WHOIS/RDAP registration age
+      - VirusTotal domain lookup
+      - Typosquatting / homoglyph detection
+      - Domain name pattern checks (suspicious prefix/suffix)
+      - DNSBL checks
+      - Suspicious TLD checks
+      - NS risk detection (parking, dynamic DNS, lame delegation)
+    """
+    nr_score = 0
+    nr_signals = []
+    nr_breakdown = {}
+    weights = config.get('weights', DEFAULT_CONFIG['weights'])
+
+    def _add(signal, points):
+        nonlocal nr_score
+        nr_signals.append(signal)
+        if points != 0:
+            nr_breakdown[signal] = points
+            nr_score += points
+
+    # --- BASE PENALTY: No A record AND no MX ---
+    _add("no_resolve_no_mx", weights.get('no_resolve_no_mx', 25))
+
+    # --- WHOIS / REGISTRATION AGE ---
+    if res.domain_age_days >= 0:
+        if res.domain_age_days <= 1:
+            _add("no_resolve_domain_created_today", weights.get('no_resolve_domain_created_today', 35))
+        elif res.domain_age_days <= 7:
+            _add("no_resolve_domain_lt_7d", weights.get('no_resolve_domain_lt_7d', 20))
+        elif res.domain_age_days <= 30:
+            _add("no_resolve_domain_lt_30d", weights.get('no_resolve_domain_lt_30d', 10))
+        elif res.domain_age_days <= 90:
+            _add("no_resolve_domain_lt_90d", weights.get('no_resolve_domain_lt_90d', 5))
+        elif res.domain_age_days >= 365:
+            _add("no_resolve_domain_established", weights.get('no_resolve_domain_established', -10))
+
+    if res.whois_privacy:
+        _add("no_resolve_whois_privacy", weights.get('no_resolve_whois_privacy', 5))
+
+    if res.domain_reregistered:
+        _add("no_resolve_domain_reregistered", weights.get('no_resolve_domain_reregistered', 10))
+
+    # --- VIRUSTOTAL ---
+    if res.vt_available:
+        if res.vt_malicious_count >= 5:
+            _add("no_resolve_vt_malicious_high", weights.get('no_resolve_vt_malicious_high', 100))
+        elif res.vt_malicious_count >= 3:
+            _add("no_resolve_vt_malicious_medium", weights.get('no_resolve_vt_malicious_medium', 40))
+        elif res.vt_malicious_count >= 1:
+            _add("no_resolve_vt_malicious_low", weights.get('no_resolve_vt_malicious_low', 20))
+        elif res.vt_malicious_count == 0 and res.vt_total_vendors > 0:
+            _add("no_resolve_vt_clean", weights.get('no_resolve_vt_clean', -5))
+
+    # --- TYPOSQUATTING / HOMOGLYPH ---
+    if res.typosquat_target:
+        _add("no_resolve_typosquat", weights.get('no_resolve_typosquat', 15))
+    if res.is_homoglyph_domain:
+        _add("no_resolve_homoglyph", weights.get('no_resolve_homoglyph', 20))
+
+    # --- DOMAIN NAME PATTERNS ---
+    if res.has_suspicious_prefix:
+        _add("no_resolve_suspicious_prefix", weights.get('no_resolve_suspicious_prefix', 10))
+    if res.has_suspicious_suffix:
+        _add("no_resolve_suspicious_suffix", weights.get('no_resolve_suspicious_suffix', 10))
+    if res.brand_plus_keyword_domain:
+        _add("no_resolve_brand_keyword", weights.get('no_resolve_brand_keyword', 15))
+    if res.is_hyphenated_sld:
+        _add("no_resolve_hyphenated_sld", weights.get('no_resolve_hyphenated_sld', 5))
+
+    # --- DNSBL ---
+    if res.domain_blacklist_count > 0:
+        _add("no_resolve_domain_blacklisted", weights.get('no_resolve_domain_blacklisted', 45))
+
+    # --- SUSPICIOUS TLD ---
+    if res.is_suspicious_tld:
+        _add("no_resolve_suspicious_tld", weights.get('no_resolve_suspicious_tld', 15))
+    if res.is_free_email_domain:
+        _add("no_resolve_free_email_domain", weights.get('no_resolve_free_email_domain', 15))
+    if res.is_disposable_email:
+        _add("no_resolve_disposable_email", weights.get('no_resolve_disposable_email', 40))
+
+    # --- NS RISK ---
+    if res.ns_is_parking:
+        _add("no_resolve_ns_parking", weights.get('no_resolve_ns_parking', 15))
+    if res.ns_is_dynamic_dns:
+        _add("no_resolve_ns_dynamic_dns", weights.get('no_resolve_ns_dynamic_dns', 25))
+    if res.ns_is_lame_delegation:
+        _add("no_resolve_ns_lame", weights.get('no_resolve_ns_lame', 20))
+
+    # Clamp score
+    nr_score = max(0, min(nr_score, 100))
+
+    return {
+        "score": nr_score,
+        "signals": nr_signals,
+        "breakdown": nr_breakdown,
+    }
+
+
 def calculate_score(res: DomainApprovalResult, config: dict) -> None:
     score = 0
     signals: Set[str] = set()
@@ -6066,6 +6186,41 @@ def calculate_score(res: DomainApprovalResult, config: dict) -> None:
         if res.domain_age_days >= 0:
             _mo_summary_parts.append(f"Age: {res.domain_age_days}d")
         res.summary = f"{res.recommendation}: {' | '.join(_mo_summary_parts)}"
+        return
+
+    # === NO-RESOLVE DOMAIN: DNS-ONLY SCORING PATH (v8.1) ===
+    # No-resolve domains have no A record and no valid MX — score using whatever
+    # DNS signals are available instead of auto-denying with score 100.
+    if res.is_no_resolve_domain:
+        nr = calculate_no_resolve_score(res, config)
+        res.no_resolve_dns_score = nr["score"]
+        res.no_resolve_dns_signals = ";".join(nr["signals"])
+        res.no_resolve_dns_breakdown = json.dumps(nr["breakdown"])
+
+        # Use the no-resolve score as the risk score
+        res.risk_score = nr["score"]
+        bands = [(0, 19, "LOW"), (20, 39, "MEDIUM"), (40, 64, "HIGH"), (65, 84, "CRITICAL"), (85, 999, "SEVERE")]
+        res.risk_level = next((l for lo, hi, l in bands if lo <= res.risk_score <= hi), "UNKNOWN")
+        res.recommendation = "APPROVE" if res.risk_score < threshold else "DENY"
+        res.signals_triggered = ";".join(sorted(nr["signals"]))
+        res.score_breakdown = json.dumps(nr["breakdown"])
+
+        # Build summary
+        _nr_summary_parts = [f"🔇 NO-RESOLVE DOMAIN (score: {nr['score']})"]
+        if res.domain_age_days >= 0:
+            _nr_summary_parts.append(f"Age: {res.domain_age_days}d")
+        if res.vt_available:
+            if res.vt_malicious_count > 0:
+                _nr_summary_parts.append(f"VT: {res.vt_malicious_count} malicious")
+            else:
+                _nr_summary_parts.append("VT: clean")
+        if res.domain_blacklist_count > 0:
+            _nr_summary_parts.append(f"DNSBL: {res.domain_blacklist_count} hits")
+        if res.ns_is_parking:
+            _nr_summary_parts.append("NS: parking")
+        if res.ns_is_lame_delegation:
+            _nr_summary_parts.append("NS: lame")
+        res.summary = f"{res.recommendation}: {' | '.join(_nr_summary_parts)}"
         return
 
     # Email Auth - these are DELIVERABILITY concerns only, NOT fraud signals
@@ -7426,14 +7581,18 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
                 # Set resolved=True conceptually so we continue, but ip_address stays empty
                 # The rest of the function will detect is_mail_only_domain and skip HTTP checks
             else:
-                res.recommendation = "DENY"
-                res.summary = "DENY: Domain does not resolve"
-                res.risk_level = "ERROR"
-                res.risk_score = 100
-                return asdict(res)
+                # v8.1: No-resolve domain detection — domain has no A record AND no valid MX.
+                # Instead of hard-denying, score using available DNS signals (WHOIS, VT,
+                # typosquatting, DNSBL, NS risk, domain patterns). This lets established,
+                # clean domains pass while still catching suspicious ones.
+                res.is_no_resolve_domain = True
+                res.no_resolve_note = (
+                    f"🔇 NO-RESOLVE DOMAIN: {domain} has no A record and no valid MX. "
+                    f"Running DNS-based evaluation."
+                )
     
-    # PTR (requires IP — skip for mail-only domains)
-    if not res.is_mail_only_domain:
+    # PTR (requires IP — skip for mail-only and no-resolve domains)
+    if not res.is_mail_only_domain and not res.is_no_resolve_domain:
         res.ptr_exists, res.ptr_record, res.ptr_matches_forward = get_ptr_record(res.ip_address)
     
     # Domain characteristics
@@ -7575,8 +7734,8 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.domain_blacklist_count = bl_count
     res.domain_blacklist_inconclusive = bl_inconclusive
     
-    # IP blacklists and hosting detection require an IP address — skip for mail-only domains
-    if not res.is_mail_only_domain:
+    # IP blacklists and hosting detection require an IP address — skip for mail-only and no-resolve domains
+    if not res.is_mail_only_domain and not res.is_no_resolve_domain:
         ip_bl_hits, ip_bl_count, ip_bl_inconclusive = check_ip_blacklists(res.ip_address, config['ip_blacklists'])
         res.ip_blacklists_hit = ";".join(ip_bl_hits)
         res.ip_blacklist_count = ip_bl_count
@@ -7584,7 +7743,7 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
 
     # Hosting Provider Detection
     ns_records = dns_query(domain, 'NS')
-    if not res.is_mail_only_domain:
+    if not res.is_mail_only_domain and not res.is_no_resolve_domain:
         hosting_result = check_hosting_provider(
             domain, res.ip_address,
             ns_records=ns_records,
@@ -7597,12 +7756,12 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.hosting_asn = hosting_result["asn"]
         res.hosting_asn_org = hosting_result["asn_org"]
     
-    # v7.3.1: CDN Provider Detection (requires IP/ASN — skip for mail-only)
-    if not res.is_mail_only_domain:
+    # v7.3.1: CDN Provider Detection (requires IP/ASN — skip for mail-only and no-resolve)
+    if not res.is_mail_only_domain and not res.is_no_resolve_domain:
         res.is_cdn_hosted, res.cdn_provider = detect_cdn_hosted(res.hosting_asn)
 
-    # v7.3.1: Subdomain Delegation Abuse Detection (requires IP — skip for mail-only)
-    if not res.is_mail_only_domain:
+    # v7.3.1: Subdomain Delegation Abuse Detection (requires IP — skip for mail-only and no-resolve)
+    if not res.is_mail_only_domain and not res.is_no_resolve_domain:
         sub_result = detect_subdomain_delegation_abuse(
             submitted_domain=domain,
             submitted_ip=res.ip_address,
@@ -7616,10 +7775,10 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         res.parent_asn = sub_result["parent_asn"]
         res.parent_asn_org = sub_result["parent_asn_org"]
         res.parent_mx_provider_type = sub_result["parent_mx_provider_type"]
-    if sub_result["divergent"]:
-        res.subdomain_infra_divergent = True
-        res.subdomain_divergence_evidence = ";".join(sub_result["evidence"])
-        res.subdomain_divergence_confidence = sub_result["confidence"]
+        if sub_result["divergent"]:
+            res.subdomain_infra_divergent = True
+            res.subdomain_divergence_evidence = ";".join(sub_result["evidence"])
+            res.subdomain_divergence_confidence = sub_result["confidence"]
     
     # === STAGING / SDLC SUBDOMAIN DETECTION ===
     # Prefixes that unambiguously indicate a non-production environment:
@@ -7661,10 +7820,10 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     res.ns_is_single_ns = ns_risk["is_single_ns"]
     
     # === WEB CHECKS (TLS, HTTP, content, hacklink, etc.) ===
-    # Mail-only domains have no A record / website — skip all web-dependent checks.
+    # Mail-only and no-resolve domains have no A record / website — skip all web-dependent checks.
     # DNS-only checks (VT, RDAP/WHOIS) run separately after this block.
-    content = None  # Initialize for mail-only path (used by later sections)
-    if not res.is_mail_only_domain:
+    content = None  # Initialize for mail-only/no-resolve path (used by later sections)
+    if not res.is_mail_only_domain and not res.is_no_resolve_domain:
         # TLS — v4.4: now captures handshake_failed and connection_failed separately
         tls = check_tls(domain, timeout)
         res.https_valid = tls["ok"]
@@ -8111,9 +8270,9 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
         except Exception:
             pass  # Non-critical — never break analysis for OSINT lookup failure
     
-    # === VIRUSTOTAL FOR MAIL-ONLY DOMAINS ===
-    # VT is DNS-based (no HTTP needed) — run it for mail-only domains too
-    if res.is_mail_only_domain:
+    # === VIRUSTOTAL FOR MAIL-ONLY AND NO-RESOLVE DOMAINS ===
+    # VT is DNS-based (no HTTP needed) — run it for mail-only and no-resolve domains too
+    if res.is_mail_only_domain or res.is_no_resolve_domain:
         vt_api_key = src.get('vt_api_key', '') or os.environ.get('VT_API_KEY', '')
         if VT_CHECKER_AVAILABLE and vt_api_key:
             try:
@@ -8315,5 +8474,9 @@ def analyze_domain(domain: str, timeout: float = 10.0, check_rdap: bool = True,
     # v8.0: Prepend mail-only domain note to summary if applicable
     if res.mail_only_note:
         res.summary = f"{res.mail_only_note} | {res.summary}"
+
+    # v8.1: Prepend no-resolve domain note to summary if applicable
+    if res.no_resolve_note:
+        res.summary = f"{res.no_resolve_note} | {res.summary}"
 
     return asdict(res)
